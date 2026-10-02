@@ -7,12 +7,14 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-003 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-004 complete**. The repository contains a JUCE/CMake
 application, a portable core (`liveai_core`) with the module interfaces, Null
 implementations of the audio, translation and NDI boundaries, versioned
-configuration with safe persistence, and unit tests.
-**No real audio device is opened and no network request is sent yet** - the ASIO
-backend is task 004/005, the OpenAI backend is task 009.
+configuration with safe persistence, ASIO device discovery and device lifecycle on
+top of JUCE, and unit tests.
+**No translated audio reaches a real device and no network request is sent yet** -
+feeding the device with translated audio is task 005, the OpenAI backend is task 009;
+the operator app still starts with the Null backend.
 
 Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
 which makes this product AGPLv3 and puts NDI behind runtime loading
@@ -156,15 +158,19 @@ no credential exists: only the translation backend becomes unavailable.
 
 ## Device defaults and hardware status
 
-This development PC has the Waves SoundGrid **driver** installed but will never have
-a SoundGrid **server** reachable, so opening the device, channel names and real
-latency cannot be verified here at all. Consequences and the exact list of deferred
-hardware checks: `docs/device-defaults.md`.
+This development PC has the Waves SoundGrid **driver** installed but will never have a
+SoundGrid **server** reachable. The driver still opens and runs against that absent
+server, so enumeration, capabilities and the whole open/start/stop/close lifecycle are
+verified here (measured numbers in `docs/device-defaults.md`). What is **not**
+verifiable here is whether real console audio arrives in the selected input channel and
+leaves on the selected output - that stays a human check.
 
 The defaults that follow from it: empty device identifiers (nothing is selected or
 hardcoded), 48 kHz / 480 frames / mono in+out / 0 dB gain, `ndi.enabled = false`.
-They live in `config.json`, so real hardware later changes settings, not code. The UI
-must never present them as measurements.
+The SPEC fixes 48 kHz and leaves the block size to the implementation; 480 frames is
+our 10 ms choice. The installed driver offers 256 only, so the engine falls back to the
+nearest offered size and logs the fallback - never silently. The UI must never present
+any of these defaults as measurements.
 
 ## Layout
 
@@ -172,9 +178,10 @@ must never present them as measurements.
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      liveai_core + LiveAIInterpreter targets
 src/App/                ApplicationController (composition root), JUCE entry point
-src/Audio/              AudioEngine shell, IAudioBackend, Null/ device
+src/Audio/              AudioEngine shell, IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract, Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
+src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, liveai_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
@@ -211,15 +218,33 @@ Two CTest entries with label `architecture` guard the dependency direction
 (`docs/architecture.md`):
 
 * `architecture_boundary_audit` - scans every `#include` under `src/` and rejects
-  a module including a module it must not know, JUCE outside `src/App`, and any
-  protocol/transport header (`openai`, `websocket`, `asio`, `curl`, `json` - with
-  one registered exception: `nlohmann/json.hpp` inside `Config`).
-* `architecture_boundary_audit_selftest` - copies `src/`, applies 15 modifications
-  (8 violations, 2 documented exceptions that must still be accepted, structural
-  errors) and asserts the audit answers each one correctly, so a broken gate fails
-  instead of silently passing.
+  a module including a module it must not know, JUCE outside `src/App`/`src/Platform`,
+  and any protocol/transport header (`openai`, `websocket`, `asio`, `curl`, `json` -
+  with one registered exception: `nlohmann/json.hpp` inside `Config`).
+* `architecture_boundary_audit_selftest` - copies `src/` and applies a dozen
+  modifications: violations that must be rejected (each with its own `AUDIT_*` code)
+  and documented exceptions that must stay accepted (JUCE in `Platform`,
+  `nlohmann/json.hpp` in `Config`). A gate that stops working therefore fails CI
+  instead of passing silently.
 
 Run them alone: `ctest --test-dir D:\LiveAI\build-debug -L architecture --output-on-failure`.
+
+### ASIO discovery tool (task 004)
+
+`liveai_asio_probe.exe` is built next to the app; it exercises the real JUCE ASIO path.
+Two CTest entries with the label `device` use the safe part of it automatically.
+
+| Command | What it does | Touches the driver? |
+|---|---|---|
+| `--list` | prints the enumerated ASIO devices | no (registry scan) |
+| `--verify` | checks that enumeration matches `HKLM\SOFTWARE\ASIO` one-to-one | no |
+| `--probe "<device>" [--start]` | opens the device, reports channels/rates/buffers/latencies, optionally one start/stop | yes |
+| `--lifecycle "<device>" [--cycles N]` | N open/start/stop/close cycles through `AudioEngine` + `JuceAsioBackend`, asserting callbacks arrive and the backend ends `closed` | yes |
+
+Exit codes: 0 ok, 1 verification failed, 2 the device refused to open, 3 usage error.
+`--verify` is the automated gate; `--probe`/`--lifecycle` against a live SoundGrid
+server stays a human check. What these commands measured on this machine:
+`docs/device-defaults.md`.
 
 ## Secrets
 

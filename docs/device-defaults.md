@@ -23,6 +23,42 @@ what stays deferred to a machine that does have a server.
 Consequence: enumeration of "Waves SoundGrid" in our own ASIO discovery code is
 agent-verifiable. Opening it is not.
 
+## What is measured on this machine (2026-10-01, task 004)
+
+The probe tool (`liveai_asio_probe`) was run against the installed Waves driver.
+**The driver opens and runs even with no SoundGrid server present**, so most of the
+"needs hardware" list turned out to be verifiable here after all. Measured, Debug and
+Release builds, 10 open/start/stop/close cycles:
+
+| Property | Measured value |
+|---|---|
+| ASIO devices enumerated | 1: `Waves SoundGrid ASIO` |
+| Registry key vs reported name | key `Waves SoundGrid`, driver-reported name `Waves SoundGrid ASIO` (matching is therefore by containment, checked by `--verify`) |
+| `open()` without a server | succeeds |
+| Channels reported | 32 input, 32 output |
+| Channel names reported | `SoundGrid 1` … `SoundGrid 32` in both directions - generic driver names, not the console patch names |
+| Sample rates reported | `44100, 48000, 88200, 96000` |
+| Buffer sizes reported | **one size: 256 frames**; the requested 480 is not offered |
+| Active configuration after open | 48000 Hz, 256 frames, 1 in + 1 out channel |
+| Driver-reported latency | input 384 samples (8 ms), output 256 samples (5.3 ms) |
+| Bit depth reported | 32 |
+| Callback delivery while running | ~219 blocks per 1.2 s at 256/48000 (expected 225), engine saw the same number of blocks |
+| xrun counter | **not reported by this driver** (JUCE returns -1; shown as text, never as "0") |
+| State after `deactivate()` | `closed` in every cycle, no crash, no hang, no leak symptom |
+| Control panel | exposed by the driver (`hasControlPanel`) |
+
+Two consequences recorded in code:
+* `asio::describeXRunCount` renders a negative counter as "not reported by this
+  driver". Task 005 must therefore compute its own underrun/overrun counters from
+  callback timing instead of trusting the driver.
+* `audio::DeviceRequest` carries one-based channel indices, and
+  `asio::selectConfiguration`/`asio::validateChannelSelection` keep the fallback to a
+  offered rate/buffer **logged**, never silent.
+
+Also found and fixed while measuring: the config validation window for gain was
+`-60..+12 dB`, which rejected the `+24 dB` end of the SPEC's suggested
+`-24..+24 dB` range. Now `-60..+24 dB`.
+
 ## Defaults we lay down now
 
 All of these live in `config.json` (`src/Config/AppConfig.h`), so changing them
@@ -30,56 +66,66 @@ after real hardware becomes available is a settings change, not a code change.
 
 | Setting | Default | Basis |
 |---|---|---|
-| `audio.inputDeviceId`, `audio.outputDeviceId` | empty | empty means "not selected yet"; task 004 fills them from enumeration, task 015 lets the operator pick. We never hardcode a device string we have not seen |
+| `audio.inputDeviceId`, `audio.outputDeviceId` | empty | empty means "not selected yet": task 004 supplies enumeration, task 015 lets the operator pick and persist it. We never hardcode a device string the operator has not chosen |
 | `audio.sampleRate` | 48000 | SPEC "Audio": preferred 48 kHz |
-| `audio.bufferFrames` | 480 | 10 ms at 48 kHz; inside the validated 64..2048 range, SPEC MVP buffer |
-| `audio.inputChannel`, `audio.outputChannel` | 1, 1 | SPEC: mono translation input/output, one-based indices |
+| `audio.bufferFrames` | 480 | 10 ms at 48 kHz, our choice inside the validated 64..2048 range; the SPEC leaves the block size to the implementation, and the installed driver offers 256 (measured), so a fallback is expected and logged |
+| `audio.inputChannel`, `audio.outputChannel` | 1, 1 | SPEC wants mono for translation; SPEC "Input Channel Selection" makes the number an operator choice (its example is 17), 1 is only the neutral first channel. One-based indexing is our convention, documented in `audio::DeviceRequest` |
 | `audio.inputGainDb`, `audio.outputGainDb` | 0.0 | neutral; task 006 adds gain DSP |
 | `translation.jitterBufferMs` | 120 | engineering starting point for the latency target 0.7-1.5 s, **not a measurement** |
 | `ndi.enabled` | false | subtitles are opt-in (SPEC) |
 | `diagnostics.logLevel` | "info" | operator-safe default |
 
-Explicitly **not** defaulted, because we have no evidence for them:
+Two of these defaults are now known to be **not offered by this driver** and must be
+read from the device rather than trusted: the requested 480 frames come back as 256
+(only one buffer size is offered), and channel indices 1/1 are inside a 32x32 device
+but carry no audio without a server and rack routing. `audio.inputChannel` /
+`audio.outputChannel` stay 1 until a human picks real SoundGrid channels - the driver
+accepts any index from 1 to 32, so a wrong value fails silently rather than loudly.
 
-* the number of SoundGrid input/output channels;
-* the names of those channels;
-* driver-reported or measured round-trip latency;
-* which physical port carries the FOH feed.
+Still **not** defaulted, because there is still no evidence for them:
 
-Any of these appearing in the UI as a number would have to come from a real
-`ASIOGetChannels`/`ASIOGetBufferSizes`/`ASIOGetLatencies` call, i.e. from task 004
-on a machine with a server. Until then the UI shows "no device selected" and
-"latency: not measured", never a guess (AGENTS.md 19 forbids hardcoded measured
-latency).
+* which physical console port carries the FOH feed. The driver does name its channels,
+  but only as `SoundGrid 1` to `SoundGrid 32` - that identifies a driver stream, not the
+  console patch behind it, so choosing the channel stays an operator decision and the
+  task 015 picker must present it that way;
+* end-to-end latency to the audience (needs the whole chain, see task 018);
+* the NDI receiver behaviour (task 016).
 
-## Required behaviour on a server-less machine
+Anything the UI shows as a number must come from a live driver query at run time, not
+from this document (AGENTS.md 19). The 32x32/256/384/256 figures above are a record of
+one measurement of this installation, not a compile-time constant, and no source file
+contains them.
 
-Task 004/005 must handle exactly this situation, and it is testable here:
+## Required behaviour, and what task 004 proved
 
-1. enumeration lists "Waves SoundGrid" (registration is present);
-2. `open()`/`start()` on it fails or reports zero usable channels - this is the
-   expected outcome with no server;
-3. the failure is reported to the operator and to diagnostics (`lastError` with
-   subsystem "audio"), the application stays alive, other backends (WASAPI in
-   developer mode, task 019) keep working;
-4. no crash, no retry storm, no blocking wait: the audio thread is never started
-   against a device that failed to open.
+Verified on this machine (10 cycles in Debug, 5 and 3 in Release):
 
-## Deferred human checkpoints (hardware)
+1. enumeration lists `Waves SoundGrid ASIO` and `--verify` matches it one-to-one with
+   the `HKLM\SOFTWARE\ASIO` registration;
+2. `open()` succeeds with no server, `start()` delivers callbacks, `stop()` and
+   `close()` return the backend to `closed`, repeatedly, without crash, hang or leak;
+3. a request for 480 frames falls back to 256 and the fallback is logged;
+4. an unregistered or missing device is refused by name ("is not a registered ASIO
+   device") - the code never picks another device instead (SPEC "ASIO Device
+   Selection");
+5. settings naming two different ASIO devices for input and output are refused at
+   start-up rather than silently using one of them.
 
-These cannot be closed on this PC. They move to a SoundGrid-equipped machine or to
-the venue:
+What the measurement does **not** prove: that real console audio reaches channel 1, and
+that the translated signal leaves on the chosen output. Without a server the driver
+runs on silence, so all of it stays a human check.
 
-| Task | What a human must confirm |
+## Remaining human checkpoints (hardware)
+
+| Task | What a human must confirm, on a machine with a SoundGrid server |
 |---|---|
-| 004 | "Waves SoundGrid" opens; reported channel count and names match the rack |
-| 005 | ASIO callback runs at the chosen buffer size without xruns; driver-reported latencies are read, not guessed |
-| 006 | input gain / meters / clipping behave on a real signal |
-| 012/018 | end-to-end latency measured with a real source; the 0.7-1.5 s target is judged by ear |
+| 005 | real console signal in the selected input channel; no underruns at the chosen buffer under load (the driver reports no xrun counter, so ours must be the source of truth) |
+| 006 | input gain, meters and clipping react to a real signal |
+| 012/018 | translated audio leaves on the selected output; end-to-end latency judged by ear against the 0.7-1.5 s target |
 | 016 | subtitles visible on a real NDI receiver (Studio Monitor is installed here, so this one is closable locally) |
-| 023 | recovery with the server unplugged mid-show |
+| 023 | recovery when the server drops mid-show |
 | 024 | long-run stability 1h/4h/8h against the real device |
 | 027 | final production audit with real routing |
 
-Until those are done, the project status is honest: **real SoundGrid operation is
-unverified**, everything else is testable on this machine.
+Honest status: **the ASIO device path is verified against the real driver, but audio
+actually passing through a SoundGrid system is not**, and cannot be on this PC.
