@@ -235,8 +235,43 @@ Consequences for task 010 (kept in product vocabulary): after a dropped transpor
 backend reopens a session per contract rule 6 (state reset), replays the stored
 `SessionRequest` (pair + rates + language), and the application decides what to do with
 audio that was queued during the gap. Since provider time is contiguous over appended
-audio (section 7), the honest options at 010 are: drop the gap buffer (translate drifts
-but stays aligned with "now") - not yet chosen; the docs do not choose it for us.
+audio (section 7), the honest options at 010 were: drop the gap buffer (translate drifts
+but stays aligned with "now") - the docs do not choose it for us.
+
+**Chosen by task 010 (owner decision, 2026-10-02), now implemented in
+`src/Translation/ReconnectSupervisor`:**
+
+- **Gap policy = drop.** Audio arriving while the session is down is refused at the seam
+  and counted (`gapRefusedFrames`); it is never buffered for replay. A live interpreter
+  that goes quiet during the outage and resumes aligned with the room beats one that
+  catches up on stale minutes - drifting the translation arbitrarily far behind "now" is
+  the worse failure for the audience, and the NDI text would follow the drift.
+- **Retry forever until the operator acts.** While the application runs, retryable
+  failures keep reopening with exponential backoff (default 1 s, doubling, capped 15 s) -
+  a venue network blip must not end the event.
+- **Retryable vs terminal is decided by category (section 9), not by counting tries:**
+  `connection` and `protocol` are fixed by a fresh session; `rejectedRequest`,
+  `audioFormat` and `internal` are terminal for the recovery loop (a new session cannot
+  fix what the request itself is, or a contract violation on our side, or the unknown),
+  reported as `faulted` - operator-actionable states, not something to hammer. A 401,
+  a bad pair, or billing therefore stop recovery immediately; a dropped socket does not.
+- **A service `Retry-After` (section 9) is honored as a floor:** the transport reads the
+  header, the backend carries the hint across the seam as `TranslationError.retryAfterMs`,
+  and the supervisor waits at least that long before the next attempt. It never replaces
+  the backoff when absent.
+- **Proactive reopen before the ceiling:** with the default age policy (55 minutes,
+  below the 3600 s `expires_at` observed in section 15) the supervisor runs a normal
+  close→open cycle before the provider expires the session, so a long event never reaches
+  that path blind. What the server does AT expiry is still unobserved (024 confirms on a
+  real event); with the age policy on, production should not hit it.
+- **Recovery is transparent to the audio device and the engine:** the supervisor only
+  speaks `ITranslationBackend`; it cannot touch ASIO (SPEC "Reliability"). It reports
+  `reconnecting` to the application and hides the transient `faulted`/`closed`/`connecting`
+  churn of the sessions it replaces, so the UI sees "connected -> reconnecting -> connected",
+  not a machine-gun of internal state. Non-fatal errors, audio and text pass through.
+- **`closeSession()` is a full stop:** the recovery loop is joined inside it, and no
+  callback reaches the application after it returns (contract rule 5). This is what lets
+  the controller close the session before the device during shutdown.
 
 ## 11. Model identity and operating envelope
 

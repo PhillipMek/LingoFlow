@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-009 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-010 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -15,7 +15,8 @@ input->output loopback, the translation backend contract with a deterministic te
 a real OpenAI realtime translation backend (`src/Network`, on the OS winhttp WebSocket
 stack with the 24<->48 kHz resampler inside it), Null implementations of the translation
 and NDI boundaries, versioned configuration with safe persistence, ASIO device discovery
-and device lifecycle on top of JUCE, and 197 tests.
+and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor,
+and 213 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -82,9 +83,10 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-197 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
-suites, and the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
-run the backend against a scripted offline transport), the end-to-end integration suite that
+213 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
+run the backend against a scripted offline transport, and the task 010 reconnect-supervisor
+suite that drives recovery against a threaded mock), the end-to-end integration suite that
 runs the whole pipeline on the deterministic mock, the realtime allocation suite in its own
 binary, the architecture boundary audit plus its self-test, the realtime safety audit plus
 its self-test, and the two device entries that run the ASIO tool's driver-free modes.
@@ -330,6 +332,36 @@ that: only `App` may include `Network`).
   arrive as partials and final text is left to task 013. The probe `lingoflow_openai_probe`
   performs the one live functional round-trip through this exact binary.
 
+## Session recovery (task 010)
+
+`src/Translation/ReconnectSupervisor` owns the "when" of reopening that the task 007
+contract deliberately left to the application. It wraps any `ITranslationBackend` - to
+the controller it is a backend, to the backend it is the sink - so recovery is provider
+knowledge, not OpenAI knowledge, and cannot reach the audio device.
+
+* **Retryable vs terminal comes from the product categories** (protocol doc section 9,
+  decision recorded in section 10): `connection` and `protocol` get a fresh session with
+  exponential backoff and are retried forever while the application runs; `rejectedRequest`
+  (bad key, bad pair, billing), `audioFormat` and `internal` stop recovery and report
+  `faulted` once - retrying cannot fix them, hammering hides defects. A service
+  `Retry-After` hint crosses the seam as `TranslationError.retryAfterMs` and is honored
+  as a floor.
+* **The gap policy is drop-and-count**: audio submitted while reconnecting is refused at
+  the seam (`gapRefusedFrames`) and never replayed late - the translation resumes aligned
+  with the room, which is what a live audience needs (owner decision 2026-10-02).
+* **Proactive reopen** fires before the measured one-hour provider ceiling (default
+  55 minutes, four `translation.reconnect*` settings), so a long event never discovers
+  expiry at runtime; metrics (attempts, recoveries, reopens, session duration) are
+  exposed via `stats()` for SPEC "Diagnostics".
+* **`closeSession()` is a full stop**: it joins the recovery thread's in-flight attempt
+  and no callback reaches the application after it returns, which is what keeps the
+  contract's shutdown guarantee intact.
+* The 009 backend completed the hint chain for it: `WinHttpTransport` captures
+  `Retry-After` and a capped refusal body, and the documented billing code now maps to
+  the terminal category instead of a retryable `connection`.
+* Not in production composition yet: the controller still runs the Null backend; the
+  supervisor enters the pipeline at task 012 alongside the real backend.
+
 ## Layout
 
 ```text
@@ -337,7 +369,7 @@ CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
-src/Translation/        ITranslationBackend contract (states, request, errors, sink), Null/ backend
+src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
