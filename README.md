@@ -14,6 +14,11 @@ configuration with safe persistence, and unit tests.
 **No real audio device is opened and no network request is sent yet** - the ASIO
 backend is task 004/005, the OpenAI backend is task 009.
 
+Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
+which makes this product AGPLv3 and puts NDI behind runtime loading
+(`docs/licensing.md`). Development defaults for the audio device, and the fact that
+this PC will never see a SoundGrid server, are recorded in `docs/device-defaults.md`.
+
 ## Requirements
 
 Verified on this machine (`docs/environment-report.md` has the full evidence):
@@ -24,12 +29,12 @@ Verified on this machine (`docs/environment-report.md` has the full evidence):
 | MSVC (Visual Studio 2022) | 19.44.35229 | local install |
 | CMake | 3.31.6-msvc6 | bundled in Visual Studio, **not on PATH** |
 | Ninja | 1.12.1 | bundled in Visual Studio, **not on PATH** |
-| nlohmann/json | v3.12.0 | CMake `FetchContent`; used only inside `src/Config/*.cpp` |
-| JUCE | 9.0.3 | local source tree, path passed with `-DLIVEAI_JUCE_PATH=...` |
-| ASIO SDK | 2.3.4 | local source tree (used from task 004 on) |
-| Waves SoundGrid ASIO driver | 16.5.197.301 | installed product |
-| NDI | 6.3.2.0 — runtime **and** SDK (`C:\Program Files\NDI\NDI 6 SDK`, `NDI_SDK_DIR` set) | installed product; used by task 016 |
-| Catch2 | v3.16.0 | CMake `FetchContent` (needs network on first configure) |
+| JUCE | 9.0.3 (AGPLv3) | **vendored**: `third_party/JUCE/` |
+| Steinberg ASIO SDK | 2.3.4 (GPLv3) | **vendored**: `third_party/asiosdk/` |
+| nlohmann/json | v3.12.0 (MIT) | CMake `FetchContent`; used only inside `src/Config/*.cpp` |
+| Catch2 | v3.16.0 (BSL-1.0) | CMake `FetchContent` (needs network on first configure) |
+| Waves SoundGrid ASIO driver | 16.5.197.301 | installed product (no server reachable on this PC) |
+| NDI | 6.3.2.0 runtime **and** SDK (`C:\Program Files\NDI\NDI 6 SDK`, `NDI_SDK_DIR`) | installed product; referenced, never linked (see `docs/licensing.md`) |
 
 ## Configure and build
 
@@ -53,8 +58,10 @@ cmd /c "call $vccmd && `"$cmake`" -S . -B $rel -G Ninja -DCMAKE_BUILD_TYPE=Relea
 cmd /c "call $vccmd && `"$cmake`" --build $rel"
 ```
 
-If JUCE is not in `../juce-9.0.3-windows/JUCE`, add
-`-DLIVEAI_JUCE_PATH=C:/path/to/JUCE`.
+JUCE comes from `third_party/JUCE` by default; `-DLIVEAI_JUCE_PATH=C:/path/to/JUCE`
+overrides it (for example to test another JUCE version). Nothing is downloaded: only
+Catch2 and nlohmann/json are fetched, and `-DLIVEAI_FETCH_CATCH2=OFF` /
+`-DLIVEAI_FETCH_NLOHMANN_JSON=OFF` switch to installed copies for offline builds.
 
 Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
@@ -128,11 +135,28 @@ The file is versioned (`schemaVersion`, currently `1`) and grouped into `audio`,
 Saving is atomic: write `<file>.tmp`, read it back and re-parse it, copy the
 previous file to `<file>.bak`, only then replace `<file>`.
 
+The default values themselves, and why device-dependent numbers (channel counts,
+names, latencies) are **not** defaulted on a machine without a SoundGrid server, are
+specified in `docs/device-defaults.md`. A test asserts that the defaults in code
+still match that table.
+
 **Credentials are never in this file.** `api_key`, `token`, `secret`, `password`,
 `credential`, `authorization`, `bearer` (and their spellings) are detected while
 parsing, reported and dropped. They belong to `security::ISecretStore` (task 015
 implements it on Windows secure storage). The application must keep running when
 no credential exists: only the translation backend becomes unavailable.
+
+## Device defaults and hardware status
+
+This development PC has the Waves SoundGrid **driver** installed but will never have
+a SoundGrid **server** reachable, so opening the device, channel names and real
+latency cannot be verified here at all. Consequences and the exact list of deferred
+hardware checks: `docs/device-defaults.md`.
+
+The defaults that follow from it: empty device identifiers (nothing is selected or
+hardcoded), 48 kHz / 480 frames / mono in+out / 0 dB gain, `ndi.enabled = false`.
+They live in `config.json`, so real hardware later changes settings, not code. The UI
+must never present them as measurements.
 
 ## Layout
 
@@ -147,13 +171,31 @@ src/Config/             AppConfig, ConfigSchema (validation + JSON text), Config
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
-tests/                  Catch2 unit tests + architecture boundary audit
-docs/                   specification support documents, environment report
+tests/                  Catch2 unit tests + architecture boundary audit + self-test
+docs/                   licensing, device defaults, architecture, environment report
+third_party/            vendored JUCE 9.0.3 and ASIO SDK 2.3.4 (see third_party/README.md)
 tasks/                  agent task files
 ```
 
 Real-time rules, thread model and architectural boundaries are defined in
 `AGENTS.md`, `docs/architecture.md` and `docs/threading.md`.
+
+## Licensing
+
+Binding decisions (`docs/licensing.md`): JUCE 9 under **AGPLv3**, ASIO SDK 2.3.4
+under **GPLv3**. Consequences to respect in every later task:
+
+* the product is AGPLv3: source offer, `LICENSE` + third-party notices, visible
+  licence notice in the UI, no obfuscation - required before the release build;
+* **NDI must not be link-time**: `Processing.NDI.Lib.*.lib` stays out of the link,
+  NDI is reached by runtime loading behind `INdiOutput` (task 016);
+* no ASIO logo/compatibility branding without Steinberg's separate trademark
+  agreement;
+* Waves SoundGrid driver and NDI runtime are prerequisites of the host system, not
+  redistributed source.
+
+`third_party/README.md` lists what is vendored, what is deliberately not, and the
+rules for touching those trees.
 
 ### Architecture boundary audit
 
@@ -162,10 +204,12 @@ Two CTest entries with label `architecture` guard the dependency direction
 
 * `architecture_boundary_audit` - scans every `#include` under `src/` and rejects
   a module including a module it must not know, JUCE outside `src/App`, and any
-  protocol/transport header (`openai`, `websocket`, `json`, `asio`, `curl`).
-* `architecture_boundary_audit_selftest` - copies `src/`, injects 8 violations and
-  requires the audit to reject each with the expected `AUDIT_*` code, so a broken
-  gate fails instead of silently passing.
+  protocol/transport header (`openai`, `websocket`, `asio`, `curl`, `json` - with
+  one registered exception: `nlohmann/json.hpp` inside `Config`).
+* `architecture_boundary_audit_selftest` - copies `src/`, applies 15 modifications
+  (8 violations, 2 documented exceptions that must still be accepted, structural
+  errors) and asserts the audit answers each one correctly, so a broken gate fails
+  instead of silently passing.
 
 Run them alone: `ctest --test-dir D:\LiveAI\build-debug -L architecture --output-on-failure`.
 

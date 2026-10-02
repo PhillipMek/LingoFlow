@@ -53,6 +53,33 @@ TEST_CASE("ConfigSchema: defaults validate cleanly", "[config][schema]")
     CHECK(cfg.diagnostics.logLevel == "info");
 }
 
+TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[config][schema][defaults]")
+{
+    // docs/device-defaults.md fixes this table. Values here are settings, not
+    // measurements: no SoundGrid server exists on this machine, so nothing in this
+    // test may be read as verified hardware behaviour.
+    const auto cfg = config::defaults();
+
+    CHECK(cfg.audio.inputDeviceId.empty());        // "not selected yet"
+    CHECK(cfg.audio.outputDeviceId.empty());
+    CHECK(cfg.audio.sampleRate == 48000);
+    CHECK(cfg.audio.bufferFrames == 480);
+    CHECK(cfg.audio.inputChannel == 1);
+    CHECK(cfg.audio.outputChannel == 1);
+    CHECK(cfg.audio.inputGainDb == 0.0f);
+    CHECK(cfg.audio.outputGainDb == 0.0f);
+
+    CHECK(cfg.translation.inputLanguage == "en");
+    CHECK(cfg.translation.outputLanguage == "ru");
+    CHECK(cfg.translation.modelHint.empty());      // backend default, not invented here
+    CHECK(cfg.translation.jitterBufferMs == 120);
+
+    CHECK_FALSE(cfg.ndi.enabled);
+    CHECK(cfg.diagnostics.logLevel == "info");
+    CHECK(cfg.diagnostics.writeLogFile);
+    CHECK(cfg.schemaVersion == kConfigSchemaVersion);
+}
+
 TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schema][roundtrip]")
 {
     const auto original = makeConfig();
