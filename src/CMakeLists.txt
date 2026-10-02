@@ -54,6 +54,8 @@ add_library(lingoflow_core STATIC
 
     Translation/ITranslationBackend.cpp
     Translation/ITranslationBackend.h
+    Translation/ReconnectSupervisor.cpp
+    Translation/ReconnectSupervisor.h
     Translation/Null/NullTranslationBackend.cpp
     Translation/Null/NullTranslationBackend.h
 

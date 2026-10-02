@@ -38,6 +38,7 @@ add_executable(lingoflow_tests
     unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp
     unit/TestTranslationContract.cpp
+    unit/TestReconnectSupervisor.cpp
     unit/TestApplicationController.cpp
     integration/TestTranslationEndToEnd.cpp)
 

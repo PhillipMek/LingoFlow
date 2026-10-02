@@ -397,6 +397,69 @@ TEST_CASE("OpenAI backend: refused upgrade maps HTTP status per section 9", "[op
     }
 }
 
+TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
+          "[openai][protocol][faults]")
+{
+    // 429 with Retry-After: a retryable connection failure whose hint must
+    // cross the seam so the task 010 policy can honour "wait at least this
+    // long" (protocol section 9).
+    {
+        Scenario s;
+        network::ConnectResult cr { false, 429, {} };
+        cr.retryAfterSec = 5;
+        s.nextConnect = cr;
+        s.open(s.Request());
+
+        const auto errors = s.sink.errors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].category == TranslationErrorCategory::connection);
+        CHECK(errors[0].retryAfterMs == 5000);
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
+
+    // 429 with the documented billing/account code is a different answer:
+    // retrying will not restore access, so it maps to the category the
+    // recovery policy stops on. The code name is classification input and
+    // must never appear in what crosses the seam.
+    {
+        Scenario s;
+        network::ConnectResult cr { false, 429, {} };
+        cr.retryAfterSec = 30;
+        cr.refusalBody = R"({"error":{"message":"Your account credit balance is exhausted.",)"
+                         R"("type":"billing_error","code":"credit_balance_exhausted","param":null}})";
+        s.nextConnect = cr;
+        s.open(s.Request());
+
+        const auto errors = s.sink.errors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].category == TranslationErrorCategory::rejectedRequest);
+        CHECK(errors[0].retryAfterMs == 30000); // the hint travels anyway; the policy will not use it
+        CHECK(errors[0].message.find("credit") == std::string::npos);
+        CHECK(errors[0].message.find("billing") == std::string::npos);
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
+
+    // A 429 whose body we cannot classify keeps the plain table default
+    // (retryable) - never silently upgraded to terminal, never silently
+    // dropped (AGENTS.md 19).
+    {
+        Scenario s;
+        network::ConnectResult cr { false, 429, {} };
+        cr.refusalBody = "not json at all";
+        s.nextConnect = cr;
+        s.open(s.Request());
+
+        const auto errors = s.sink.errors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].category == TranslationErrorCategory::connection);
+        CHECK(errors[0].retryAfterMs == 0); // no hint -> the policy's own backoff
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
+}
+
 TEST_CASE("OpenAI backend: missing credentials refuse the open without touching the sink",
           "[openai][protocol][security]")
 {

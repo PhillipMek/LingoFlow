@@ -55,6 +55,19 @@ struct TranslationSettings
 
     int jitterBufferMs = 120;
 
+    // Session recovery policy (task 010). The supervisor retries a dropped
+    // session forever while the application runs - a venue network blip must
+    // not end the event - and stops only on errors retrying cannot fix (bad
+    // key, billing), reported as the faulted state for the operator.
+    bool reconnectEnabled = true;
+    int reconnectInitialBackoffMs = 1000;  ///< first retry delay
+    int reconnectMaxBackoffMs = 15000;     ///< exponential backoff cap
+    /// Proactively reopen the session before the one-hour ceiling measured
+    /// live (protocol doc section 15); 0 disables the timer. The provider
+    /// session restarts fresh either way - the gap is counted, audio during it
+    /// is refused and dropped (task 010's gap policy).
+    int sessionMaxAgeSeconds = 3300;
+
     friend constexpr bool operator==(const TranslationSettings&, const TranslationSettings&) = default;
 };
 

@@ -38,6 +38,24 @@ translation::TranslationErrorCategory categoryForHttpStatus(int status)
     }
 }
 
+/// Protocol section 9: a refused upgrade may carry an error code in its JSON
+/// body that changes the recovery answer - billing/account refusals are
+/// operator-actionable ("retrying won't restore API access"). Only the code is
+/// extracted here for classification; the provider's vocabulary never crosses
+/// the sink seam, and unparseable bodies keep the plain status-table mapping.
+std::string refusalErrorCode(const std::string& body)
+{
+    if (body.empty())
+        return {};
+    const auto parsed = nlohmann::json::parse(body, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object())
+        return {};
+    const auto& error = parsed["error"];
+    if (!error.is_object() || !error.contains("code") || !error["code"].is_string())
+        return {};
+    return error["code"].get<std::string>();
+}
+
 bool containsAudioWord(const std::string& text)
 {
     std::string lower = text;
@@ -230,11 +248,23 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
                                                  { "Authorization: Bearer " + *apiKey });
     if (!cr.upgraded)
     {
-        const auto category = categoryForHttpStatus(cr.httpStatus);
+        auto category = categoryForHttpStatus(cr.httpStatus);
+        // Protocol section 9: the documented billing/account 429 is not a
+        // transient connection failure - retrying cannot restore access - so it
+        // maps to the category the recovery policy stops on. The code name
+        // itself is classification input, not output: it never reaches the sink.
+        if (cr.httpStatus == 429 && refusalErrorCode(cr.refusalBody) == "credit_balance_exhausted")
+            category = translation::TranslationErrorCategory::rejectedRequest;
+
         const std::string message = cr.httpStatus != 0
             ? "openai: connection refused with HTTP status " + std::to_string(cr.httpStatus)
             : "openai: transport connect failed: " + cr.transportError;
-        reportError(category, message, true);
+        // Protocol section 9: honour Retry-After; 0 = "no hint, use backoff".
+        const int retryAfterMs = cr.retryAfterSec > 0
+            ? static_cast<int>((std::min)(static_cast<long long>(cr.retryAfterSec) * 1000,
+                                          static_cast<long long>(24 * 3600 * 1000)))
+            : 0;
+        reportError(category, message, true, retryAfterMs);
         reportTransition(SessionState::faulted);
         error = message;
         return false;
@@ -1044,7 +1074,8 @@ void OpenAIRealtimeBackend::reportTransition(SessionState next)
 
 void OpenAIRealtimeBackend::reportError(TranslationErrorCategory category,
                                         const std::string& message,
-                                        bool fatal)
+                                        bool fatal,
+                                        int retryAfterMs)
 {
     if (fatal)
         log::error(kLogComponent, message);
@@ -1053,7 +1084,8 @@ void OpenAIRealtimeBackend::reportError(TranslationErrorCategory category,
 
     if (sink_ != nullptr)
     {
-        const TranslationError err { category, message, fatal };
+        TranslationError err { category, message, fatal };
+        err.retryAfterMs = retryAfterMs;
         sink_->onTranslationError(err);
     }
 }

@@ -1,6 +1,7 @@
 #pragma once
 //
-// MockTranslationBackend - the deterministic mock translation backend of task 007.
+// MockTranslationBackend - the deterministic mock translation backend of task 007,
+// hardened for the task 010 supervisor (which drives it from a second thread).
 //
 // It lives in the test tree, not in `src/`, on purpose: task 019 makes "mock
 // behavior leaking into production" a FAIL criterion, and AGENTS.md 19 forbids
@@ -10,8 +11,9 @@
 // end-to-end pipeline can be tested without a network.
 //
 // Determinism rules (this is what makes the integration tests meaningful):
-//   * no threads, no timers, no clock reads: every callback into the sink fires
-//     synchronously inside the method that was called, on the caller's thread;
+//   * no threads, no timers, no clock reads of its own: every callback into the
+//     sink fires synchronously inside the method that was called, on the
+//     caller's thread, in scripted order;
 //   * the same script fed the same submits produces the same callback trace,
 //     byte for byte - the contract tests assert exactly that;
 //   * the "translated" audio is a scripted transform of the submitted audio
@@ -21,11 +23,20 @@
 //     closes, so a reopened session behaves like a fresh one, and total
 //     counters keep accumulating across sessions.
 //
+// Thread safety (task 010): the reconnect supervisor calls in from its own
+// worker thread while tests inspect from the main thread, so every method
+// takes the mock's lock for bookkeeping and every sink callback is issued
+// AFTER the lock is released - a sink that reaches back into the mock (or into
+// the supervisor, which may reach here) cannot deadlock it.
+//
 // The lifecycle rules of ITranslationBackend (sink first, one open session,
 // reported transitions, refusal outside connected, idempotent close, no sink
 // callbacks after closeSession() returns) are implemented here as the reference
 // implementation task 009 can be checked against.
 
+#include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -59,6 +70,17 @@ public:
     bool refuseOpen = false;
     std::string openError = "mock: refusing to open";
 
+    /// Task 010: refuse this many further openSession() calls (then behave
+    /// normally) - the way a test walks the supervisor's backoff ladder.
+    /// Set it through setOpenFails() once a supervisor thread may be live.
+    int openFailsRemaining = 0;
+
+    void setOpenFails(int n)
+    {
+        std::lock_guard lock(mutex_);
+        openFailsRemaining = n;
+    }
+
     /// Text fires after the Nth accepted submitAudio() of the current session,
     /// in vector order, before the error cues of the same submit.
     struct TextCue
@@ -76,6 +98,7 @@ public:
         translation::TranslationErrorCategory category = translation::TranslationErrorCategory::internal;
         std::string message = "mock: injected error";
         bool fatal = false;
+        int retryAfterMs = 0;
     };
 
     std::vector<TextCue> textCues;
@@ -84,44 +107,53 @@ public:
     // ------------------------------------------------------------------ contract
     std::string_view name() const noexcept override { return "Mock"; }
 
-    /// Read-only snapshot. Single-threaded by construction: tests drive
-    /// everything from one thread, which is also what makes the determinism
-    /// assertion possible.
-    translation::SessionState state() const noexcept override { return state_; }
+    translation::SessionState state() const noexcept override;
 
-    void setSink(translation::ITranslationSink& sink) noexcept override { sink_ = &sink; }
+    void setSink(translation::ITranslationSink& sink) noexcept override;
 
     bool openSession(const translation::SessionRequest& request, std::string& error) override;
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
-    // -------------------------------------------------------------- observations
-    const translation::SessionRequest& lastRequest() const noexcept { return lastRequest_; }
+    // ------------------------------------------------------- injection (010 tests)
+    /// Report an error on the sink right now, from the calling thread; a fatal
+    /// one faults the session, exactly like the real backends do. This is how a
+    /// recovery test pulls the trigger without scripting a submit count.
+    void injectError(translation::TranslationErrorCategory category, const std::string& message,
+                     bool fatal, int retryAfterMs = 0);
 
-    int acceptedSubmits() const noexcept { return acceptedSubmits_; }
-    int refusedSubmits() const noexcept { return refusedSubmits_; }
-    int deliveredBlocks() const noexcept { return deliveredBlocks_; }
-    std::uint64_t deliveredFrames() const noexcept { return deliveredFrames_; }
-    int textEvents() const noexcept { return textEvents_; }
-    int errorEvents() const noexcept { return errorEvents_; }
+    // -------------------------------------------------------------- observations
+    translation::SessionRequest lastRequest();
+    std::vector<translation::SessionRequest> openRequests();
+
+    int acceptedSubmits();
+    int refusedSubmits();
+    int deliveredBlocks();
+    std::uint64_t deliveredFrames();
+    int textEvents();
+    int errorEvents();
 
     /// Successful openSession() calls so far - distinguishes "state reset per
     /// session" from "totals", which the tests assert separately.
-    int sessionsOpened() const noexcept { return sessionsOpened_; }
+    int sessionsOpened();
 
     /// Accepted submits of the current session (cue positions count these).
-    int sessionSubmits() const noexcept { return sessionSubmits_; }
+    int sessionSubmits();
 
 private:
-    /// Changes the state and reports it, once, only if it actually changed.
-    void transition(translation::SessionState next);
+    /// Changes the state under the lock and returns the callback to run
+    /// outside it (nullptr when nothing changed).
+    void transition(translation::SessionState next,
+                    std::vector<std::function<void()>>& emit);
 
-    /// Queued input not yet enough to deliver; cleared per session.
-    std::vector<float> pending_;
+    mutable std::mutex mutex_;
 
+    // All fields below are guarded by mutex_.
+    std::vector<float> pending_;      ///< queued input not yet enough to deliver
     translation::ITranslationSink* sink_ = nullptr;
     translation::SessionState state_ = translation::SessionState::closed;
     translation::SessionRequest lastRequest_;
+    std::vector<translation::SessionRequest> openRequests_;
 
     int acceptedSubmits_ = 0;
     int refusedSubmits_ = 0;

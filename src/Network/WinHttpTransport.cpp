@@ -3,7 +3,10 @@
 #include <windows.h>
 #include <winhttp.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <stdexcept>
+#include <string>
 
 namespace liveai {
 namespace network {
@@ -26,6 +29,65 @@ std::wstring toWide(const std::string& utf8)
     std::wstring out(static_cast<std::size_t>(count), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), count);
     return out;
+}
+
+std::string toNarrow(const wchar_t* wide, std::size_t chars)
+{
+    if (wide == nullptr || chars == 0)
+        return {};
+    const int count = WideCharToMultiByte(CP_UTF8, 0, wide, static_cast<int>(chars),
+                                          nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide, static_cast<int>(chars), out.data(), count,
+                        nullptr, nullptr);
+    return out;
+}
+
+/// Cap for the captured refusal body: the JSON error object is tiny, and this
+/// is a defensive ceiling against a chatty peer, not a format limit.
+constexpr DWORD kMaxRefusalBodyBytes = 4096;
+
+/// A refused upgrade may carry guidance (protocol doc section 9): the
+/// `Retry-After` header - integer-seconds form only; the HTTP-date form is not
+/// used by this service and is treated as "no hint" - and a small JSON body
+/// with the error code. Capturing is best-effort: nothing here can break the
+/// refusal itself, and the caller keeps its `transportError` verdict.
+void captureRefusal(HINTERNET request, ConnectResult& result)
+{
+    wchar_t header[64] = {};
+    DWORD size = sizeof(header);
+    if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM, L"Retry-After", header, &size,
+                            WINHTTP_NO_HEADER_INDEX))
+    {
+        const std::string value = toNarrow(header, size / sizeof(wchar_t));
+        try
+        {
+            const long seconds = std::stol(value);
+            if (seconds > 0 && seconds <= 86400L)
+                result.retryAfterSec = static_cast<int>(seconds);
+        }
+        catch (const std::exception&)
+        {
+            // not an integer-seconds Retry-After: no hint
+        }
+    }
+
+    DWORD available = 0;
+    if (WinHttpQueryDataAvailable(request, &available))
+    {
+        char chunk[512];
+        while (available > 0 && result.refusalBody.size() < kMaxRefusalBodyBytes)
+        {
+            const DWORD room = kMaxRefusalBodyBytes - static_cast<DWORD>(result.refusalBody.size());
+            const DWORD want = (std::min)({ available, static_cast<DWORD>(sizeof(chunk)), room });
+            DWORD read = 0;
+            if (!WinHttpReadData(request, chunk, want, &read) || read == 0)
+                break;
+            result.refusalBody.append(chunk, read);
+            if (!WinHttpQueryDataAvailable(request, &available))
+                break;
+        }
+    }
 }
 
 } // namespace
@@ -134,7 +196,10 @@ ConnectResult WinHttpTransport::connect(const std::string& host,
         result.httpStatus = static_cast<int>(status);
 
     if (status != 101)
-        return result; // refused upgrade; the backend maps the HTTP status (protocol section 9)
+    {
+        captureRefusal(request, result); // protocol section 9 guidance
+        return result; // refused upgrade; the backend maps the HTTP status
+    }
 
     const HINTERNET webSocket = WinHttpWebSocketCompleteUpgrade(request, 0);
     if (webSocket == nullptr)

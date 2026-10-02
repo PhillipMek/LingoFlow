@@ -24,6 +24,9 @@ constexpr int kMaxBufferFrames = 2048;
 constexpr float kMinGainDb = -60.0f;
 constexpr float kMaxGainDb = 24.0f;
 constexpr int kMaxJitterBufferMs = 1000;
+constexpr int kMinReconnectBackoffMs = 100;
+constexpr int kMaxReconnectBackoffMs = 120000;
+constexpr int kMaxSessionAgeSeconds = 7200;  ///< two measured one-hour ceilings
 constexpr std::size_t kMaxInstructionsLength = 4000;
 constexpr std::size_t kMaxIdentifierLength = 64;
 constexpr std::size_t kMaxDeviceIdLength = 256;
@@ -229,6 +232,23 @@ ConfigProblems validate(const AppConfig& candidate)
         problems.push_back(ConfigProblem{ "translation.jitterBufferMs",
                                           "must be between 0 and " + std::to_string(kMaxJitterBufferMs) + " ms" });
 
+    if (translation.reconnectInitialBackoffMs < kMinReconnectBackoffMs
+        || translation.reconnectInitialBackoffMs > kMaxReconnectBackoffMs)
+        problems.push_back(ConfigProblem{ "translation.reconnectInitialBackoffMs",
+                                          "must be between " + std::to_string(kMinReconnectBackoffMs) + " and "
+                                              + std::to_string(kMaxReconnectBackoffMs) + " ms" });
+
+    if (translation.reconnectMaxBackoffMs < translation.reconnectInitialBackoffMs
+        || translation.reconnectMaxBackoffMs > kMaxReconnectBackoffMs)
+        problems.push_back(ConfigProblem{ "translation.reconnectMaxBackoffMs",
+                                          "must be at least the initial backoff and at most "
+                                              + std::to_string(kMaxReconnectBackoffMs) + " ms" });
+
+    if (translation.sessionMaxAgeSeconds < 0 || translation.sessionMaxAgeSeconds > kMaxSessionAgeSeconds)
+        problems.push_back(ConfigProblem{ "translation.sessionMaxAgeSeconds",
+                                          "must be between 0 (disabled) and "
+                                              + std::to_string(kMaxSessionAgeSeconds) + " s" });
+
     if (candidate.ndi.enabled && (candidate.ndi.streamName.empty() || candidate.ndi.streamName.size() > kMaxIdentifierLength
                                   || hasControlCharacter(candidate.ndi.streamName)))
         problems.push_back(ConfigProblem{ "ndi.streamName", "NDI is enabled but the stream name is invalid" });
@@ -278,7 +298,11 @@ std::string toJsonText(const AppConfig& settings)
             { "outputLanguage", settings.translation.outputLanguage },
             { "instructions", settings.translation.instructions },
             { "modelHint", settings.translation.modelHint },
-            { "jitterBufferMs", settings.translation.jitterBufferMs } } },
+            { "jitterBufferMs", settings.translation.jitterBufferMs },
+            { "reconnectEnabled", settings.translation.reconnectEnabled },
+            { "reconnectInitialBackoffMs", settings.translation.reconnectInitialBackoffMs },
+            { "reconnectMaxBackoffMs", settings.translation.reconnectMaxBackoffMs },
+            { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds } } },
         { "ndi", { { "enabled", settings.ndi.enabled }, { "streamName", settings.ndi.streamName } } },
         { "diagnostics", { { "logLevel", settings.diagnostics.logLevel }, { "writeLogFile", settings.diagnostics.writeLogFile } } },
     };
@@ -362,7 +386,9 @@ bool fromJsonText(std::string_view text,
     if (const auto* section = findSection(root, "translation", problems); section != nullptr)
     {
         static const std::set<std::string> kKeys{ "inputLanguage", "outputLanguage", "instructions",
-                                                  "modelHint",     "jitterBufferMs" };
+                                                  "modelHint",     "jitterBufferMs",
+                                                  "reconnectEnabled", "reconnectInitialBackoffMs",
+                                                  "reconnectMaxBackoffMs", "sessionMaxAgeSeconds" };
         reportUnknownKeys(*section, "translation", kKeys, problems);
 
         auto& translation = out.translation;
@@ -371,6 +397,13 @@ bool fromJsonText(std::string_view text,
         readString(*section, "instructions", "translation.instructions", translation.instructions, problems);
         readString(*section, "modelHint", "translation.modelHint", translation.modelHint, problems);
         readNumber<int>(*section, "jitterBufferMs", "translation.jitterBufferMs", translation.jitterBufferMs, problems);
+        readBool(*section, "reconnectEnabled", "translation.reconnectEnabled", translation.reconnectEnabled, problems);
+        readNumber<int>(*section, "reconnectInitialBackoffMs", "translation.reconnectInitialBackoffMs",
+                        translation.reconnectInitialBackoffMs, problems);
+        readNumber<int>(*section, "reconnectMaxBackoffMs", "translation.reconnectMaxBackoffMs",
+                        translation.reconnectMaxBackoffMs, problems);
+        readNumber<int>(*section, "sessionMaxAgeSeconds", "translation.sessionMaxAgeSeconds",
+                        translation.sessionMaxAgeSeconds, problems);
     }
 
     if (const auto* section = findSection(root, "ndi", problems); section != nullptr)
@@ -431,6 +464,16 @@ bool fromJsonText(std::string_view text,
         { "translation.modelHint", [](AppConfig& c, const AppConfig& d) { c.translation.modelHint = d.translation.modelHint; } },
         { "translation.jitterBufferMs",
           [](AppConfig& c, const AppConfig& d) { c.translation.jitterBufferMs = d.translation.jitterBufferMs; } },
+        { "translation.reconnectEnabled",
+          [](AppConfig& c, const AppConfig& d) { c.translation.reconnectEnabled = d.translation.reconnectEnabled; } },
+        { "translation.reconnectInitialBackoffMs",
+          [](AppConfig& c, const AppConfig& d) {
+              c.translation.reconnectInitialBackoffMs = d.translation.reconnectInitialBackoffMs;
+          } },
+        { "translation.reconnectMaxBackoffMs",
+          [](AppConfig& c, const AppConfig& d) { c.translation.reconnectMaxBackoffMs = d.translation.reconnectMaxBackoffMs; } },
+        { "translation.sessionMaxAgeSeconds",
+          [](AppConfig& c, const AppConfig& d) { c.translation.sessionMaxAgeSeconds = d.translation.sessionMaxAgeSeconds; } },
         { "ndi.streamName",
           [](AppConfig& c, const AppConfig& d)
           {

@@ -90,11 +90,10 @@ struct Rig
     ApplicationController controller;
     MockTranslationBackend* mock = nullptr;
 
-    explicit Rig(MockTranslationBackend scriptBackend)
+    explicit Rig(std::unique_ptr<MockTranslationBackend> scripted)
     {
-        auto owner = std::make_unique<MockTranslationBackend>(std::move(scriptBackend));
-        mock = owner.get();
-        controller.setTranslationBackend(std::move(owner));
+        mock = scripted.get();
+        controller.setTranslationBackend(std::move(scripted));
     }
 
     bool start()
@@ -114,7 +113,7 @@ struct Rig
 TEST_CASE("End to end through the mock: what came in, translated, goes out",
           "[translation][e2e][pipeline]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
     rig.mock->deliverFrames = kFrames;
     rig.mock->deliverGain = 0.5f;
     rig.mock->negate = true;
@@ -161,7 +160,7 @@ TEST_CASE("End to end through the mock: what came in, translated, goes out",
 TEST_CASE("End to end: a wrong-rate delivery is refused and counted, text goes on",
           "[translation][e2e][rates][independence]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
     rig.mock->deliverFrames = kFrames;
     rig.mock->deliverGain = 0.5f;
     rig.mock->negate = true;
@@ -200,7 +199,7 @@ TEST_CASE("End to end: a wrong-rate delivery is refused and counted, text goes o
 TEST_CASE("End to end: a fatal translation error leaves audio running and tells the operator",
           "[translation][e2e][errors]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
     rig.mock->deliverFrames = kFrames;
     rig.mock->deliverGain = 0.5f;
     rig.mock->negate = true;
@@ -251,7 +250,7 @@ TEST_CASE("End to end: a fatal translation error leaves audio running and tells 
 TEST_CASE("End to end: mock text reaches NDI and diagnostics through the controller",
           "[translation][e2e][ndi][text]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
     rig.mock->deliverFrames = 0;   // text only: nothing for the audio channel to do
     rig.mock->textCues = {
         { 1, "good evening", false },
@@ -295,7 +294,7 @@ TEST_CASE("End to end: mock text reaches NDI and diagnostics through the control
 TEST_CASE("End to end: the session request carries settings, model hint and live rates",
           "[translation][e2e][config]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
 
     auto cfg = rig.controller.config().current();
     cfg.translation.inputLanguage = "en";
@@ -363,7 +362,7 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
 TEST_CASE("End to end: restart brings a fresh session with the same wiring",
           "[translation][e2e][restart]")
 {
-    Rig rig{ MockTranslationBackend{} };
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
     rig.mock->deliverFrames = kFrames;
     rig.mock->deliverGain = 0.5f;
     rig.mock->negate = true;

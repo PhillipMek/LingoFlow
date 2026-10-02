@@ -57,6 +57,8 @@ struct LanguagePair
 {
     std::string input;
     std::string output;
+
+    friend constexpr bool operator==(const LanguagePair&, const LanguagePair&) = default;
 };
 
 /// Session request: everything a backend needs to start translating, and nothing
@@ -80,9 +82,15 @@ struct SessionRequest
 
     /// Sample rate the application will play delivered audio at, Hz. Blocks
     /// arriving at any other rate are the receiver's to reject and count -
-    /// there is no resampler in this product yet, and silently playing audio
-    /// at the wrong speed is not an option.
+    /// resampling is a backend's job on its own threads (task 009), never
+    /// something the receiver does silently, and playing audio at the wrong
+    /// speed is not an option.
     int outputSampleRate = 0;
+
+    /// Recovery tests assert that the replayed request is identical to the
+    /// stored one; equality of the whole value is also what makes "replay the
+    /// stored SessionRequest" (protocol doc section 10) checkable.
+    friend constexpr bool operator==(const SessionRequest&, const SessionRequest&) = default;
 };
 
 /// What can go wrong, in vocabulary that survives changing providers. Task 009
@@ -116,6 +124,13 @@ struct TranslationError
     /// false = an event, not a death sentence: the backend keeps the session or
     ///         is retrying (task 010). The sink records and moves on.
     bool fatal = false;
+
+    /// Recovery hint (task 010): when non-zero the backend learned from the
+    /// service that retrying sooner than this is pointless ("wait at least as
+    /// long as Retry-After specifies", protocol doc section 9). A wait at
+    /// least this long is the minimum the recovery policy must honour; 0 means
+    /// "no hint, use the policy's own backoff".
+    int retryAfterMs = 0;
 };
 
 /// Implemented by whoever consumes translation output. The application

@@ -31,6 +31,10 @@ AppConfig makeConfig()
     cfg.translation.instructions = "custom instructions";
     cfg.translation.modelHint = "capability-model";
     cfg.translation.jitterBufferMs = 200;
+    cfg.translation.reconnectEnabled = false;
+    cfg.translation.reconnectInitialBackoffMs = 500;
+    cfg.translation.reconnectMaxBackoffMs = 9000;
+    cfg.translation.sessionMaxAgeSeconds = 1800;
     cfg.ndi.enabled = true;
     cfg.ndi.streamName = "LingoFlow EN->RU";
     cfg.diagnostics.logLevel = "warning";
@@ -73,6 +77,10 @@ TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[confi
     CHECK(cfg.translation.outputLanguage == "ru");
     CHECK(cfg.translation.modelHint.empty());      // backend default, not invented here
     CHECK(cfg.translation.jitterBufferMs == 120);
+    CHECK(cfg.translation.reconnectEnabled);       // recovery is on unless the operator says otherwise
+    CHECK(cfg.translation.reconnectInitialBackoffMs == 1000);
+    CHECK(cfg.translation.reconnectMaxBackoffMs == 15000);
+    CHECK(cfg.translation.sessionMaxAgeSeconds == 3300); // under the measured 3600 s ceiling (docs section 15)
 
     CHECK_FALSE(cfg.ndi.enabled);
     CHECK(cfg.diagnostics.logLevel == "info");
@@ -106,10 +114,48 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.translation.instructions == original.translation.instructions);
     CHECK(restored.translation.modelHint == original.translation.modelHint);
     CHECK(restored.translation.jitterBufferMs == original.translation.jitterBufferMs);
+    CHECK(restored.translation.reconnectEnabled == original.translation.reconnectEnabled);
+    CHECK(restored.translation.reconnectInitialBackoffMs == original.translation.reconnectInitialBackoffMs);
+    CHECK(restored.translation.reconnectMaxBackoffMs == original.translation.reconnectMaxBackoffMs);
+    CHECK(restored.translation.sessionMaxAgeSeconds == original.translation.sessionMaxAgeSeconds);
     CHECK(restored.ndi.enabled == original.ndi.enabled);
     CHECK(restored.ndi.streamName == original.ndi.streamName);
     CHECK(restored.diagnostics.logLevel == original.diagnostics.logLevel);
     CHECK(restored.diagnostics.writeLogFile == original.diagnostics.writeLogFile);
+}
+
+TEST_CASE("ConfigSchema: recovery policy fields validate and repair per field",
+          "[config][schema][recovery]")
+{
+    // A maxBackoff below the initialBackoff is a contradiction: exactly that
+    // field is repaired to its default, and the rest of the recovery section -
+    // which is valid - stays as the operator set it.
+    const std::string text =
+        R"({"translation":{"reconnectEnabled":false,"reconnectInitialBackoffMs":2000,)"
+        R"("reconnectMaxBackoffMs":100,"sessionMaxAgeSeconds":3600}})";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, restored, problems, error));
+
+    CHECK_FALSE(restored.translation.reconnectEnabled);            // kept
+    CHECK(restored.translation.reconnectInitialBackoffMs == 2000); // kept
+    CHECK(restored.translation.reconnectMaxBackoffMs
+          == config::defaults().translation.reconnectMaxBackoffMs); // repaired
+    CHECK(restored.translation.sessionMaxAgeSeconds == 3600);      // kept
+    CHECK(std::any_of(problems.begin(), problems.end(),
+                      [](const ConfigProblem& p)
+                      { return p.field == "translation.reconnectMaxBackoffMs"; }));
+    CHECK(config::validate(restored).empty()); // the repaired result is usable
+
+    // Out-of-range numbers are problems too (the ceiling is two measured
+    // provider hours, task 010).
+    AppConfig broken = config::defaults();
+    broken.translation.sessionMaxAgeSeconds = 7201;
+    CHECK_FALSE(config::validate(broken).empty());
+    broken.translation.sessionMaxAgeSeconds = 0; // 0 = the age reopen disabled, valid
+    CHECK(config::validate(broken).empty());
 }
 
 TEST_CASE("ConfigSchema: absent sections and fields keep the defaults", "[config][schema]")

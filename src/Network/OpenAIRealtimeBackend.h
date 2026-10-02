@@ -146,7 +146,8 @@ private:
     void reportTransition(translation::SessionState next);
     void reportError(translation::TranslationErrorCategory category,
                      const std::string& message,
-                     bool fatal);
+                     bool fatal,
+                     int retryAfterMs = 0);
 
     OpenAIRealtimeOptions options_;
     security::ISecretStore& secrets_;

@@ -54,6 +54,18 @@ struct ConnectResult
     bool upgraded = false; ///< true only when the WS handshake completed (HTTP 101)
     int httpStatus = 0;    ///< HTTP status when the upgrade was refused, else 0
     std::string transportError;
+
+    /// Protocol section 9: a service that refuses the upgrade may answer with
+    /// `Retry-After` (integer seconds form; the HTTP-date form is not used here
+    /// and maps to 0 = "no hint, use the policy's own backoff"). Transport only
+    /// captures it - deciding what to do with it is the backend and task 010.
+    int retryAfterSec = 0;
+
+    /// Body captured on a refused upgrade, truncated (protocol section 9: 429/503
+    /// carry an error code that distinguishes retryable from operator-actionable
+    /// rejections). Never logged as such; the backend extracts classification
+    /// fields only.
+    std::string refusalBody;
 };
 
 class IWebSocketTransport
