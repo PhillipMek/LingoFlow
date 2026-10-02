@@ -42,7 +42,7 @@ Release builds, 10 open/start/stop/close cycles:
 | Active configuration after open | 48000 Hz, 256 frames, 1 in + 1 out channel |
 | Driver-reported latency | input 384 samples (8 ms), output 256 samples (5.3 ms) |
 | Bit depth reported | 32 |
-| Callback delivery while running | ~219 blocks per 1.2 s at 256/48000 (expected 225), engine saw the same number of blocks |
+| Callback delivery while running | ~219 blocks per 1.2 s at 256/48000 (expected 225), the engine processed the same number of blocks (within one - the two counters are read at different instants) |
 | xrun counter | **not reported by this driver** (JUCE returns -1; shown as text, never as "0") |
 | State after `deactivate()` | `closed` in every cycle, no crash, no hang, no leak symptom |
 | Control panel | exposed by the driver (`hasControlPanel`) |
