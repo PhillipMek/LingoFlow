@@ -10,14 +10,17 @@
 // Nothing above the controller knows a wire protocol, and nothing below it knows
 // the UI.
 //
-// At this stage every subsystem is a Null implementation: no device is opened and
-// no network is used (tasks 004/005/009 replace them).
+// The audio path is real since task 005 (device + engine + gain), the translation
+// path is a contract since task 007 whose production implementation (OpenAI)
+// arrives in task 009: until then the session subsystem is the Null backend and
+// no network is used.
 
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -126,10 +129,23 @@ public:
 
     // -------------------------------------------------- translation::ITranslationSink
     // Called on network/worker threads, never on the audio thread.
+    //
+    // onTranslatedAudio is the delivery point of the task 007 contract: blocks
+    // that pass the checks are written straight into the engine's output jitter
+    // buffer - the one and only source of played audio (task 005's safety rule).
+    // Everything refused is counted and warned about once, never swallowed
+    // silently, and never retried at the wrong speed: there is no resampler in
+    // this product yet, and playing 16 kHz audio at 48 kHz would be a lie with
+    // chipmunk voice.
     void onTranslatedAudio(const float* samples, int frameCount, int sampleRate) override;
     void onPartialText(std::string_view text) override;
     void onFinalText(std::string_view text) override;
     void onSessionStateChanged(translation::SessionState state) override;
+
+    /// Records the failure and keeps everything else running: a translation
+    /// error must never stop the audio path (AGENTS.md 12), and deciding to
+    /// reconnect or reopen is task 010's, not this callback's.
+    void onTranslationError(const translation::TranslationError& error) override;
 
 private:
     bool startAudio(std::string& error);
@@ -161,6 +177,20 @@ private:
     std::string faultReason_;
     std::string lastAudioError_;
     std::atomic<std::uint64_t> ndiSequence_{ 0 };
+
+    /// A wrong-rate delivery repeats per block; the log says it once and the
+    /// counters carry the frames. A translation error is never silenced at all.
+    std::atomic<bool> warnedRateMismatch_{ false };
+    std::atomic<bool> warnedNoBuffer_{ false };
+    std::atomic<bool> warnedBadBlock_{ false };
+    std::string lastTranslationError_;  ///< guarded by subsystemMutex_
+    mutable std::mutex subsystemMutex_; ///< protects lastTranslationError_ only; mutable
+                                        ///< because status() is a const read of it
+
+    /// Records a translation error for AppStatus.detail and logs it: the first
+    /// occurrence of a message is a warning, repeats are debug-level, because a
+    /// backend in a bad loop must not fill the log.
+    void noteTranslationError(const translation::TranslationError& error);
 };
 
 } // namespace liveai

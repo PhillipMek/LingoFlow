@@ -42,6 +42,35 @@ public:
     void countReconnect() noexcept { reconnects_.fetch_add(1, std::memory_order_relaxed); }
     void countNdiError() noexcept { ndiErrors_.fetch_add(1, std::memory_order_relaxed); }
 
+    /// Translated audio (task 007). Three numbers because the operator
+    /// distinguishes three questions: did translation deliver, did we refuse
+    /// what it delivered (wrong rate, bad block), and did our own buffer drop
+    /// what we accepted because playback could not keep up.
+    void countTranslatedAudioFrames(std::uint64_t frames) noexcept
+    {
+        translatedAudioFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
+    void countRejectedAudioFrames(std::uint64_t frames) noexcept
+    {
+        rejectedAudioFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
+    void countTranslatedAudioDroppedFrames(std::uint64_t frames) noexcept
+    {
+        translatedAudioDroppedFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
+    /// Translation failures are counted, never swallowed (AGENTS.md 12); fatal
+    /// ones are counted separately because they end a session.
+    void countTranslationError(bool fatal) noexcept
+    {
+        translationErrors_.fetch_add(1, std::memory_order_relaxed);
+
+        if (fatal)
+            translationFatalErrors_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     // -------------------------------------------------------------- configuration
     /// Realtime-safe (relaxed stores). Called after the device is opened.
     void noteAudioGeometry(int sampleRate, int bufferFrames) noexcept
@@ -71,6 +100,11 @@ public:
         std::uint64_t finalTextEvents = 0;
         std::uint64_t reconnects = 0;
         std::uint64_t ndiErrors = 0;
+        std::uint64_t translatedAudioFrames = 0;
+        std::uint64_t rejectedAudioFrames = 0;
+        std::uint64_t translatedAudioDroppedFrames = 0;
+        std::uint64_t translationErrors = 0;
+        std::uint64_t translationFatalErrors = 0;
         int sampleRate = 0;
         int bufferFrames = 0;
         std::string audioBackend;                 ///< empty while no backend is running
@@ -110,6 +144,11 @@ private:
     std::atomic<std::uint64_t> finalTextEvents_{ 0 };
     std::atomic<std::uint64_t> reconnects_{ 0 };
     std::atomic<std::uint64_t> ndiErrors_{ 0 };
+    std::atomic<std::uint64_t> translatedAudioFrames_{ 0 };
+    std::atomic<std::uint64_t> rejectedAudioFrames_{ 0 };
+    std::atomic<std::uint64_t> translatedAudioDroppedFrames_{ 0 };
+    std::atomic<std::uint64_t> translationErrors_{ 0 };
+    std::atomic<std::uint64_t> translationFatalErrors_{ 0 };
     std::atomic<int> sampleRate_{ 0 };
     std::atomic<int> bufferFrames_{ 0 };
 

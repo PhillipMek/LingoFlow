@@ -34,6 +34,11 @@ DiagnosticsManager::Snapshot DiagnosticsManager::snapshot() const
     s.finalTextEvents = finalTextEvents_.load(std::memory_order_relaxed);
     s.reconnects = reconnects_.load(std::memory_order_relaxed);
     s.ndiErrors = ndiErrors_.load(std::memory_order_relaxed);
+    s.translatedAudioFrames = translatedAudioFrames_.load(std::memory_order_relaxed);
+    s.rejectedAudioFrames = rejectedAudioFrames_.load(std::memory_order_relaxed);
+    s.translatedAudioDroppedFrames = translatedAudioDroppedFrames_.load(std::memory_order_relaxed);
+    s.translationErrors = translationErrors_.load(std::memory_order_relaxed);
+    s.translationFatalErrors = translationFatalErrors_.load(std::memory_order_relaxed);
     s.sampleRate = sampleRate_.load(std::memory_order_relaxed);
     s.bufferFrames = bufferFrames_.load(std::memory_order_relaxed);
 
@@ -54,6 +59,11 @@ void DiagnosticsManager::resetForTests() noexcept
     finalTextEvents_.store(0, std::memory_order_relaxed);
     reconnects_.store(0, std::memory_order_relaxed);
     ndiErrors_.store(0, std::memory_order_relaxed);
+    translatedAudioFrames_.store(0, std::memory_order_relaxed);
+    rejectedAudioFrames_.store(0, std::memory_order_relaxed);
+    translatedAudioDroppedFrames_.store(0, std::memory_order_relaxed);
+    translationErrors_.store(0, std::memory_order_relaxed);
+    translationFatalErrors_.store(0, std::memory_order_relaxed);
     sampleRate_.store(0, std::memory_order_relaxed);
     bufferFrames_.store(0, std::memory_order_relaxed);
 

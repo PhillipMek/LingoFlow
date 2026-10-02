@@ -116,6 +116,17 @@ bool ApplicationController::start()
     state_ = ApplicationState::starting;
     log::info(kComponent, "starting");
 
+    {
+        // A new run has a new story to tell; the previous run's failure must not
+        // haunt the status line of the next one.
+        std::lock_guard lock(subsystemMutex_);
+        lastTranslationError_.clear();
+    }
+
+    warnedRateMismatch_.store(false, std::memory_order_relaxed);
+    warnedNoBuffer_.store(false, std::memory_order_relaxed);
+    warnedBadBlock_.store(false, std::memory_order_relaxed);
+
     std::string error;
     if (!startAudio(error))
     {
@@ -272,10 +283,21 @@ bool ApplicationController::startSession(std::string& error)
 
     translationBackend_->setSink(*this);
 
+    const AppConfig& cfg = config_.current();
+
     translation::SessionRequest request;
-    request.pair.input = config_.current().translation.inputLanguage;
-    request.pair.output = config_.current().translation.outputLanguage;
-    request.instructions = config_.current().translation.instructions;
+    request.pair.input = cfg.translation.inputLanguage;
+    request.pair.output = cfg.translation.outputLanguage;
+    request.instructions = cfg.translation.instructions;
+
+    // Task 007: the rates and the model travel with the request, so the backend
+    // knows at what rate audio is coming and at what rate the answer must
+    // arrive. An empty model means "backend default" - the set of legal values
+    // is what task 008 establishes from the official documentation, not
+    // something the application invents here.
+    request.model = cfg.translation.modelHint;
+    request.inputSampleRate = engine_.sampleRate();
+    request.outputSampleRate = engine_.sampleRate();
 
     return translationBackend_->openSession(request, error);
 }
@@ -357,6 +379,14 @@ AppStatus ApplicationController::status() const
         s.detail = faultReason_;
     else if (!lastAudioError_.empty())
         s.detail = lastAudioError_;
+    else
+    {
+        // The freshest translation failure, when nothing bigger is wrong: the
+        // session can be faulted while the application runs fine, and the
+        // operator still has to be able to ask "why".
+        std::lock_guard lock(subsystemMutex_);
+        s.detail = lastTranslationError_;
+    }
 
     return s;
 }
@@ -406,13 +436,64 @@ bool ApplicationController::saveSettings(std::string& error)
 
 void ApplicationController::onTranslatedAudio(const float* samples, int frameCount, int sampleRate)
 {
-    // Worker/network thread. There is no playback queue yet: task 005 adds the
-    // lock-free ring buffer and task 012 connects it to the engine. Silently
-    // dropping the block keeps the boundary honest instead of pretending a path
-    // exists.
-    (void)sampleRate;
-    log::debug(kComponent, "translated audio dropped (no buffer yet): " + std::to_string(frameCount)
-                               + " frames from " + (samples != nullptr ? "valid pointer" : "null pointer"));
+    // Worker/network thread. This is the delivery side of the task 007 contract
+    // and the reason the engine's jitter buffer exists (task 005): translated
+    // audio becomes audible exactly here, through the one buffer the callback
+    // reads, never anywhere else.
+    if (samples == nullptr || frameCount <= 0)
+    {
+        diagnostics_.countRejectedAudioFrames(static_cast<std::uint64_t>(frameCount > 0 ? frameCount : 0));
+
+        if (!warnedBadBlock_.exchange(true, std::memory_order_relaxed))
+            log::warning(kComponent, "translated audio rejected: empty or null block");
+
+        return;
+    }
+
+    const std::uint64_t frames = static_cast<std::uint64_t>(frameCount);
+
+    // The device must be running to play anything, and channel 0 is the
+    // translation output channel (SPEC "Output Channel"). No buffer means the
+    // audio path is down - a fact for the counters, not a reason to crash or
+    // to queue unbounded memory waiting for a device that may never return.
+    audio::AudioJitterBuffer* jitter = engine_.outputJitter(0);
+
+    if (jitter == nullptr)
+    {
+        diagnostics_.countRejectedAudioFrames(frames);
+
+        if (!warnedNoBuffer_.exchange(true, std::memory_order_relaxed))
+            log::warning(kComponent, "translated audio rejected: the audio path is not running");
+
+        return;
+    }
+
+    // No resampler exists (and inventing a silent one is forbidden): a block at
+    // the wrong speed would reach the audience. Reject, count, say it once.
+    const int deviceRate = engine_.sampleRate();
+
+    if (sampleRate != deviceRate)
+    {
+        diagnostics_.countRejectedAudioFrames(frames);
+
+        if (!warnedRateMismatch_.exchange(true, std::memory_order_relaxed))
+            log::warning(kComponent, "translated audio rejected: delivered at " + std::to_string(sampleRate)
+                                         + " Hz, the device plays at " + std::to_string(deviceRate)
+                                         + " Hz; further blocks of this kind are counted, not logged");
+
+        return;
+    }
+
+    // SPSC: this thread is the buffer's only producer, the audio callback its
+    // only consumer. write() never blocks and drops the newest frames when the
+    // network outruns playback - counted below, never swallowed.
+    const std::size_t written = jitter->write(samples, static_cast<std::size_t>(frameCount));
+
+    diagnostics_.countTranslatedAudioFrames(frames);
+
+    if (written != static_cast<std::size_t>(frameCount))
+        diagnostics_.countTranslatedAudioDroppedFrames(static_cast<std::uint64_t>(frameCount)
+                                                       - static_cast<std::uint64_t>(written));
 }
 
 void ApplicationController::onPartialText(std::string_view text)
@@ -430,6 +511,47 @@ void ApplicationController::onFinalText(std::string_view text)
 void ApplicationController::onSessionStateChanged(translation::SessionState state)
 {
     log::info(kComponent, std::string("translation session: ").append(nameOf(state)));
+
+    // A fresh (re)connected session deserves a fresh warning: if the new backend
+    // behaves differently the operator must hear about it again, once.
+    if (state == translation::SessionState::connected)
+    {
+        warnedRateMismatch_.store(false, std::memory_order_relaxed);
+        warnedNoBuffer_.store(false, std::memory_order_relaxed);
+        warnedBadBlock_.store(false, std::memory_order_relaxed);
+    }
+}
+
+void ApplicationController::onTranslationError(const translation::TranslationError& error)
+{
+    noteTranslationError(error);
+
+    // AGENTS.md 12: a translation failure never touches the audio path. Nothing
+    // here stops the engine, closes the device or waits for the network - the
+    // decision to retry or reopen belongs to task 010, not to this callback.
+    if (error.fatal)
+    {
+        diagnostics_.noteError("translation",
+                               std::string(nameOf(error.category)) + ": " + error.message);
+    }
+}
+
+void ApplicationController::noteTranslationError(const translation::TranslationError& error)
+{
+    diagnostics_.countTranslationError(error.fatal);
+
+    const std::string text = std::string(error.fatal ? "fatal " : "")
+                            + std::string(nameOf(error.category)) + ": " + error.message;
+
+    std::lock_guard lock(subsystemMutex_);
+
+    if (lastTranslationError_ == text)
+        log::debug(kComponent, "translation error (repeated): " + text);
+    else
+    {
+        log::warning(kComponent, "translation error: " + text);
+        lastTranslationError_ = text;
+    }
 }
 
 } // namespace liveai

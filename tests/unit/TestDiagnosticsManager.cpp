@@ -53,6 +53,36 @@ TEST_CASE("DiagnosticsManager: text and transport counters", "[diagnostics]")
     CHECK(s.ndiErrors == 1);
 }
 
+TEST_CASE("DiagnosticsManager: translation delivery counters keep the three questions apart",
+          "[diagnostics][translation]")
+{
+    // Delivered, rejected (wrong rate or shape), and dropped by our own full
+    // buffer are three different facts (task 007): an operator reading these
+    // must be able to tell whose problem the frames were.
+    DiagnosticsManager diagnostics;
+
+    diagnostics.countTranslatedAudioFrames(480);
+    diagnostics.countTranslatedAudioFrames(480);
+    diagnostics.countRejectedAudioFrames(240);
+    diagnostics.countTranslatedAudioDroppedFrames(16);
+    diagnostics.countTranslationError(false);
+    diagnostics.countTranslationError(true);
+
+    const auto s = diagnostics.snapshot();
+    CHECK(s.translatedAudioFrames == 960);
+    CHECK(s.rejectedAudioFrames == 240);
+    CHECK(s.translatedAudioDroppedFrames == 16);
+    CHECK(s.translationErrors == 2);
+    CHECK(s.translationFatalErrors == 1);
+
+    diagnostics.resetForTests();
+
+    const auto zero = diagnostics.snapshot();
+    CHECK(zero.translatedAudioFrames == 0);
+    CHECK(zero.rejectedAudioFrames == 0);
+    CHECK(zero.translationErrors == 0);
+}
+
 TEST_CASE("DiagnosticsManager: geometry and backend label are recorded", "[diagnostics]")
 {
     DiagnosticsManager diagnostics;

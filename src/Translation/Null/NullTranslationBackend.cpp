@@ -51,6 +51,7 @@ bool NullTranslationBackend::submitAudio(const float* samples, int frameCount, s
         return false;
     }
 
+    ++submittedCalls_;
     submittedFrames_ += static_cast<std::uint64_t>(frameCount);
     return true;
 }

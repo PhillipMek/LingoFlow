@@ -15,6 +15,8 @@ using liveai::translation::ITranslationSink;
 using liveai::translation::NullTranslationBackend;
 using liveai::translation::SessionRequest;
 using liveai::translation::SessionState;
+using liveai::translation::TranslationError;
+using liveai::translation::TranslationErrorCategory;
 
 namespace {
 
@@ -31,6 +33,11 @@ public:
 
     void onSessionStateChanged(SessionState state) override { states.push_back(state); }
 
+    void onTranslationError(const TranslationError& error) override
+    {
+        errors.push_back({ error.category, error.message, error.fatal });
+    }
+
     struct AudioCall
     {
         bool hadPointer;
@@ -38,10 +45,18 @@ public:
         int sampleRate;
     };
 
+    struct ErrorRecord
+    {
+        TranslationErrorCategory category;
+        std::string message;
+        bool fatal;
+    };
+
     std::vector<AudioCall> audioCalls;
     std::vector<std::string> partials;
     std::vector<std::string> finals;
     std::vector<SessionState> states;
+    std::vector<ErrorRecord> errors;
 };
 
 SessionRequest enRu()
