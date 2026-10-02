@@ -1,5 +1,7 @@
 #include "App/ApplicationController.h"
 
+#include <format>
+
 #include "Audio/Null/NullAudioBackend.h"
 #include "NDI/Null/NullNdiOutput.h"
 #include "Translation/Null/NullTranslationBackend.h"
@@ -197,6 +199,14 @@ bool ApplicationController::startAudio(std::string& error)
     // starts so the buffers are allocated at the right size.
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
 
+    // SPEC "Input Gain" / "Output Gain": applied before the device starts, so the first
+    // block already plays the configured level instead of gliding into it.
+    // Mute is not restored from anything on purpose. It is live stage state, and a room
+    // that comes back muted after a restart is a fault nobody asked for; both sides start
+    // unmuted and the operator decides (SPEC "Start Sequence").
+    engine_.setInputGainDb(cfg.audio.inputGainDb);
+    engine_.setOutputGainDb(cfg.audio.outputGainDb);
+
     if (!deviceId.empty())
     {
         if (audioBackendFactory_ != nullptr)
@@ -234,6 +244,14 @@ bool ApplicationController::startAudio(std::string& error)
 
     if (!engine_.activate(*audioBackend_, request, error))
         return false;
+
+    // One line in the log saying which levels the room is now running at. The operator
+    // needs to be able to tell "my settings were applied" from "the defaults were used",
+    // and a start-up log is where that question gets asked.
+    log::info(kComponent,
+              "audio gains in effect: input " + std::format("{:+.1f}", engine_.inputGainDb())
+            + " dB, output " + std::format("{:+.1f}", engine_.outputGainDb())
+            + " dB, glide " + std::to_string(engine_.gainRampMs()) + " ms");
 
     lastAudioError_.clear();
     return true;

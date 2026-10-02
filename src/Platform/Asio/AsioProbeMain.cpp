@@ -12,8 +12,10 @@
 //   --probe <id> [--start]     open a device, read capabilities, optionally start/stop once
 //   --lifecycle <id> [--cycles N]   repeated open/start/stop/close through AudioEngine
 //   --loopback <id> [--seconds N] [--input M] [--output K] [--jitter MS]
+//                              [--gain-in DB] [--gain-out DB]
 //                              run the real device through the engine with input->output
-//                              loopback and print measured levels (task 005 hardware check)
+//                              loopback, the given digital trims and the levels measured
+//                              (the task 005 and task 006 hardware checks)
 //   --help
 //
 // Exit codes:
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -55,9 +58,11 @@ void printUsage()
         "  --verify                    check enumeration against HKLM\\SOFTWARE\\ASIO\n"
         "  --probe <device-id> [--start]  open device, read capabilities (optionally start/stop)\n"
         "  --lifecycle <device-id> [--cycles N]  open/start/stop/close cycles via AudioEngine\n"
-        "  --loopback <device-id> [--seconds N] [--input M] [--output K] [--jitter MS]\n"
-        "        run the device through AudioEngine with input->output loopback and print the\n"
-        "        measured input/output levels once per second (task 005 hardware check)\n"
+        "  --loopback <device-id> [--seconds N] [--input M] [--output K] [--jitter MS]"
+        " [--gain-in DB] [--gain-out DB]\n"
+        "        run the device through AudioEngine with input->output loopback, the given"
+        " digital trims and print the measured input/output levels once per second (tasks 005"
+        " and 006 hardware checks)\n"
         "  --help                      this text\n"
         "exit: 0 ok, 1 verification failed / no callbacks / inconclusive silence,\n"
         "      2 device refused to open, 3 usage error\n";
@@ -93,6 +98,30 @@ int readIntOption(int argc, char** argv, std::string_view name, int fallback)
     }
 
     return std::atoi(text.c_str());
+}
+
+/// findOption parsed as a decimal number that may be negative, because a gain of -6 dB is
+/// the ordinary case. Anything strtod cannot consume in full is refused the same way
+/// readIntOption refuses a bad integer: say so, fall back, do not guess.
+double readDoubleOption(int argc, char** argv, std::string_view name, double fallback)
+{
+    const std::string text = findOption(argc, argv, name);
+
+    if (text.empty())
+        return fallback;
+
+    const char* begin = text.c_str();
+    char* end = nullptr;
+
+    const double parsed = std::strtod(begin, &end);
+
+    if (end == begin || end != begin + text.size() || !std::isfinite(parsed))
+    {
+        std::cout << "option --" << name.substr(2) << " needs a number like -6.0, got '" << text << "'\n";
+        return fallback;
+    }
+
+    return parsed;
 }
 
 bool hasFlag(int argc, char** argv, std::string_view name)
@@ -381,7 +410,12 @@ int runLifecycle(const std::string& deviceId, int cycles)
 /// delayed by roughly --jitter milliseconds. Without a server this PC only proves that
 /// the machinery runs: both levels stay at silence, which is the honest reading, and the
 /// tool says so instead of calling it a pass.
-int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int outputChannel, int jitterMs)
+///
+/// --gain-in and --gain-out exist so the same run also proves task 006: the level that
+/// leaves the output has to follow the requested trim, and a signal that reaches full
+/// scale raises the clipping counters instead of disappearing into a limiter.
+int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int outputChannel, int jitterMs,
+                double inputGainDb, double outputGainDb)
 {
     juce::ScopedJuceInitialiser_GUI gui;   // ASIO internals use juce::Timer
 
@@ -390,6 +424,8 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
     platform::JuceAsioBackend backend(deviceId);
 
     engine.setJitterBufferMs(jitterMs);
+    engine.setInputGainDb(static_cast<float>(inputGainDb));
+    engine.setOutputGainDb(static_cast<float>(outputGainDb));
 
     audio::DeviceRequest request;
     request.deviceId = deviceId;
@@ -420,6 +456,9 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
               << engine.jitterBufferMs() << " ms, device "
               << engine.sampleRate() << " Hz / " << engine.bufferFrames() << " frames\n";
 
+    std::cout << "gains as requested: input " << inputGainDb << " dB, output " << outputGainDb
+              << " dB (the engine reports what it actually applies, below)\n";
+
     float maxInputPeak = 0.0f;
     float maxOutputPeak = 0.0f;
 
@@ -440,20 +479,36 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
         maxInputPeak = std::max(maxInputPeak, inPeak);
         maxOutputPeak = std::max(maxOutputPeak, outPeak);
 
+        // Reading the latch clears it, so "clip" here means "something hit full scale in
+        // the last second", which is what an operator watching the line can act on.
+        const bool inputClip = engine.takeInputClipIndicator();
+        const bool outputClip = engine.takeOutputClipIndicator();
+
         std::cout << "  t=" << second << "s"
                   << " in=" << static_cast<int>(audio::linearToDb(inPeak)) << " dBFS"
                   << " out=" << static_cast<int>(audio::linearToDb(outPeak)) << " dBFS"
+                  << " appliedGain=" << engine.appliedInputGainDb() << '/'
+                  << engine.appliedOutputGainDb() << " dB"
                   << " blocks=" << engine.blockCount()
                   << " forwarded=" << engine.inputFramesForwarded()
                   << " looped=" << loopback.transferredFrames()
                   << " underruns=" << engine.underrunEvents()
                   << " overruns=" << engine.overrunEvents()
+                  << " clip=" << (inputClip ? "in" : "") << (inputClip && outputClip ? "+" : "")
+                  << (outputClip ? "out" : "") << (inputClip || outputClip ? "" : "-none")
                   << " fill=" << engine.jitterFillFrames() << " frames\n";
     }
 
     const std::uint64_t callbacks = backend.callbackBlocks();
     const std::uint64_t blocks = engine.blockCount();
     const int xruns = backend.lastXRunCount();
+
+    // Read before deactivate() only to prove the point that these belong to the engine
+    // and the gain stages: the same numbers are printed again after the shutdown below.
+    const std::uint64_t clippedIn = engine.inputClippedFrames();
+    const std::uint64_t clippedAfterGain = engine.inputGainClippedFrames();
+    const std::uint64_t clippedOut = engine.outputGainClippedFrames();
+    const std::uint64_t nonFinite = engine.nonFiniteInputFrames();
 
     loopback.stop();
     engine.deactivate();
@@ -466,8 +521,15 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
               << " overruns=" << engine.overrunEvents()
               << " ringDrops=" << engine.inputRingDroppedFrames()
               << " malformed=" << engine.malformedCallbacks()
+              << " oversized=" << engine.oversizedCallbacks()
               << " xruns=" << asio::describeXRunCount(xruns)
               << " state after close=" << audio::nameOf(backend.state()) << "\n";
+
+    std::cout << "clipping after close (counters survive deactivate): deviceFullScale=" << clippedIn
+              << " afterInputGain=" << clippedAfterGain << " toAudience=" << clippedOut
+              << " nonFiniteSilenced=" << nonFinite
+              << " gainRequestsClamped=" << engine.gainRequestsClamped()
+              << " gainRequestsRejected=" << engine.gainRequestsRejected() << "\n";
 
     if (callbacks == 0 || blocks == 0)
     {
@@ -550,7 +612,9 @@ int main(int argc, char** argv)
                            seconds,
                            readIntOption(argc, argv, "--input", 1),
                            readIntOption(argc, argv, "--output", 1),
-                           readIntOption(argc, argv, "--jitter", 120));
+                           readIntOption(argc, argv, "--jitter", 120),
+                           readDoubleOption(argc, argv, "--gain-in", 0.0),
+                           readDoubleOption(argc, argv, "--gain-out", 0.0));
     }
 
     const std::string cyclesText = findOption(argc, argv, "--cycles");

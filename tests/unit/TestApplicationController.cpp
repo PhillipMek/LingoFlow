@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -271,6 +272,38 @@ TEST_CASE("ApplicationController: a selected device without a backend factory is
     cfg.audio.outputDeviceId.clear();
     REQUIRE(controller.config().update(std::move(cfg), error));
     CHECK(controller.start());
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: the gains in settings are the gains in effect",
+          "[app][audio][gain]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+
+    auto cfg = controller.config().current();
+    cfg.audio.inputGainDb = -6.0f;
+    cfg.audio.outputGainDb = 3.0f;
+
+    std::string error;
+    REQUIRE(controller.config().update(cfg, error));
+
+    REQUIRE(controller.start());
+
+    // SPEC "Configuration": the Settings area holds the gain, and what the operator reads
+    // there is what the pipeline applies - not what the code happened to default to.
+    CHECK(controller.engine().inputGainDb() == -6.0f);
+    CHECK(controller.engine().outputGainDb() == 3.0f);
+
+    // activate() lands the coefficient on those values rather than gliding into them, so
+    // the very first block of the run is already at the configured level.
+    CHECK(std::fabs(controller.engine().appliedInputGainDb() + 6.0f) < 0.01f);
+    CHECK(std::fabs(controller.engine().appliedOutputGainDb() - 3.0f) < 0.01f);
+
+    // Mute is live stage state: a start never arrives muted.
+    CHECK_FALSE(controller.engine().inputMuted());
+    CHECK_FALSE(controller.engine().outputMuted());
+
     controller.stop();
 }
 
