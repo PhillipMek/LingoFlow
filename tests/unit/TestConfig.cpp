@@ -333,6 +333,12 @@ TEST_CASE("ConfigSchema: validation covers the documented bounds", "[config][sch
     cfg.audio.outputGainDb = -80.0f;
     CHECK(countProblems(cfg) == 1);
 
+    // SPEC "Input Gain" suggests -24..+24 dB: both ends must be accepted.
+    cfg = config::defaults();
+    cfg.audio.inputGainDb = 24.0f;
+    cfg.audio.outputGainDb = -24.0f;
+    CHECK(countProblems(cfg) == 0);
+
     cfg = config::defaults();
     cfg.translation.inputLanguage = "english-language";   // not a tag: too long
     CHECK(countProblems(cfg) >= 1);

@@ -18,8 +18,11 @@ namespace {
 
 constexpr int kMinBufferFrames = 64;
 constexpr int kMaxBufferFrames = 2048;
+// SPEC "Input Gain" suggests -24..+24 dB and keeps the range configurable; the
+// validation window is wider so the console-side trim stays possible, but +24 dB
+// must never be rejected (it was -60..+12 before, which blocked a spec value).
 constexpr float kMinGainDb = -60.0f;
-constexpr float kMaxGainDb = 12.0f;
+constexpr float kMaxGainDb = 24.0f;
 constexpr int kMaxJitterBufferMs = 1000;
 constexpr std::size_t kMaxInstructionsLength = 4000;
 constexpr std::size_t kMaxIdentifierLength = 64;
