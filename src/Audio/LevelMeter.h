@@ -1,7 +1,9 @@
 #pragma once
 //
 // LevelMeter - block peak/RMS metering for the realtime path (SPEC "Meters",
-// task 005; the gain that acts on these numbers is task 006).
+// task 005). The gain that acts on these numbers is GainStage (task 006): the engine
+// measures the post-gain block, so the knob visibly moves the meter, while what arrived
+// at full scale before our trim is counted by the stage - attenuation cannot hide it.
 //
 // Contract:
 //   * measure() runs on the audio callback. It only walks the block once, does fixed

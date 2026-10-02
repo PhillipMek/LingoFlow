@@ -1,6 +1,7 @@
 #include "Audio/AudioEngine.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "Diagnostics/DiagnosticsManager.h"
@@ -106,13 +107,20 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
             jitters.push_back(std::make_unique<audio::AudioJitterBuffer>(jitterCapacityForChannel, jitterTarget));
             outMeters.push_back(std::make_unique<audio::LevelMeter>());
         }
+
+        // Gain stages and their scratch are allocated here as well. They are the only
+        // part of the pipeline that has to be allocated before the first callback and
+        // never inside it (AGENTS.md 5).
+        growGainStages(inputChannels, outputChannels);
     }
     catch (...)
     {
         // Allocation failure at setup time. This is the last place where it is
         // allowed to be handled at all - never inside processAudio().
         error = "could not allocate the audio pipeline (" + std::to_string(ringCapacity) + " input frames, "
-              + std::to_string(jitterCapacityForChannel) + " jitter frames)";
+              + std::to_string(jitterCapacityForChannel) + " jitter frames, "
+              + std::to_string(static_cast<std::size_t>(inputChannels) * kGainChunkFrames)
+              + " gain scratch frames)";
         return false;
     }
 
@@ -126,6 +134,10 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
     outputJitters_ = std::move(jitters);
     inputMeters_ = std::move(inMeters);
     outputMeters_ = std::move(outMeters);
+
+    // Land the gain stages on the operator's current levels before the device runs: the
+    // first block must already play the level the UI shows, not glide into it.
+    applyGainToStages(sampleRate);
 
     inputChannels_.store(static_cast<int>(inputRings_.size()), std::memory_order_relaxed);
     outputChannels_.store(static_cast<int>(outputJitters_.size()), std::memory_order_relaxed);
@@ -223,6 +235,243 @@ void AudioEngine::setJitterBufferMs(int jitterBufferMs) noexcept
     }
 }
 
+// ---------------------------------------------------------------------------- gain (006)
+
+namespace {
+
+/// Applies the stage window to a requested gain before the engine remembers it as "what
+/// the operator asked for", and counts anything that had to be altered. A refused value
+/// keeps the previous one: inventing 0 dB for a NaN request would be a level nobody set,
+/// and inventing silence would be a fault nobody caused.
+float rememberGain(float requested,
+                   std::atomic<float>& stored,
+                   std::atomic<std::uint64_t>& clamped,
+                   std::atomic<std::uint64_t>& rejected) noexcept
+{
+    if (!std::isfinite(requested))
+    {
+        rejected.fetch_add(1, std::memory_order_relaxed);
+        return stored.load(std::memory_order_relaxed);
+    }
+
+    const float windowed = std::clamp(requested, audio::GainStage::kMinGainDb, audio::GainStage::kMaxGainDb);
+
+    if (windowed != requested)
+        clamped.fetch_add(1, std::memory_order_relaxed);
+
+    stored.store(windowed, std::memory_order_relaxed);
+    return windowed;
+}
+
+} // namespace
+
+void AudioEngine::setInputGainDb(float gainDb) noexcept
+{
+    rememberGain(gainDb, inputGainDb_, gainClamped_, gainRejected_);
+
+    // The stages implement the same window, so the two views of "the current gain"
+    // cannot disagree. They are handed the raw request and count it as clamped too.
+    for (auto& stage : inputStages_)
+    {
+        if (stage != nullptr)
+            stage->setGainDb(gainDb);
+    }
+}
+
+void AudioEngine::setOutputGainDb(float gainDb) noexcept
+{
+    rememberGain(gainDb, outputGainDb_, gainClamped_, gainRejected_);
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage != nullptr)
+            stage->setGainDb(gainDb);
+    }
+}
+
+void AudioEngine::setInputMuted(bool muted) noexcept
+{
+    inputMuted_.store(muted, std::memory_order_relaxed);
+
+    for (auto& stage : inputStages_)
+    {
+        if (stage != nullptr)
+            stage->setMuted(muted);
+    }
+}
+
+void AudioEngine::setOutputMuted(bool muted) noexcept
+{
+    outputMuted_.store(muted, std::memory_order_relaxed);
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage != nullptr)
+            stage->setMuted(muted);
+    }
+}
+
+void AudioEngine::setGainRampMs(int rampMs) noexcept
+{
+    const int windowed = std::clamp(rampMs, 0, audio::GainStage::kMaxRampMs);
+    gainRampMs_.store(windowed, std::memory_order_relaxed);
+
+    // setRampMs rather than configure: it changes only the length of the next glide, so
+    // calling it while the device runs cannot jump the coefficient.
+    for (auto& stage : inputStages_)
+    {
+        if (stage != nullptr)
+            stage->setRampMs(windowed);
+    }
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage != nullptr)
+            stage->setRampMs(windowed);
+    }
+}
+
+float AudioEngine::appliedInputGainDb() const noexcept
+{
+    // Non-realtime read path, same rule as inputRing() and the meters: valid while the
+    // pipeline is stable. Before the first activate() nothing has been applied yet, so
+    // the requested value is the answer.
+    const auto& front = inputStages_.empty() ? nullptr : inputStages_.front().get();
+
+    const float linear = front != nullptr
+                             ? front->appliedLinear()
+                             : audio::GainStage::dbToLinear(inputGainDb_.load(std::memory_order_relaxed));
+
+    return audio::linearToDb(linear);
+}
+
+float AudioEngine::appliedOutputGainDb() const noexcept
+{
+    const auto& front = outputStages_.empty() ? nullptr : outputStages_.front().get();
+
+    const float linear = front != nullptr
+                             ? front->appliedLinear()
+                             : audio::GainStage::dbToLinear(outputGainDb_.load(std::memory_order_relaxed));
+
+    return audio::linearToDb(linear);
+}
+
+std::uint64_t AudioEngine::sumInputStages(std::uint64_t (audio::GainStage::*counter)() const noexcept) const noexcept
+{
+    std::uint64_t total = 0;
+
+    for (const auto& stage : inputStages_)
+    {
+        if (stage != nullptr)
+            total += (stage.get()->*counter)();
+    }
+
+    return total;
+}
+
+std::uint64_t AudioEngine::sumOutputStages(std::uint64_t (audio::GainStage::*counter)() const noexcept) const noexcept
+{
+    std::uint64_t total = 0;
+
+    for (const auto& stage : outputStages_)
+    {
+        if (stage != nullptr)
+            total += (stage.get()->*counter)();
+    }
+
+    return total;
+}
+
+std::uint64_t AudioEngine::inputClippedFrames() const noexcept
+{
+    return sumInputStages(&audio::GainStage::clippedInFrames);
+}
+
+std::uint64_t AudioEngine::inputGainClippedFrames() const noexcept
+{
+    return sumInputStages(&audio::GainStage::clippedOutFrames);
+}
+
+std::uint64_t AudioEngine::outputGainClippedFrames() const noexcept
+{
+    return sumOutputStages(&audio::GainStage::clippedOutFrames);
+}
+
+std::uint64_t AudioEngine::nonFiniteInputFrames() const noexcept
+{
+    return sumInputStages(&audio::GainStage::nonFiniteInFrames);
+}
+
+bool AudioEngine::takeInputClipIndicator() noexcept
+{
+    bool any = false;
+
+    for (auto& stage : inputStages_)
+    {
+        if (stage != nullptr && stage->takeClipIndicator())
+            any = true;
+    }
+
+    return any;
+}
+
+bool AudioEngine::takeOutputClipIndicator() noexcept
+{
+    bool any = false;
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage != nullptr && stage->takeClipIndicator())
+            any = true;
+    }
+
+    return any;
+}
+
+void AudioEngine::growGainStages(int inputChannels, int outputChannels)
+{
+    const auto grow = [](std::vector<std::unique_ptr<audio::GainStage>>& stages, int needed)
+    {
+        // Existing stages are kept, not rebuilt: they hold the operator's level and the
+        // clipping history of the run so far.
+        while (static_cast<int>(stages.size()) < needed)
+            stages.push_back(std::make_unique<audio::GainStage>());
+    };
+
+    grow(inputStages_, inputChannels);
+    grow(outputStages_, outputChannels);
+
+    const std::size_t needed = static_cast<std::size_t>(inputChannels) * kGainChunkFrames;
+
+    if (gainScratch_.size() < needed)
+        gainScratch_.resize(needed, 0.0f);
+}
+
+void AudioEngine::applyGainToStages(int sampleRate)
+{
+    const int rampMs = gainRampMs_.load(std::memory_order_relaxed);
+
+    for (auto& stage : inputStages_)
+    {
+        if (stage == nullptr)
+            continue;
+
+        stage->setGainDb(inputGainDb_.load(std::memory_order_relaxed));
+        stage->setMuted(inputMuted_.load(std::memory_order_relaxed));
+        stage->configure(sampleRate, rampMs);
+    }
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage == nullptr)
+            continue;
+
+        stage->setGainDb(outputGainDb_.load(std::memory_order_relaxed));
+        stage->setMuted(outputMuted_.load(std::memory_order_relaxed));
+        stage->configure(sampleRate, rampMs);
+    }
+}
+
 // -------------------------------------------------------------------------- realtime
 
 void AudioEngine::processAudio(const float* const* input,
@@ -277,34 +526,65 @@ void AudioEngine::processAudio(const float* const* input,
             if (source == nullptr)
                 continue;
 
-            inputMeters_[static_cast<std::size_t>(channel)]->measure(source, frames);
-            inputCaptured_.fetch_add(static_cast<std::uint64_t>(frameCount), std::memory_order_relaxed);
+            // SPEC "Audio Ring Buffer" puts Input Gain between the callback and the ring,
+            // so the translator is handed the level the operator chose rather than the
+            // level the console produced. The device pointer is const, so the block goes
+            // through the preallocated scratch; a block bigger than one chunk is done in
+            // chunks and counted, never truncated.
+            audio::GainStage* stage = inputStages_[static_cast<std::size_t>(channel)].get();
+            float* scratch = gainScratch_.data() + static_cast<std::size_t>(channel) * kGainChunkFrames;
 
-            if (!forwarding)
-            {
-                // Nobody is draining the rings yet (no translation worker, no
-                // loopback). Counting this as an overrun would be a lie: nothing
-                // overflowed, there was simply no consumer.
-                inputDropped_.fetch_add(static_cast<std::uint64_t>(frameCount), std::memory_order_relaxed);
-                continue;
-            }
+            if (stage == nullptr)
+                continue;   // growGainStages() sizes this with the channel count
+
+            if (frames > kGainChunkFrames)
+                oversized_.fetch_add(1, std::memory_order_relaxed);
 
             auto* ring = inputRings_[static_cast<std::size_t>(channel)].get();
-            const std::size_t written = ring->write(source, frames);
 
-            inputForwarded_.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
+            std::size_t offset = 0;
 
-            if (written != frames)
+            while (offset < frames)
             {
-                overruns_.fetch_add(1, std::memory_order_relaxed);
+                const std::size_t take = std::min<std::size_t>(kGainChunkFrames, frames - offset);
 
-                // Counted at engine level on purpose: deactivate() destroys the ring
-                // objects, and a counter that reads through to them would silently
-                // report 0 after shutdown, exactly when the operator wants to see it.
-                ringDropped_.fetch_add(static_cast<std::uint64_t>(frames - written), std::memory_order_relaxed);
+                stage->process(source + offset, scratch, take);
 
-                if (diagnostics_ != nullptr)
-                    diagnostics_->countOverrun();
+                // The meter reads the post-gain block, so the gain knob visibly moves the
+                // meter. Whether the signal was already at full scale on the way in is the
+                // stage's own count, which attenuation cannot hide.
+                inputMeters_[static_cast<std::size_t>(channel)]->measure(scratch, take);
+
+                inputCaptured_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
+
+                if (!forwarding)
+                {
+                    // Nobody is draining the rings yet (no translation worker, no
+                    // loopback). Counting this as an overrun would be a lie: nothing
+                    // overflowed, there was simply no consumer.
+                    inputDropped_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
+                    offset += take;
+                    continue;
+                }
+
+                const std::size_t written = ring != nullptr ? ring->write(scratch, take) : 0;
+
+                inputForwarded_.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
+
+                if (written != take)
+                {
+                    overruns_.fetch_add(1, std::memory_order_relaxed);
+
+                    // Counted at engine level on purpose: deactivate() destroys the ring
+                    // objects, and a counter that reads through to them would silently
+                    // report 0 after shutdown, exactly when the operator wants to see it.
+                    ringDropped_.fetch_add(static_cast<std::uint64_t>(take - written), std::memory_order_relaxed);
+
+                    if (diagnostics_ != nullptr)
+                        diagnostics_->countOverrun();
+                }
+
+                offset += take;
             }
         }
     }
@@ -333,6 +613,16 @@ void AudioEngine::processAudio(const float* const* input,
                 if (diagnostics_ != nullptr)
                     diagnostics_->countUnderrun();
             }
+
+            // SPEC "Audio Pipeline" puts Output Gain after the jitter buffer and before
+            // the wire, so the operator can level-match translated audio against the
+            // source without touching what the translator was fed. In place, because this
+            // buffer belongs to the callback. Applied before the meter on purpose: the
+            // audience and the meter must see the same thing.
+            audio::GainStage* stage = outputStages_[static_cast<std::size_t>(channel)].get();
+
+            if (stage != nullptr)
+                stage->process(destination, destination, frames);
 
             outputMeters_[static_cast<std::size_t>(channel)]->measure(destination, frames);
         }

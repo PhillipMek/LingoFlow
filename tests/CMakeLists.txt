@@ -33,6 +33,7 @@ add_executable(lingoflow_tests
     unit/TestDiagnosticsManager.cpp
     unit/TestAudioEngine.cpp
     unit/TestAudioPipeline.cpp
+    unit/TestGainStage.cpp
     unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp
     unit/TestApplicationController.cpp)

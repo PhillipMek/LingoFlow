@@ -99,6 +99,10 @@ set(callback "Platform/Asio/JuceAsioBackend.cpp")
 set(callback_marker "void audioDeviceIOCallbackWithContext")
 set(callback_anchor "        processor_.processAudio(inputViews_.data(), outputViews_.data(), numSamples);")
 
+set(gain "Audio/GainStage.cpp")
+set(gain_marker "void GainStage::process(const float* input")
+set(gain_anchor "    const float target = targetLinear();")
+
 # 1. The untouched tree must pass: the gate is not broken by construction.
 rt_expect("rt-selftest/clean-tree" PASS "" "${engine}" "${engine_marker}" "${anchor}" "")
 
@@ -142,7 +146,17 @@ rt_expect("rt-selftest/juce-callback" FAIL "RT_AUDIT_FORBIDDEN"
     "${callback}" "${callback_marker}" "${callback_anchor}"
     "std::string name = deviceId_;")
 
-# 10. A function that vanishes must fail the gate, not shrink it silently.
+# 9. The gain stage added by task 006 is on the realtime path too: growth there fails.
+rt_expect("rt-selftest/gain-stage" FAIL "RT_AUDIT_FORBIDDEN"
+    "${gain}" "${gain_marker}" "${gain_anchor}"
+    "auto scratch = std::make_unique<float[]>(frames);")
+
+# 10. A dbToLinear that stops being pure math is still a callback function.
+rt_expect("rt-selftest/gain-db-to-linear" FAIL "RT_AUDIT_FORBIDDEN"
+    "Audio/GainStage.cpp" "float GainStage::dbToLinear" "    return std::exp2(gainDb * kLog2TenOverTwenty);"
+    "std::this_thread::sleep_for(std::chrono::milliseconds(1));")
+
+# 11. A function that vanishes must fail the gate, not shrink it silently.
 file(REMOVE_RECURSE "${RT_AUDIT_WORK_DIR}")
 file(COPY "${RT_AUDIT_SRC_DIR}" DESTINATION "${RT_AUDIT_WORK_DIR}")
 file(READ "${RT_AUDIT_WORK_DIR}/src/${engine}" content)

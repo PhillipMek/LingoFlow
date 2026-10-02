@@ -2,13 +2,17 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <new>
 #include <string>
+#include <thread>
 
 #include "Audio/AudioEngine.h"
 #include "Audio/AudioLoopback.h"
+#include "Audio/GainStage.h"
 #include "Audio/Null/NullAudioBackend.h"
 
 // Proof for the PASS criterion "no allocations in callback" (AGENTS.md 5).
@@ -167,4 +171,51 @@ TEST_CASE("Realtime path: the lock-free buffers allocate nothing while running",
     engine.deactivate();
 
     CHECK(allocations == 0);
+}
+
+TEST_CASE("Realtime path: a gain change costs no allocations and no locks", "[audio][realtime][gain]")
+{
+    NullAudioBackend backend;
+    AudioEngine engine;
+
+    std::string error;
+    REQUIRE(engine.activate(backend, makeRequest(), error));
+    engine.attachInputConsumer();
+
+    std::array<float, static_cast<std::size_t>(kFrames)> in{};
+    std::array<float, static_cast<std::size_t>(kFrames)> out{};
+    in.fill(0.25f);
+
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    for (int block = 0; block < 50; ++block)
+        engine.processAudio(inPointers, outPointers, kFrames);
+
+    // An operator dragging the slider is the case that has to be proven: the request is
+    // published as atomic state and the callback picks it up, with no allocation on either
+    // side (SPEC "Input Gain DSP Requirements").
+    beginCounting();
+
+    for (int block = 0; block < 2000; ++block)
+    {
+        engine.setInputGainDb(static_cast<float>(-24 + block % 48));
+        engine.setOutputGainDb(static_cast<float>(block % 12));
+        engine.setInputMuted(block % 400 == 0);
+        engine.processAudio(inPointers, outPointers, kFrames);
+    }
+
+    engine.setInputGainDb(std::nanf("1"));          // refused requests must not allocate either
+    engine.setOutputGainDb(std::numeric_limits<float>::infinity());
+
+    const std::uint64_t allocations = endCounting();
+
+    engine.deactivate();
+
+    CHECK(allocations == 0);
+    CHECK(engine.gainRequestsRejected() == 2);
+    CHECK(engine.gainRequestsClamped() == 0);   // every value used above was inside the window
+    CHECK(engine.inputGainDb() == 7.0f);        // the last request that was a level: -24 + (1999 % 48) = -24 + 31
+    CHECK(std::isfinite(engine.appliedInputGainDb()));
+    CHECK(engine.blockCount() == 2050);          // warm-up plus the measured window
 }

@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -14,6 +15,7 @@
 #include "Audio/AudioJitterBuffer.h"
 #include "Audio/AudioLoopback.h"
 #include "Audio/AudioRingBuffer.h"
+#include "Audio/GainStage.h"
 #include "Audio/LevelMeter.h"
 #include "Audio/Null/NullAudioBackend.h"
 #include "Diagnostics/DiagnosticsManager.h"
@@ -493,6 +495,497 @@ TEST_CASE("AudioEngine: pipeline counters survive deactivation", "[audio][engine
     CHECK(engine.underrunEvents() > 0);
     CHECK(engine.overrunEvents() > 0);
     CHECK(engine.blockCount() == 400);
+}
+
+// ----------------------------------------------------------------------------- gain
+
+namespace {
+
+/// Mono driver for the engine: fills a constant input block, runs one callback, hands
+/// back what the output side played.
+struct MonoDrive
+{
+    std::vector<float> in;
+    std::vector<float> out;
+
+    explicit MonoDrive(int frames)
+        : in(static_cast<std::size_t>(frames), 0.0f), out(static_cast<std::size_t>(frames), 0.0f)
+    {
+    }
+
+    void run(AudioEngine& engine, float level, int frames)
+    {
+        std::fill(in.begin(), in.end(), level);
+        std::fill(out.begin(), out.end(), -0.125f);
+
+        const float* inputPointers[] = { in.data() };
+        float* outputPointers[] = { out.data() };
+
+        engine.processAudio(inputPointers, outputPointers, frames);
+    }
+};
+
+float coefficientFor(float gainDb)
+{
+    return audio::GainStage::dbToLinear(gainDb);
+}
+
+} // namespace
+
+TEST_CASE("AudioEngine: input gain is applied before the ring buffer", "[audio][engine][gain][pipeline]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    // The level is set before activate(): buildPipeline() lands the coefficient on the
+    // request instead of gliding into it, so every frame in the ring is at the target and
+    // the assertion is about WHERE the gain sits. The glide itself is tested in
+    // TestGainStage.cpp, and below in "a gain change glides through the pipeline".
+    engine.setInputGainDb(-6.0f);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    MonoDrive drive(kFrames);
+    const float expectedLevel = 0.5f * coefficientFor(-6.0f);
+
+    for (int block = 0; block < 3; ++block)
+        drive.run(engine, 0.5f, kFrames);
+
+    std::vector<float> received(static_cast<std::size_t>(kFrames), 0.0f);
+    const std::size_t taken = engine.inputRing(0)->read(received.data(), received.size());
+
+    // What the translator is handed is the operator's level, not the console's. SPEC
+    // "Audio Ring Buffer" puts Input Gain between the callback and the ring.
+    REQUIRE(taken > 0);
+
+    for (std::size_t i = 1; i < taken; ++i)
+        CHECK(std::fabs(received[i] - expectedLevel) < 1e-5f);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: the gain is in effect from the very first block", "[audio][engine][gain][startup]")
+{
+    // The operator set -12 dB in settings. The first callback after the device started
+    // must already play it: a glide into the level at start-up would be audio that
+    // nobody asked for, and it would land in the translator's stream.
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setInputGainDb(-12.0f);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    MonoDrive drive(kFrames);
+    drive.run(engine, 0.5f, kFrames);
+
+    std::vector<float> received(static_cast<std::size_t>(kFrames), 0.0f);
+    REQUIRE(engine.inputRing(0)->read(received.data(), received.size()) == received.size());
+
+    const float expectedLevel = 0.5f * coefficientFor(-12.0f);
+
+    CHECK(std::fabs(received.front() - expectedLevel) < 1e-5f);
+    CHECK(std::fabs(received.back() - expectedLevel) < 1e-5f);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: the input meter follows the gain", "[audio][engine][gain][meters]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    MonoDrive drive(kFrames);
+
+    drive.run(engine, 0.25f, kFrames);
+    REQUIRE(engine.inputMeter(0) != nullptr);
+    const float atUnity = engine.inputMeter(0)->peakLinear();
+    CHECK(std::fabs(atUnity - 0.25f) < 1e-6f);
+
+    engine.setInputGainDb(12.0f);
+
+    for (int block = 0; block < 4; ++block)
+        drive.run(engine, 0.25f, kFrames);
+
+    // A knob that does not move the meter looks broken to an operator. The meter reads the
+    // post-gain block for exactly that reason, and the stage separately reports what
+    // arrived at full scale, so nothing is hidden by turning down.
+    const float afterGainUp = engine.inputMeter(0)->peakLinear();
+    CHECK(std::fabs(afterGainUp - 0.25f * coefficientFor(12.0f)) < 1e-5f);
+
+    engine.setInputGainDb(-24.0f);
+
+    for (int block = 0; block < 4; ++block)
+        drive.run(engine, 0.25f, kFrames);
+
+    const float afterGainDown = engine.inputMeter(0)->peakLinear();
+    CHECK(afterGainDown < atUnity);
+    CHECK(std::fabs(afterGainDown - 0.25f * coefficientFor(-24.0f)) < 1e-5f);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: attenuation cannot hide clipping that came from the device",
+          "[audio][engine][gain][clipping][honesty]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setInputGainDb(-24.0f);   // the operator's reflex when something sounds loud
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    MonoDrive drive(kFrames);
+
+    for (int block = 0; block < 4; ++block)
+        drive.run(engine, 1.5f, kFrames);   // already over full scale on the way in
+
+    // The count says the console fed clipped audio, and it stays true however much the
+    // application turns its own gain down.
+    CHECK(engine.inputClippedFrames() == 4 * static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputGainClippedFrames() == 0);   // ... and after -24 dB nothing is at full scale
+    CHECK(engine.takeInputClipIndicator());        // the indicator still lights
+
+    // The output side has its own number, because it answers a different question: what
+    // is being sent to the audience.
+    CHECK(engine.outputGainClippedFrames() == 0);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: output gain sits after the jitter buffer, on the way to the wire",
+          "[audio][engine][gain][pipeline]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setJitterBufferMs(0);      // no pre-roll: this test is about the level, not the delay
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    engine.setOutputGainDb(6.0f);
+
+    std::vector<float> translated(static_cast<std::size_t>(kFrames), 0.2f);
+
+    MonoDrive drive(kFrames);
+
+    for (int block = 0; block < 3; ++block)
+    {
+        // The translated stream arrives from the network side (loopback today, task 012
+        // later): the engine never lets the microphone take this path.
+        engine.outputJitter(0)->write(translated.data(), translated.size());
+        drive.run(engine, 0.0f, kFrames);
+    }
+
+    const float expected = 0.2f * coefficientFor(6.0f);
+
+    for (const float sample : drive.out)
+        CHECK(std::fabs(sample - expected) < 1e-5f);
+
+    // The meter and the wire agree: what the operator sees is what the audience hears.
+    CHECK(std::fabs(engine.outputMeter(0)->peakLinear() - expected) < 1e-5f);
+    CHECK(engine.outputSilenceFrames() == 0);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: input mute and output mute are different actions",
+          "[audio][engine][gain][safety]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setJitterBufferMs(0);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    MonoDrive drive(kFrames);
+    std::vector<float> translated(static_cast<std::size_t>(kFrames), 0.2f);
+
+    const auto pump = [&](int blocks)
+    {
+        for (int block = 0; block < blocks; ++block)
+        {
+            engine.outputJitter(0)->write(translated.data(), translated.size());
+            drive.run(engine, 0.5f, kFrames);
+        }
+    };
+
+    // Drains the whole ring and hands back the frames that were written LAST. The ring is
+    // a FIFO: reading it right after a change would return audio recorded before the
+    // change, and the 20 ms glide means the newest block is the first one fully at the
+    // new level. That is the property worth asserting, so this takes the tail.
+    const auto drainRingToTail = [&]()
+    {
+        std::vector<float> all;
+        std::vector<float> piece(static_cast<std::size_t>(kFrames), 0.0f);
+
+        for (;;)
+        {
+            const std::size_t taken = engine.inputRing(0)->read(piece.data(), piece.size());
+
+            if (taken == 0)
+                break;
+
+            all.insert(all.end(), piece.begin(), piece.begin() + static_cast<std::ptrdiff_t>(taken));
+        }
+
+        REQUIRE(all.size() >= static_cast<std::size_t>(kFrames));
+
+        return std::vector<float>(all.end() - static_cast<std::ptrdiff_t>(kFrames), all.end());
+    };
+
+    pump(4);
+
+    // Mute the input: the translator must go quiet...
+    engine.setInputMuted(true);
+    pump(4);                                   // 1920 samples: the glide has landed
+
+    for (const float sample : drainRingToTail())
+        CHECK(sample == 0.0f);
+
+    // ... while the audience keeps hearing the translation that is already in the buffer.
+    // This is why one "mute" would be the wrong control to have.
+    for (const float sample : drive.out)
+        CHECK(std::fabs(sample - 0.2f) < 1e-5f);
+
+    CHECK(engine.inputMuted());
+    CHECK_FALSE(engine.outputMuted());
+
+    // Now the other way round: unmute the input, mute the output.
+    engine.setInputMuted(false);
+    engine.setOutputMuted(true);
+    pump(4);
+
+    const std::vector<float> fed = drainRingToTail();
+
+    for (const float sample : fed)
+        CHECK(std::fabs(sample - 0.5f) < 1e-5f);      // the translator is fed again
+
+    for (const float sample : drive.out)
+        CHECK(sample == 0.0f);                        // the room is silent
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: gain settings and clipping history survive a device restart",
+          "[audio][engine][gain][restart]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    engine.setInputGainDb(-6.0f);
+    engine.setOutputGainDb(3.0f);
+
+    MonoDrive drive(kFrames);
+    drive.run(engine, 1.2f, kFrames);          // over full scale: clipped on the way in
+
+    engine.deactivate();
+
+    // The numbers an operator set and the facts the pipeline measured are not device
+    // geometry: a restart of the audio path must not reset the room's levels or forget
+    // that it clipped.
+    CHECK(engine.inputGainDb() == -6.0f);
+    CHECK(engine.outputGainDb() == 3.0f);
+    CHECK(engine.inputClippedFrames() == static_cast<std::uint64_t>(kFrames));
+
+    NullAudioBackend another;
+    REQUIRE(engine.activate(another, request(), error));
+    engine.attachInputConsumer();
+
+    CHECK(engine.inputGainDb() == -6.0f);
+
+    std::vector<float> received(static_cast<std::size_t>(kFrames), 0.0f);
+    drive.run(engine, 0.5f, kFrames);
+
+    REQUIRE(engine.inputRing(0)->read(received.data(), received.size()) > 0);
+
+    // ... and the new pipeline applies the level it remembered, from the first block.
+    const float expected = 0.5f * coefficientFor(-6.0f);
+
+    for (const float sample : received)
+        CHECK(std::fabs(sample - expected) < 1e-5f);
+
+    CHECK(engine.inputClippedFrames() == static_cast<std::uint64_t>(kFrames));   // not reset, not doubled
+    CHECK(engine.oversizedCallbacks() == 0);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: a block bigger than one gain chunk is chunked, not overrun",
+          "[audio][engine][gain][oversize]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setInputGainDb(-6.0f);          // before activate: no glide inside the assertion
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    // Deliberately larger than the preallocated chunk: the engine has to do it in pieces
+    // and say that it happened, instead of writing past the scratch (the defect that a
+    // badly sized buffer exposed in task 005).
+    const int frames = 5000;
+
+    MonoDrive drive(frames);
+    drive.run(engine, 0.5f, frames);
+
+    CHECK(engine.oversizedCallbacks() == 1);
+    CHECK(engine.inputFramesCaptured() == static_cast<std::uint64_t>(frames));
+    CHECK(engine.inputFramesForwarded() == static_cast<std::uint64_t>(frames));
+    CHECK(engine.inputRingDroppedFrames() == 0);
+    CHECK(engine.malformedCallbacks() == 0);
+
+    std::vector<float> received(static_cast<std::size_t>(frames), 0.0f);
+    REQUIRE(engine.inputRing(0)->read(received.data(), received.size()) == static_cast<std::size_t>(frames));
+
+    // Every sample was gained, in both chunks: a silent tail here would mean the second
+    // chunk never happened.
+    const float expected = 0.5f * coefficientFor(-6.0f);
+
+    CHECK(std::fabs(received.front() - expected) < 1e-5f);
+    CHECK(std::fabs(received[4095] - expected) < 1e-5f);
+    CHECK(std::fabs(received[4096] - expected) < 1e-5f);
+    CHECK(std::fabs(received.back() - expected) < 1e-5f);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: refused and clamped gain requests are counted, not swallowed",
+          "[audio][engine][gain][policy]")
+{
+    AudioEngine engine;
+
+    CHECK(engine.inputGainDb() == 0.0f);
+    CHECK(engine.outputGainDb() == 0.0f);
+    CHECK(engine.gainRampMs() == audio::GainStage::kDefaultRampMs);
+
+    engine.setInputGainDb(96.0f);                       // beyond the window
+    CHECK(engine.inputGainDb() == audio::GainStage::kMaxGainDb);
+    CHECK(engine.gainRequestsClamped() == 1);
+    CHECK(engine.gainRequestsRejected() == 0);
+
+    engine.setOutputGainDb(std::nanf("1"));            // not a level at all
+    CHECK(engine.outputGainDb() == 0.0f);              // previous value kept
+    CHECK(engine.gainRequestsRejected() == 1);
+    CHECK(engine.gainRequestsClamped() == 1);
+
+    engine.setOutputGainDb(std::numeric_limits<float>::infinity());
+    CHECK(engine.gainRequestsRejected() == 2);
+
+    engine.setGainRampMs(100000);
+    CHECK(engine.gainRampMs() == audio::GainStage::kMaxRampMs);
+
+    // No device needed for the state, and the applied readout reports the request until a
+    // pipeline exists to glide in the callback.
+    CHECK(std::fabs(engine.appliedInputGainDb() - audio::GainStage::kMaxGainDb) < 0.02f);
+    CHECK(engine.appliedOutputGainDb() == 0.0f);
+}
+
+TEST_CASE("AudioEngine: both trims compose along the pipeline in SPEC order",
+          "[audio][engine][gain][pipeline]")
+{
+    // The transport is driven by hand here (ring -> jitter, exactly what AudioLoopback and
+    // the task 012 streaming worker do) so the assertion is about where the gain stages
+    // sit in the signal chain, not about thread scheduling.
+    AudioEngine engine;
+    NullAudioBackend backend;
+
+    engine.setJitterBufferMs(20);      // SPEC's minimum pre-roll; the level is what is under test
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    engine.attachInputConsumer();
+
+    engine.setInputGainDb(-6.0f);
+    engine.setOutputGainDb(6.0f);
+
+    std::vector<float> transport(static_cast<std::size_t>(kFrames), 0.0f);
+    MonoDrive drive(kFrames);
+
+    for (int block = 0; block < 40; ++block)
+    {
+        drive.run(engine, 0.25f, kFrames);
+
+        // What the consumer of the input ring would do: hand the (already gained) audio
+        // to the translation side, and put the returned audio back for the output.
+        const std::size_t available = engine.inputRing(0)->read(transport.data(), transport.size());
+
+        if (available > 0)
+            engine.outputJitter(0)->write(transport.data(), available);
+    }
+
+    // -6 dB in, +6 dB out: the trims cancel, and the number that leaves is the number that
+    // arrived. That only works out this way because each stage is applied once, in order.
+    for (const float sample : drive.out)
+        CHECK(std::fabs(sample - 0.25f) < 1e-5f);
+
+    CHECK(engine.inputFramesForwarded() > 0);
+    CHECK(engine.outputGainClippedFrames() == 0);
+    CHECK(engine.inputGainClippedFrames() == 0);
+
+    // The same run with the output trim pushed to the ceiling must clip on the way out and
+    // say so, rather than deliver a quietly limited signal.
+    engine.setOutputGainDb(audio::GainStage::kMaxGainDb);
+
+    for (int block = 0; block < 12; ++block)
+    {
+        drive.run(engine, 0.25f, kFrames);
+
+        const std::size_t available = engine.inputRing(0)->read(transport.data(), transport.size());
+
+        if (available > 0)
+            engine.outputJitter(0)->write(transport.data(), available);
+    }
+
+    // The input is still the tame -6 dB version, so the input side reports no clipping...
+    CHECK(engine.inputGainClippedFrames() == 0);
+
+    // ... while the wire is over full scale, and the only way it stays finite is that the
+    // stage counted every one of those samples.
+    CHECK(engine.outputGainClippedFrames() > 0);
+    CHECK(engine.takeOutputClipIndicator());
+
+    for (const float sample : drive.out)
+        CHECK(std::isfinite(sample));
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: meters and clipping readouts exist before the pipeline is built",
+          "[audio][engine][gain][policy]")
+{
+    AudioEngine engine;
+
+    // Nothing is running, so every readout has to answer rather than crash: the UI polls
+    // these from a timer that does not know whether the device started.
+    CHECK(engine.inputMeter(0) == nullptr);
+    CHECK(engine.outputMeter(0) == nullptr);
+    CHECK(engine.inputClippedFrames() == 0);
+    CHECK(engine.inputGainClippedFrames() == 0);
+    CHECK(engine.outputGainClippedFrames() == 0);
+    CHECK(engine.nonFiniteInputFrames() == 0);
+    CHECK_FALSE(engine.takeInputClipIndicator());
+    CHECK_FALSE(engine.takeOutputClipIndicator());
+    CHECK(engine.appliedInputGainDb() == 0.0f);
+    CHECK(engine.appliedOutputGainDb() == 0.0f);
 }
 
 // -------------------------------------------------------------------------- loopback

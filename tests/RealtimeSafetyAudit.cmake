@@ -42,6 +42,8 @@ set(rt_audit_rows
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::readOrSilence"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::setTargetFrames"
     "Audio/LevelMeter.cpp|LevelMeter::measure"
+    "Audio/GainStage.cpp|float GainStage::dbToLinear"
+    "Audio/GainStage.cpp|void GainStage::process\\(const float\\* input"
     "Audio/AudioEngine.cpp|AudioEngine::processAudio"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceIOCallbackWithContext"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceError")
