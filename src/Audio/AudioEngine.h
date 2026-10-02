@@ -30,8 +30,9 @@ public:
 
     audio::IAudioBackend* backend() const noexcept { return backend_; }
 
-    /// Opens and starts the backend. Non-realtime thread only.
-    bool activate(audio::IAudioBackend& backend, int sampleRate, int bufferFrames, std::string& error);
+    /// Opens and starts the backend. Non-realtime thread only. `request` carries the
+    /// sample rate, block size and the one-based channel indices from settings.
+    bool activate(audio::IAudioBackend& backend, const audio::DeviceRequest& request, std::string& error);
 
     /// Stops and closes the backend. Non-realtime thread only.
     void deactivate() noexcept;

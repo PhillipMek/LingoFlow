@@ -20,6 +20,17 @@
 namespace liveai {
 namespace audio {
 
+/// What the engine asks a backend to configure. Channel indices are one-based
+/// (SPEC/Config): a real device must be opened with a channel mask, and "which
+/// port carries the FOH feed" is operator knowledge, not driver knowledge.
+struct DeviceRequest
+{
+    int sampleRate = 48000;
+    int bufferFrames = 480;
+    int inputChannel = 1;
+    int outputChannel = 1;
+};
+
 /// Implemented by the AudioEngine; called by a backend.
 class IAudioProcessor
 {
@@ -54,7 +65,7 @@ public:
 
     /// Opens the device. `processor` is not owned and must stay alive until
     /// close() returns. Returns false with the failure recorded in `error`.
-    virtual bool open(IAudioProcessor& processor, int sampleRate, int bufferFrames, std::string& error) = 0;
+    virtual bool open(IAudioProcessor& processor, const DeviceRequest& request, std::string& error) = 0;
 
     virtual bool start(std::string& error) = 0;
     virtual bool stop(std::string& error) = 0;

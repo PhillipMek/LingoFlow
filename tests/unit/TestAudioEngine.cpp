@@ -10,6 +10,7 @@
 using namespace liveai;
 using liveai::audio::BackendState;
 using liveai::audio::DeviceCapabilities;
+using liveai::audio::DeviceRequest;
 using liveai::audio::IAudioBackend;
 using liveai::audio::IAudioProcessor;
 using liveai::audio::NullAudioBackend;
@@ -29,6 +30,17 @@ DeviceCapabilities mono48k()
     return caps;
 }
 
+/// The request used by these tests: 48 kHz, 10 ms, mono in/out (SPEC "Audio").
+DeviceRequest request()
+{
+    DeviceRequest request;
+    request.sampleRate = kRate;
+    request.bufferFrames = kFrames;
+    request.inputChannel = 1;
+    request.outputChannel = 1;
+    return request;
+}
+
 } // namespace
 
 TEST_CASE("AudioEngine: activate opens and starts the backend", "[audio][engine]")
@@ -39,7 +51,7 @@ TEST_CASE("AudioEngine: activate opens and starts the backend", "[audio][engine]
     auto* backendRef = backend.get();
 
     std::string error;
-    REQUIRE(engine.activate(*backendRef, kRate, kFrames, error));
+    REQUIRE(engine.activate(*backendRef, request(), error));
     CHECK(error.empty());
 
     CHECK(backendRef->state() == BackendState::running);
@@ -64,12 +76,12 @@ TEST_CASE("AudioEngine: a second activate without deactivating is refused", "[au
     NullAudioBackend second(mono48k());
 
     std::string error;
-    CHECK(engine.activate(first, kRate, kFrames, error));
-    CHECK_FALSE(engine.activate(second, kRate, kFrames, error));
+    CHECK(engine.activate(first, request(), error));
+    CHECK_FALSE(engine.activate(second, request(), error));
     CHECK(error.find("already activated") != std::string::npos);
 
     engine.deactivate();
-    CHECK(engine.activate(second, kRate, kFrames, error));
+    CHECK(engine.activate(second, request(), error));
 }
 
 TEST_CASE("AudioEngine: callback produces silence, never the input signal", "[audio][engine][realtime]")
@@ -80,7 +92,7 @@ TEST_CASE("AudioEngine: callback produces silence, never the input signal", "[au
     NullAudioBackend backend(mono48k());
 
     std::string error;
-    REQUIRE(engine.activate(backend, kRate, kFrames, error));
+    REQUIRE(engine.activate(backend, request(), error));
 
     backend.fillInputWith(0.75f);
     REQUIRE(backend.renderOneBlock());
@@ -103,7 +115,7 @@ TEST_CASE("AudioEngine: blocks with no frames are ignored", "[audio][engine]")
     NullAudioBackend backend(mono48k());
 
     std::string error;
-    REQUIRE(engine.activate(backend, kRate, kFrames, error));
+    REQUIRE(engine.activate(backend, request(), error));
 
     float sample = 0.0f;
     const float* in[] = { &sample };
@@ -124,7 +136,7 @@ TEST_CASE("AudioEngine: null diagnostics pointer is tolerated", "[audio][engine]
     NullAudioBackend backend(mono48k());
 
     std::string error;
-    CHECK(engine.activate(backend, kRate, kFrames, error));
+    CHECK(engine.activate(backend, request(), error));
     CHECK(backend.renderOneBlock());
     engine.deactivate();
 }
@@ -135,7 +147,7 @@ TEST_CASE("AudioEngine: a backend that cannot start is closed again", "[audio][e
     {
         std::string_view name() const noexcept override { return "Unstartable"; }
         BackendState state() const noexcept override { return state_; }
-        bool open(IAudioProcessor&, int, int, std::string& error) override
+        bool open(IAudioProcessor&, const DeviceRequest&, std::string& error) override
         {
             state_ = BackendState::opened;
             error.clear();
@@ -158,7 +170,7 @@ TEST_CASE("AudioEngine: a backend that cannot start is closed again", "[audio][e
     UnstartableBackend backend;
     std::string error;
 
-    CHECK_FALSE(engine.activate(backend, kRate, kFrames, error));
+    CHECK_FALSE(engine.activate(backend, request(), error));
     CHECK(error == "device busy");
     CHECK(engine.backend() == nullptr);
     // The failed start must not leave the device open.

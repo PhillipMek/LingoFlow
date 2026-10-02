@@ -89,12 +89,27 @@ audit_expect("selftest/diagnostics-includes-config" FAIL "AUDIT_INCLUDE_DIRECTIO
 audit_expect("selftest/security-includes-config" FAIL "AUDIT_INCLUDE_DIRECTION"
     APPEND "Security/ISecretStore.h" "#include \"Config/ConfigManager.h\"")
 
-# --- JUCE stays in the UI layer -------------------------------------------------
-audit_expect("selftest/juce-in-audio" FAIL "AUDIT_JUCE_OUTSIDE_APP"
+# --- JUCE stays in the UI and in the platform adapters ---------------------------
+audit_expect("selftest/juce-in-audio" FAIL "AUDIT_JUCE_OUTSIDE_UI"
     APPEND "Audio/AudioTypes.h" "#include <juce_core/juce_core.h>")
 
-audit_expect("selftest/juce-in-config" FAIL "AUDIT_JUCE_OUTSIDE_APP"
+audit_expect("selftest/juce-in-config" FAIL "AUDIT_JUCE_OUTSIDE_UI"
     APPEND "Config/AppConfig.h" "#include <juce_data_structures/juce_data_structures.h>")
+
+audit_expect("selftest/juce-in-platform-allowed" PASS ""
+    APPEND "Platform/Asio/AsioDiscovery.cpp" "#include <juce_audio_devices/juce_audio_devices.h>")
+
+audit_expect("selftest/asiodiscovery-project-include-allowed" PASS ""
+    APPEND "Platform/Asio/AsioDiscovery.cpp" "#include \"Platform/Asio/JuceAsioCommon.h\"")
+
+audit_expect("selftest/platform-includes-app" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Platform/Asio/JuceAsioBackend.cpp" "#include \"App/ApplicationController.h\"")
+
+audit_expect("selftest/audio-includes-platform" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Audio/AudioEngine.h" "#include \"Platform/Asio/JuceAsioBackend.h\"")
+
+# The transport-token trap is already covered by the clean-tree case: the project's
+# own headers live under Audio/Asio/ and Platform/Asio/ and include each other.
 
 # --- protocol/transport outside the owning module -------------------------------
 audit_expect("selftest/json-in-ui" FAIL "AUDIT_PROTOCOL_INCLUDE"
@@ -120,4 +135,4 @@ audit_expect("selftest/file-outside-module" FAIL "AUDIT_LOOSE_FILE"
     CREATE "Loose.cpp" "// a file directly under src/ must be reported")
 
 file(REMOVE_RECURSE "${AUDIT_WORK_DIR}")
-message(STATUS "architecture boundary audit self-test: OK (15 cases)")
+message(STATUS "architecture boundary audit self-test: OK")

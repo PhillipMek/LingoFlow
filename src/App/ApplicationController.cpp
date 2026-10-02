@@ -157,7 +157,25 @@ bool ApplicationController::startAudio(std::string& error)
     }
 
     const auto& cfg = config_.current();
-    if (!engine_.activate(*audioBackend_, cfg.audio.sampleRate, cfg.audio.bufferFrames, error))
+
+    // SPEC "ASIO Device Selection": one ASIO device serves input and output, and a
+    // configured device must never be silently replaced by another one.
+    if (!cfg.audio.inputDeviceId.empty() && !cfg.audio.outputDeviceId.empty()
+        && cfg.audio.inputDeviceId != cfg.audio.outputDeviceId)
+    {
+        error = "ASIO uses a single device for input and output, but settings name two: '"
+              + cfg.audio.inputDeviceId + "' and '" + cfg.audio.outputDeviceId + "'";
+        return false;
+    }
+
+    // The device id is consumed by the ASIO backend, which task 005 wires in here.
+    audio::DeviceRequest request;
+    request.sampleRate = cfg.audio.sampleRate;
+    request.bufferFrames = cfg.audio.bufferFrames;
+    request.inputChannel = cfg.audio.inputChannel;
+    request.outputChannel = cfg.audio.outputChannel;
+
+    if (!engine_.activate(*audioBackend_, request, error))
         return false;
 
     lastAudioError_.clear();

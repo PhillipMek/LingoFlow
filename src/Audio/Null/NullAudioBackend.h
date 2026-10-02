@@ -4,8 +4,9 @@
 // skeleton. It owns preallocated mono buffers and can be driven manually, so the
 // realtime path can be exercised without ASIO hardware.
 //
-// NOT for production use as a substitute for a real device check: the ASIO
-// backend is task 004/005 and requires a human SoundGrid verification.
+// NOT a substitute for a real device check: the ASIO backend is
+// Platform/Asio/JuceAsioBackend and the Waves SoundGrid verification is a human
+// checkpoint (docs/device-defaults.md).
 
 #include <string>
 #include <vector>
@@ -23,7 +24,7 @@ public:
     std::string_view name() const noexcept override { return "Null"; }
     BackendState state() const noexcept override { return state_; }
 
-    bool open(IAudioProcessor& processor, int sampleRate, int bufferFrames, std::string& error) override;
+    bool open(IAudioProcessor& processor, const DeviceRequest& request, std::string& error) override;
     bool start(std::string& error) override;
     bool stop(std::string& error) override;
     void close() noexcept override;
@@ -41,10 +42,15 @@ public:
     /// Last block handed to the processor by renderOneBlock(), for assertions.
     const std::vector<float>& lastOutputBlock() const noexcept { return output_; }
 
+    /// Number of open() calls that succeeded (leak/lifecycle assertions).
+    int openCount() const noexcept { return openCount_; }
+
 private:
     DeviceCapabilities capabilities_;
     BackendState state_ = BackendState::closed;
     IAudioProcessor* processor_ = nullptr;
+    int bufferFrames_ = 0;
+    int openCount_ = 0;
     std::vector<float> input_;
     std::vector<float> output_;
     std::vector<const float*> inputPointers_;

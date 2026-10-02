@@ -12,7 +12,7 @@ AudioEngine::AudioEngine(DiagnosticsManager* diagnostics) noexcept
 {
 }
 
-bool AudioEngine::activate(audio::IAudioBackend& backend, int sampleRate, int bufferFrames, std::string& error)
+bool AudioEngine::activate(audio::IAudioBackend& backend, const audio::DeviceRequest& request, std::string& error)
 {
     if (backend_ != nullptr)
     {
@@ -20,7 +20,7 @@ bool AudioEngine::activate(audio::IAudioBackend& backend, int sampleRate, int bu
         return false;
     }
 
-    if (!backend.open(*this, sampleRate, bufferFrames, error))
+    if (!backend.open(*this, request, error))
         return false;
 
     backend_ = &backend;
@@ -32,8 +32,8 @@ bool AudioEngine::activate(audio::IAudioBackend& backend, int sampleRate, int bu
         return false;
     }
 
-    onAudioConfigurationChanged(backend.capabilities().sampleRate,
-                                backend.capabilities().preferredBufferFrames);
+    const auto capabilities = backend.capabilities();
+    onAudioConfigurationChanged(capabilities.sampleRate, capabilities.preferredBufferFrames);
 
     if (diagnostics_ != nullptr)
         diagnostics_->noteAudioBackend(backend.name());

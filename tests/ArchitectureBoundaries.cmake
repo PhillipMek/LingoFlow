@@ -1,19 +1,19 @@
 # Architecture boundary audit (task 002 PASS criteria: "dependency direction is
-# clean", "UI does not own protocol code", "audio boundary is clean").
+# clean", "UI does not own protocol code", "audio boundary is clean"; extended in
+# task 004 for the JUCE platform adapters).
 #
 # Invoked by CTest as:
 #   cmake -DAUDIT_SRC_DIR=<repo>/src -P tests/ArchitectureBoundaries.cmake
 #
 # Only #include directives are inspected (comments may mention anything).
 #   1. A module may include only the modules listed in AUDIT_ALLOWED_<module>.
-#   2. JUCE headers are allowed only under src/App - the UI layer.
+#   2. JUCE headers are allowed only in App (the UI) and Platform (the adapters).
 #   3. Protocol/transport headers (openai, websocket, json, asio, curl) are not
-#      allowed anywhere under src at this stage. Task 004 introduces the ASIO
-#      boundary and task 009 the OpenAI backend; when that happens a dedicated
-#      module is added to the tables below instead of relaxing the rule.
+#      allowed outside the module registered for them. Config owns nlohmann/json.hpp;
+#      task 009 will register the OpenAI backend module the same way.
 #
-# Every failure line starts with a stable AUDIT_* code so the self-test can assert
-# on the reason without depending on prose or CMake's message wrapping.
+# Every failure line starts with a stable AUDIT_* code so the self-test can assert on
+# the reason without depending on prose or CMake's message wrapping.
 
 if(NOT DEFINED AUDIT_SRC_DIR)
     message(FATAL_ERROR "AUDIT_SRC_DIR is not set")
@@ -23,7 +23,7 @@ if(NOT IS_DIRECTORY "${AUDIT_SRC_DIR}")
     message(FATAL_ERROR "AUDIT_SRC_DIR does not exist: ${AUDIT_SRC_DIR}")
 endif()
 
-set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI App)
+set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI Platform App)
 
 set(AUDIT_ALLOWED_Utils       "Utils")
 set(AUDIT_ALLOWED_Config      "Config;Utils")
@@ -32,12 +32,14 @@ set(AUDIT_ALLOWED_Diagnostics "Diagnostics;Utils")
 set(AUDIT_ALLOWED_Audio       "Audio;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Translation "Translation;Utils;Diagnostics")
 set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics")
-set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Utils")
+set(AUDIT_ALLOWED_Platform    "Platform;Audio;Utils;Diagnostics")
+set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Platform;Utils")
 
-# Protocol/transport headers are forbidden under src/ except in the module that
-# owns them. Config owns JSON text for config.json (nlohmann/json.hpp, used in a
-# .cpp only). Task 009 will add the OpenAI backend module with its own exception;
-# until then nothing else may reference a wire protocol.
+# The UI is src/App; the JUCE-backed device adapters are src/Platform. Only those two
+# may include JUCE, so Audio/Translation/NDI/Config/Diagnostics/Utils stay portable.
+set(audit_juce_modules "App;Platform")
+
+# Module -> external protocol/transport includes it is allowed to use.
 set(AUDIT_ALLOWED_PROTOCOL_Config "nlohmann/json.hpp")
 
 set(audit_juce_pattern "^juce|juceheader")
@@ -94,37 +96,17 @@ foreach(source IN LISTS audit_sources)
 
         string(TOLOWER "${target}" target_lower)
 
-        # 1. protocol/transport leakage
-        if(target_lower MATCHES "${audit_protocol_pattern}")
-            set(allowed_protocol "${AUDIT_ALLOWED_PROTOCOL_${module}}")
-            list(FIND allowed_protocol "${target_lower}" protocol_index)
-
-            if(protocol_index EQUAL -1)
-                list(APPEND audit_failures
-                    "AUDIT_PROTOCOL_INCLUDE: ${source} includes <${target}>; protocol/transport headers are not allowed in module '${module}/'")
+        # 1. a header of this project starts with a known module name, matched
+        #    case-sensitively against the module list. Everything else is external.
+        set(included_module "")
+        if(target MATCHES "^([A-Za-z][A-Za-z0-9_]*)/.+$")
+            list(FIND audit_known_modules "${CMAKE_MATCH_1}" candidate_index)
+            if(NOT candidate_index EQUAL -1)
+                set(included_module "${CMAKE_MATCH_1}")
             endif()
-            continue()
         endif()
 
-        # 2. JUCE belongs to the UI layer only
-        if(target_lower MATCHES "${audit_juce_pattern}")
-            if(NOT module STREQUAL "App")
-                list(APPEND audit_failures "AUDIT_JUCE_OUTSIDE_APP: ${source} includes <${target}>")
-            endif()
-            continue()
-        endif()
-
-        # 3. project headers must respect the module direction
-        if(target MATCHES "^([A-Za-z][A-Za-z0-9_]*)/(.+)$")
-            set(included_module "${CMAKE_MATCH_1}")
-
-            list(FIND audit_known_modules "${included_module}" included_index)
-
-            if(included_index EQUAL -1)
-                list(APPEND audit_failures "AUDIT_UNKNOWN_MODULE_ROOT: ${source} includes <${target}>")
-                continue()
-            endif()
-
+        if(NOT included_module STREQUAL "")
             if(NOT EXISTS "${AUDIT_SRC_DIR}/${target}")
                 list(APPEND audit_failures "AUDIT_UNRESOLVED_INCLUDE: ${source} includes '${target}' which does not resolve")
                 continue()
@@ -136,6 +118,26 @@ foreach(source IN LISTS audit_sources)
             if(allowed_index EQUAL -1)
                 list(APPEND audit_failures
                     "AUDIT_INCLUDE_DIRECTION: ${source} includes '${included_module}/' from '${module}/' (allowed: ${allowed_targets})")
+            endif()
+            continue()
+        endif()
+
+        # 2. JUCE belongs to the UI (App) and the platform adapters (Platform) only
+        if(target_lower MATCHES "${audit_juce_pattern}")
+            list(FIND audit_juce_modules "${module}" juce_index)
+            if(juce_index EQUAL -1)
+                list(APPEND audit_failures "AUDIT_JUCE_OUTSIDE_UI: ${source} includes <${target}>")
+            endif()
+            continue()
+        endif()
+
+        # 3. protocol/transport headers outside their owning module
+        if(target_lower MATCHES "${audit_protocol_pattern}")
+            set(allowed_protocol "${AUDIT_ALLOWED_PROTOCOL_${module}}")
+            list(FIND allowed_protocol "${target_lower}" protocol_index)
+            if(protocol_index EQUAL -1)
+                list(APPEND audit_failures
+                    "AUDIT_PROTOCOL_INCLUDE: ${source} includes <${target}>; not allowed in module '${module}/'")
             endif()
             continue()
         endif()

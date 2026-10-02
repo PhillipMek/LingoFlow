@@ -38,7 +38,7 @@ public:
     std::string_view name() const noexcept override { return "Failing"; }
     BackendState state() const noexcept override { return state_; }
 
-    bool open(audio::IAudioProcessor&, int, int, std::string& error) override
+    bool open(audio::IAudioProcessor&, const audio::DeviceRequest&, std::string& error) override
     {
         state_ = BackendState::opened;
         error.clear();
@@ -204,6 +204,33 @@ TEST_CASE("ApplicationController: NDI failure does not stop audio", "[app][fault
     CHECK(controller.diagnostics().snapshot().ndiErrors == 0);   // start failure, not a publish error
     CHECK(controller.diagnostics().snapshot().lastErrorSubsystem == "ndi");
 
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: two different ASIO devices in settings are refused", "[app][audio][spec]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+
+    // SPEC "ASIO Device Selection": one ASIO device carries both directions, and a
+    // configured device must never be silently replaced.
+    std::string error;
+    auto cfg = controller.config().current();
+    cfg.audio.inputDeviceId = "Waves SoundGrid ASIO";
+    cfg.audio.outputDeviceId = "Some Other Device";
+    REQUIRE(controller.config().update(std::move(cfg), error));
+
+    CHECK_FALSE(controller.start());
+    CHECK(controller.state() == ApplicationState::faulted);
+    CHECK(controller.status().detail.find("single device for input and output") != std::string::npos);
+
+    controller.stop();
+
+    // Naming the same device on both sides is fine.
+    cfg = controller.config().current();
+    cfg.audio.outputDeviceId = "Waves SoundGrid ASIO";
+    REQUIRE(controller.config().update(std::move(cfg), error));
+    CHECK(controller.start());
     controller.stop();
 }
 

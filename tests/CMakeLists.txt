@@ -32,6 +32,7 @@ add_executable(liveai_tests
     unit/TestSecretStore.cpp
     unit/TestDiagnosticsManager.cpp
     unit/TestAudioEngine.cpp
+    unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp
     unit/TestApplicationController.cpp)
 
@@ -67,5 +68,22 @@ add_test(NAME architecture_boundary_audit_selftest
 
 set_property(TEST architecture_boundary_audit architecture_boundary_audit_selftest
              PROPERTY LABELS architecture)
+
+# --- ASIO discovery (task 004) -------------------------------------------------
+# The probe tool exercises the real JUCE ASIO path. --verify compares the devices JUCE
+# enumerates with the HKLM\SOFTWARE\ASIO registrations, without loading any driver, so
+# it is safe in an automated run. Opening a device is NOT part of it: on a machine with
+# the SoundGrid driver but no server that needs a human (docs/device-defaults.md).
+add_test(NAME asio_discovery_verify
+         COMMAND $<TARGET_FILE:liveai_asio_probe> --verify)
+
+set_property(TEST asio_discovery_verify PROPERTY LABELS device)
+set_property(TEST asio_discovery_verify PROPERTY TIMEOUT 120)
+
+add_test(NAME asio_discovery_list
+         COMMAND $<TARGET_FILE:liveai_asio_probe> --list)
+
+set_property(TEST asio_discovery_list PROPERTY LABELS device)
+set_property(TEST asio_discovery_list PROPERTY TIMEOUT 120)
 
 set_target_properties(liveai_tests PROPERTIES FOLDER "Tests")

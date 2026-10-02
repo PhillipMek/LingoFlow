@@ -11,37 +11,49 @@ NullAudioBackend::NullAudioBackend(DeviceCapabilities capabilities)
 {
 }
 
-bool NullAudioBackend::open(IAudioProcessor& processor, int sampleRate, int bufferFrames, std::string& error)
+bool NullAudioBackend::open(IAudioProcessor& processor, const DeviceRequest& request, std::string& error)
 {
+    error.clear();
+
     if (state_ != BackendState::closed)
     {
         error = "null backend is already open";
         return false;
     }
 
-    if (sampleRate <= 0 || bufferFrames <= 0)
+    if (request.sampleRate <= 0 || request.bufferFrames <= 0)
     {
         error = "null backend requires a positive sample rate and buffer size";
         return false;
     }
 
+    if (request.inputChannel < 1 || request.outputChannel < 1)
+    {
+        error = "null backend requires one-based, positive channel indices";
+        return false;
+    }
+
     processor_ = &processor;
-    capabilities_.sampleRate = sampleRate;
-    capabilities_.preferredBufferFrames = bufferFrames;
-    input_.assign(static_cast<std::size_t>(bufferFrames) * std::max(1, capabilities_.inputChannels), 0.0f);
-    output_.assign(static_cast<std::size_t>(bufferFrames) * std::max(1, capabilities_.outputChannels), 0.0f);
+    bufferFrames_ = request.bufferFrames;
+    capabilities_.sampleRate = request.sampleRate;
+    capabilities_.preferredBufferFrames = request.bufferFrames;
+    capabilities_.minBufferFrames = request.bufferFrames;
+    capabilities_.maxBufferFrames = request.bufferFrames;
+
+    input_.assign(static_cast<std::size_t>(bufferFrames_) * static_cast<std::size_t>(std::max(1, capabilities_.inputChannels)), 0.0f);
+    output_.assign(static_cast<std::size_t>(bufferFrames_) * static_cast<std::size_t>(std::max(1, capabilities_.outputChannels)), 0.0f);
 
     inputPointers_.assign(static_cast<std::size_t>(std::max(1, capabilities_.inputChannels)), nullptr);
     outputPointers_.assign(static_cast<std::size_t>(std::max(1, capabilities_.outputChannels)), nullptr);
 
     for (int channel = 0; channel < capabilities_.inputChannels; ++channel)
-        inputPointers_[static_cast<std::size_t>(channel)] = input_.data() + static_cast<std::size_t>(channel) * bufferFrames;
+        inputPointers_[static_cast<std::size_t>(channel)] = input_.data() + static_cast<std::size_t>(channel) * bufferFrames_;
 
     for (int channel = 0; channel < capabilities_.outputChannels; ++channel)
-        outputPointers_[static_cast<std::size_t>(channel)] = output_.data() + static_cast<std::size_t>(channel) * bufferFrames;
+        outputPointers_[static_cast<std::size_t>(channel)] = output_.data() + static_cast<std::size_t>(channel) * bufferFrames_;
 
+    ++openCount_;
     state_ = BackendState::opened;
-    error.clear();
     return true;
 }
 

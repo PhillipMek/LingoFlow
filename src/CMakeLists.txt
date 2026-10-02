@@ -33,6 +33,8 @@ add_library(liveai_core STATIC
     Audio/IAudioBackend.h
     Audio/AudioEngine.cpp
     Audio/AudioEngine.h
+    Audio/Asio/AsioDeviceInfo.cpp
+    Audio/Asio/AsioDeviceInfo.h
     Audio/Null/NullAudioBackend.cpp
     Audio/Null/NullAudioBackend.h
 
@@ -103,3 +105,39 @@ endif()
 
 set_target_properties(LiveAIInterpreter PROPERTIES FOLDER "App")
 set_target_properties(liveai_core PROPERTIES FOLDER "Core")
+
+# ---------------------------------------------------------------------------
+# liveai_asio_probe - ASIO discovery/lifecycle verification tool (task 004).
+#
+# This is the only JUCE-dependent target besides the operator app, and the only
+# place that links juce_audio_devices. JUCE ASIO support is switched on here with
+# JUCE_ASIO=1; JUCE 9 carries the ASIO interface headers itself, and
+# third_party/asiosdk holds the full SDK for driver-side/reference work.
+# ---------------------------------------------------------------------------
+add_executable(liveai_asio_probe
+    Platform/Asio/AsioDiscovery.cpp
+    Platform/Asio/JuceAsioBackend.cpp
+    Platform/Asio/AsioProbeMain.cpp)
+
+# JUCE_ASIO=1 is what switches the JUCE ASIO backend on. JUCE 9 carries the ASIO
+# interface headers itself (modules/juce_audio_devices/native/asio), the vendored
+# third_party/asiosdk is for driver-side and reference host work.
+target_compile_definitions(liveai_asio_probe
+    PRIVATE
+        JUCE_ASIO=1
+        JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(liveai_asio_probe
+    PRIVATE
+        liveai::core
+        juce::juce_audio_devices
+        juce::juce_events
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+if(MSVC)
+    target_compile_options(liveai_asio_probe PRIVATE /W4 /utf-8 /MP8)
+endif()
+
+set_target_properties(liveai_asio_probe PROPERTIES FOLDER "Tools")
