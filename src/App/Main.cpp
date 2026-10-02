@@ -1,19 +1,18 @@
 // Live AI Interpreter - operator application.
 //
-// Bootstrap stage: JUCE shell, lifecycle and logging only. No audio backend is
-// opened and no network access happens here (tasks 004+/009+ add those through
-// IAudioBackend / ITranslationBackend).
+// The UI talks to exactly one object (ApplicationController) and reads exactly
+// one type (AppStatus). It has no knowledge of audio devices, wire protocols or
+// subtitle transports (AGENTS.md 7).
 //
 // Command line:
-//   --smoke   start, log, stop, quit without creating any window.
-//             Used by CI and by the bootstrap verification; it must never be
-//             used as a substitute for the operator-visible checks.
+//   --smoke   start the subsystems, log the resulting status, stop, quit without
+//             creating a window. Used by the bootstrap verification and by CI; it
+//             is not a substitute for an operator-visible check.
 
 #include <JuceHeader.h>
 
 #include <format>
 #include <string>
-#include <string_view>
 
 #include "App/ApplicationController.h"
 #include "Utils/Log.h"
@@ -29,11 +28,6 @@ juce::File logDirectory()
         .getChildFile("logs");
 }
 
-juce::String toJuce(std::string_view text)
-{
-    return juce::String(std::string(text));
-}
-
 liveai::LogConfig makeLogConfig(bool writeConsole)
 {
     liveai::LogConfig cfg;
@@ -43,29 +37,40 @@ liveai::LogConfig makeLogConfig(bool writeConsole)
     return cfg;
 }
 
+/// Header line plus the controller-formatted status. Main.cpp uses no subsystem
+/// types at all - only AppStatus and describeStatus().
+juce::String statusText(const liveai::AppStatus& status)
+{
+    return juce::String(std::format("{} {}\n{}",
+                                    JUCE_APPLICATION_NAME_STRING,
+                                    JUCE_APPLICATION_VERSION_STRING,
+                                    liveai::describeStatus(status)));
+}
+
 //==============================================================================
-class MainComponent final : public juce::Component
+class StatusComponent final : public juce::Component, public juce::Timer
 {
 public:
-    explicit MainComponent(const liveai::ApplicationController& controller)
+    explicit StatusComponent(const liveai::ApplicationController& controller) : controller_(controller)
     {
-        status_.setText("Live AI Interpreter " + juce::String(JUCE_APPLICATION_VERSION_STRING)
-                            + "\nApplication state: " + toJuce(liveai::nameOf(controller.state())),
-                        juce::NotificationType::dontSendNotification);
-        status_.setJustificationType(juce::Justification::centredLeft);
-        status_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
-        addAndMakeVisible(status_);
+        label_.setJustificationType(juce::Justification::centredLeft);
+        label_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
+        addAndMakeVisible(label_);
+        refresh();
+        startTimer(500);
     }
 
-    void resized() override
-    {
-        status_.setBounds(getLocalBounds().reduced(18));
-    }
+    void timerCallback() override { refresh(); }
+
+    void resized() override { label_.setBounds(getLocalBounds().reduced(18)); }
 
 private:
-    juce::Label status_;
+    void refresh() { label_.setText(statusText(controller_.status()), juce::NotificationType::dontSendNotification); }
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainComponent)
+    const liveai::ApplicationController& controller_;
+    juce::Label label_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StatusComponent)
 };
 
 class MainWindow final : public juce::DocumentWindow
@@ -77,9 +82,9 @@ public:
                                juce::DocumentWindow::closeButton)
     {
         setUsingNativeTitleBar(true);
-        setContentOwned(new MainComponent(controller), true);
+        setContentOwned(new StatusComponent(controller), true);
         setResizable(true, true);
-        setSize(460, 220);
+        setSize(520, 260);
         centreWithSize(getWidth(), getHeight());
         setVisible(true);
     }
@@ -119,15 +124,16 @@ public:
 
         if (!controller_.start())
         {
-            liveai::log::error(kLogComponent, "application failed to start");
-            quit();
+            liveai::log::error(kLogComponent, "application failed to start: " + controller_.status().detail);
+            juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
             return;
         }
 
         if (smoke)
         {
+            liveai::log::info(kLogComponent, "smoke mode status: " + statusText(controller_.status()).toStdString());
             liveai::log::info(kLogComponent, "smoke mode: shutting down without UI");
-            juce::MessageManager::callAsync([this] { quit(); });
+            juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
             return;
         }
 

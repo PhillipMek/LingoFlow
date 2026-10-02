@@ -7,9 +7,11 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **bootstrap (task 001)**. The repository currently contains a JUCE/CMake
-application shell, a portable core library (`liveai_core`) and a unit test
-target. No audio device is opened and no network request is sent yet.
+Status: **tasks 000-002 complete**. The repository contains a JUCE/CMake
+application, a portable core (`liveai_core`) with the module interfaces and Null
+implementations of the audio, translation and NDI boundaries, and unit tests.
+**No real audio device is opened and no network request is sent yet** - the ASIO
+backend is task 004/005, the OpenAI backend is task 009.
 
 ## Requirements
 
@@ -104,15 +106,34 @@ arguments: ASCII → exit 0, non-ASCII → exit 1.
 ```text
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      liveai_core + LiveAIInterpreter targets
-src/App/                application controller, JUCE entry point
-src/Utils/              logging skeleton (no JUCE, no allocation-free promises)
-tests/                  Catch2 unit tests
+src/App/                ApplicationController (composition root), JUCE entry point
+src/Audio/              AudioEngine shell, IAudioBackend, Null/ device
+src/Translation/        ITranslationBackend contract, Null/ backend
+src/NDI/                INdiOutput contract, Null/ output
+src/Config/             AppConfig + ConfigManager (validation only so far)
+src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
+src/Utils/              logging skeleton
+tests/                  Catch2 unit tests + architecture boundary audit
 docs/                   specification support documents, environment report
 tasks/                  agent task files
 ```
 
 Real-time rules, thread model and architectural boundaries are defined in
 `AGENTS.md`, `docs/architecture.md` and `docs/threading.md`.
+
+### Architecture boundary audit
+
+Two CTest entries with label `architecture` guard the dependency direction
+(`docs/architecture.md`):
+
+* `architecture_boundary_audit` - scans every `#include` under `src/` and rejects
+  a module including a module it must not know, JUCE outside `src/App`, and any
+  protocol/transport header (`openai`, `websocket`, `json`, `asio`, `curl`).
+* `architecture_boundary_audit_selftest` - copies `src/`, injects 8 violations and
+  requires the audit to reject each with the expected `AUDIT_*` code, so a broken
+  gate fails instead of silently passing.
+
+Run them alone: `ctest --test-dir D:\LiveAI\build-debug -L architecture --output-on-failure`.
 
 ## Secrets
 

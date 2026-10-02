@@ -1,13 +1,43 @@
 # ---------------------------------------------------------------------------
-# liveai_core: portable core (no JUCE, no audio, no network)
+# liveai_core: portable core (no JUCE, no network protocol, no UI)
 #
-# This is the part that must stay platform-portable (SPEC: future macOS/Linux
-# must not require rewriting the translation core) and unit-testable without a
-# GUI or audio toolchain.
+# Dependency direction enforced here (AGENTS.md 7):
+#   Utils, Config, Diagnostics  <- leaves
+#   Audio                       <- Audio + Diagnostics + Utils
+#   Translation                 <- Translation + Utils
+#   NDI                         <- NDI + Utils
+#   App                         <- everything above (composition root)
+# tests/ArchitectureBoundaries.cmake fails the test run if an include leaks
+# across those boundaries.
 # ---------------------------------------------------------------------------
 add_library(liveai_core STATIC
     Utils/Log.cpp
     Utils/Log.h
+
+    Config/ConfigManager.cpp
+    Config/ConfigManager.h
+
+    Diagnostics/DiagnosticsManager.cpp
+    Diagnostics/DiagnosticsManager.h
+
+    Audio/AudioTypes.cpp
+    Audio/AudioTypes.h
+    Audio/IAudioBackend.h
+    Audio/AudioEngine.cpp
+    Audio/AudioEngine.h
+    Audio/Null/NullAudioBackend.cpp
+    Audio/Null/NullAudioBackend.h
+
+    Translation/ITranslationBackend.cpp
+    Translation/ITranslationBackend.h
+    Translation/Null/NullTranslationBackend.cpp
+    Translation/Null/NullTranslationBackend.h
+
+    NDI/INdiOutput.cpp
+    NDI/INdiOutput.h
+    NDI/Null/NullNdiOutput.cpp
+    NDI/Null/NullNdiOutput.h
+
     App/ApplicationController.cpp
     App/ApplicationController.h)
 
