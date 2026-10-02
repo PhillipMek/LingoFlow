@@ -28,7 +28,7 @@ Verified on this machine (`docs/environment-report.md` has the full evidence):
 | JUCE | 9.0.3 | local source tree, path passed with `-DLIVEAI_JUCE_PATH=...` |
 | ASIO SDK | 2.3.4 | local source tree (used from task 004 on) |
 | Waves SoundGrid ASIO driver | 16.5.197.301 | installed product |
-| NDI | 6 Tools 6.3.2.0 runtime | installed product (SDK headers still required for task 016) |
+| NDI | 6.3.2.0 — runtime **and** SDK (`C:\Program Files\NDI\NDI 6 SDK`, `NDI_SDK_DIR` set) | installed product; used by task 016 |
 | Catch2 | v3.16.0 | CMake `FetchContent` (needs network on first configure) |
 
 ## Configure and build
