@@ -217,11 +217,11 @@ Two independent gates, both in CTest (label `realtime`):
    and `GainStage::dbToLinear`, and the JUCE bridge - and rejects a list of forbidden
    constructs: allocation (`new`, `make_unique`, `malloc`, container growth), locks and
    waits, sleeping, filesystem/registry, transport (`json`, `websocket`, sockets), UI,
-   exceptions. `...SelfTest.cmake` injects one violation of each class into a copy of `src/`
-   (twelve injections, two of them inside the gain stage, because a new audited function is
-   only really guarded once something proves the gate reads its body) and asserts the gate
-   rejects each one, accepts the clean tree, and reports `RT_AUDIT_FUNCTION_NOT_FOUND`
-   rather than silently shrinking when a realtime function disappears.
+   exceptions. `...SelfTest.cmake` runs twelve checks: the clean tree must be accepted, ten
+   injected violations (one per forbidden class, two of them inside the gain stage, because a
+   newly audited function is only really guarded once something proves the gate reads its
+   body) must each be rejected, and a deleted realtime function must fail the gate instead of
+   shrinking it silently.
 2. `tests/realtime/TestRealtimeAllocations.cpp` replaces global `operator new` in its
    own test binary and counts heap allocations during 5000 callbacks with the loopback
    worker running: the count must be 0. A third case there does the same while the gain and

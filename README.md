@@ -351,9 +351,10 @@ Two CTest entries with the label `realtime` guard AGENTS.md 5 directly
   callback (12 of them: the engine, both buffers, the meter, both gain entry points and the
   JUCE bridge) and rejects allocations, locks, sleeping, filesystem, transport, UI and
   exception constructs in it;
-* `realtime_safety_audit_selftest` - injects one violation of each class into a copy of
-  `src` (12 cases, including two inside the gain stage) and requires the gate to reject it,
-  so a gate that stopped working fails the run instead of passing;
+* `realtime_safety_audit_selftest` - runs twelve checks: the clean tree must be accepted,
+  ten injected violations (one per forbidden class, two of them inside the gain stage) must
+  each be rejected, and a deleted realtime function must fail the run instead of shrinking
+  the gate;
 * `lingoflow_realtime_tests` (a separate binary that replaces global `operator new`)
   measures that the callback performs zero heap allocations over 5000 blocks, and that
   changing the gain while the callback runs costs zero too.
