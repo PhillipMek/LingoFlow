@@ -1,25 +1,33 @@
-build/
-build-*/
-out/
+# Build trees. Repo-root anchored on purpose: an unanchored "build/" pattern also
+# matches third_party/JUCE/extras/Build/ and would silently exclude vendored JUCE
+# CMake support files (verified: it did).
+/build/
+/build-*/
+/out/
 Testing/
 CMakeLists.txt.user
 
+# IDE / tooling
 .vs/
 .vscode/
 .idea/
 .cache/
 *.user
 *.suo
+.opencode/
 
+# Compiler and linker artifacts (any depth)
 *.obj
 *.pdb
 *.ilk
 *.exp
 *.iobj
 *.ipdb
+*.suo
 *.sbr
 compile_commands.json
 
+# Secrets and local state (AGENTS.md 10: never commit a credential)
 .env
 .env.*
 !.env.example
@@ -29,6 +37,9 @@ config.local.json
 secrets/
 credentials/
 
-# JUCE / CMake generated trees inside the source dir
+# Generated JUCE output inside a source tree, if anyone builds in-tree
 JUCE-build/
 juce-source/
+
+# Never ignore vendored dependencies
+!/third_party/

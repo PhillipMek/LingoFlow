@@ -23,24 +23,21 @@ include(FetchContent)
 # ---------------------------------------------------------------------------
 # JUCE
 #
-# JUCE is used from a local source tree: it is not vendored into this repo and
-# never downloaded automatically. Point LIVEAI_JUCE_PATH at the JUCE checkout.
-# If it is not set, we look for the sibling directory documented in
-# docs/environment-report.md.
+# JUCE 9.0.3 is vendored in third_party/JUCE (see third_party/README.md and
+# docs/licensing.md - AGPLv3 chosen). LIVEAI_JUCE_PATH can point at another local
+# checkout, e.g. for experiments with a different JUCE version; nothing is ever
+# downloaded automatically.
 # ---------------------------------------------------------------------------
 set(LIVEAI_JUCE_PATH "" CACHE PATH "Path to a local JUCE source tree (folder containing CMakeLists.txt)")
 
 if(LIVEAI_JUCE_PATH STREQUAL "")
-    set(_liveai_juce_guess "${CMAKE_CURRENT_LIST_DIR}/../juce-9.0.3-windows/JUCE")
-    if(EXISTS "${_liveai_juce_guess}/CMakeLists.txt")
-        set(LIVEAI_JUCE_PATH "${_liveai_juce_guess}")
-    endif()
+    set(LIVEAI_JUCE_PATH "${CMAKE_CURRENT_LIST_DIR}/third_party/JUCE")
 endif()
 
 if(NOT EXISTS "${LIVEAI_JUCE_PATH}/CMakeLists.txt")
     message(FATAL_ERROR
-        "JUCE not found. Configure with -DLIVEAI_JUCE_PATH=<path to JUCE>, e.g. "
-        "-DLIVEAI_JUCE_PATH=C:/src/JUCE (folder must contain CMakeLists.txt).")
+        "JUCE not found at ${LIVEAI_JUCE_PATH}. Expected the vendored tree in third_party/JUCE, "
+        "or pass -DLIVEAI_JUCE_PATH=<path to JUCE> (folder must contain CMakeLists.txt).")
 endif()
 
 file(READ "${LIVEAI_JUCE_PATH}/CMakeLists.txt" _liveai_juce_cmakelists LIMIT 4096)

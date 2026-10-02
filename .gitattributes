@@ -1,0 +1,25 @@
+# Line-ending and binary policy.
+#
+# Our own files keep the repository default (core.autocrlf behaviour as configured
+# on each machine). The rules below exist for two reasons: vendored third-party
+# sources must stay byte-for-byte identical to upstream, and binary artifacts must
+# never be treated as text.
+
+* text=auto
+
+# Vendored trees: never rewrite line endings inside third_party/
+# (see third_party/README.md rule 1: we do not edit third-party sources).
+/third_party/** -text
+
+# Binaries
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.lib binary
+*.dll binary
+*.exe binary
+*.pdb binary
+*.iobj binary
+*.ipdb binary
+*.exp binary
