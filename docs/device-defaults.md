@@ -115,11 +115,61 @@ What the measurement does **not** prove: that real console audio reaches channel
 that the translated signal leaves on the chosen output. Without a server the driver
 runs on silence, so all of it stays a human check.
 
+## The device is exclusive: capability answers depend on who else is running
+
+Measured twice, with different answers, and the difference was not in our code:
+
+| When | Other ASIO hosts running | What the driver reported to the same code |
+|---|---|---|
+| 2026-10-01, 18:06-20:34 | none | 32 in / 32 out channels, rates `[44100, 48000, 88200, 96000]`, buffer sizes `[256]`, latency 384/256 samples, `open()` and 10+4 lifecycle cycles OK |
+| 2026-10-02, 09:46-09:50 | `SoundGrid QRec`, `SoundGrid Driver Control Panel`, `WavesLocalServer`, `WavesPluginServer` (started 21:41 the previous evening) | **no** sample rates, **no** buffer sizes, **0 channels**; `open()` refused |
+
+So the numbers in the table above are only reproducible while nothing else holds the
+device. That is a property of ASIO, not of this application, and it has two consequences
+that are now in the code:
+
+* nothing in `src/` uses 32, 256 or 384 as a constant. Every capability comes from a live
+  driver query at start-up, so when the answer changes the application's answer changes
+  with it;
+* the refusal says what the operator can act on. `asio::validateChannelSelection`
+  distinguishes "this index is out of range" from "the driver reported no channels at
+  all", and the latter names the actual cause: an ASIO device is exclusive - close the
+  Control Panel / DAW, or check that a server is configured. Pinned by the test
+  "AsioDeviceInfo: a driver with no channels at all says so differently".
+
+## What task 005 (realtime pipeline) proved, and what it still needs
+
+Proven on this machine, without a device:
+
+* the pipeline is real, not a placeholder: input -> ring -> loopback worker -> jitter ->
+  output, with a strictly increasing counter ramp verified to arrive at the output in
+  order (`AudioLoopback: a ramp written at the input comes back at the output`);
+* the realtime rule is enforced twice over: a lexical gate over the bodies of all ten
+  callback-reachable functions (`realtime_safety_audit`, with its own self-test that
+  injects one violation of each forbidden class), and a measured allocation count of 0
+  over 5000 callbacks with the worker thread running (`lingoflow_realtime_tests`);
+* overflow and underflow are accounted, not hidden: `captured == forwarded + dropped`
+  is asserted after 5000 blocks, and the counters survive `deactivate()` because they
+  belong to the engine, not to the buffers;
+* silence is the default output: nothing can reach the ASIO output except what was
+  written into the jitter buffer, so an unprimed or drained buffer plays silence and
+  counts it - never the microphone;
+* selecting a device in settings really opens that device in the application: with
+  `audio.inputDeviceId = "Waves SoundGrid ASIO"` in the live `config.json`, the app
+  logged `opening the audio device selected in settings` and then the driver's own
+  refusal, and exited with code 2 (`--smoke` returns 0 only when the start succeeded).
+
+Still a human check, and this is the part no bench here can do: `--loopback` on a machine
+where a real console feed reaches the selected input channel. Expected observation there:
+`in=` and `out=` levels move together, `out=` lagging by roughly `--jitter` ms,
+`underruns` staying at 0 while the source is continuous, and the patched output audible in
+the monitor path.
+
 ## Remaining human checkpoints (hardware)
 
 | Task | What a human must confirm, on a machine with a SoundGrid server |
 |---|---|
-| 005 | real console signal in the selected input channel; no underruns at the chosen buffer under load (the driver reports no xrun counter, so ours must be the source of truth) |
+| 005 | `lingoflow_asio_probe --loopback "<device>"`: real console audio in the selected input channel arrives at the selected output, `in=`/`out=` levels move together with roughly `--jitter` ms of delay, and the engine's underrun counters stay at 0 under load. The driver reports no xrun counter, so ours is the only source of truth |
 | 006 | input gain, meters and clipping react to a real signal |
 | 012/018 | translated audio leaves on the selected output; end-to-end latency judged by ear against the 0.7-1.5 s target |
 | 016 | subtitles visible on a real NDI receiver (Studio Monitor is installed here, so this one is closable locally) |

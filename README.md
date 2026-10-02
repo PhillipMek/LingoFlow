@@ -7,14 +7,17 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-004 complete**. The repository contains a JUCE/CMake
-application, a portable core (`lingoflow_core`) with the module interfaces, Null
-implementations of the audio, translation and NDI boundaries, versioned
-configuration with safe persistence, ASIO device discovery and device lifecycle on
-top of JUCE, and unit tests.
+Status: **tasks 000-005 complete**. The repository contains a JUCE/CMake
+application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
+audio pipeline (lock-free ring buffer, output jitter buffer, level meters,
+underrun/overrun counters) with input->output loopback, Null implementations of the
+translation and NDI boundaries, versioned configuration with safe persistence, ASIO
+device discovery and device lifecycle on top of JUCE, and 112 tests.
 **No translated audio reaches a real device and no network request is sent yet** -
-feeding the device with translated audio is task 005, the OpenAI backend is task 009;
-the operator app still starts with the Null backend.
+the OpenAI backend is task 009 and translated audio reaches the output in task 012. The
+operator application does open the ASIO device named in settings, but until 012 the only
+thing that can leave on the output is loopback audio, and that has to be started
+explicitly.
 
 Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
 which makes this product AGPLv3 and puts NDI behind runtime loading
@@ -69,22 +72,27 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
+112 CTest entries: Catch2 unit/integration suites, the realtime allocation suite in its
+own binary, the architecture boundary audit plus its self-test, the realtime safety audit
+plus its self-test, and the two device entries that run the ASIO tool's driver-free modes.
+
 ```powershell
 cmd /c "call $vccmd && `"$cmake`" --test-dir $dbg --output-on-failure"
 cmd /c "call $vccmd && `"$cmake`" --test-dir $rel --output-on-failure"
 ```
 
 (`ctest.exe` sits next to the bundled `cmake.exe`; if it is on `PATH`, plain
-`ctest --test-dir D:\LingoFlow\build-debug --output-on-failure` works too.)
+`ctest --test-dir D:\LingoFlow\build-debug --output-on-failure` works too. Groups can be
+selected by label: `-L architecture`, `-L realtime`, `-L device`.)
 
 ## Run the application
 
-The executable name comes from `PRODUCT_NAME`, so it contains spaces:
+The executable is `LingoFlow.exe` (it is named by `PRODUCT_NAME`):
 
 ```powershell
 $exe = "$dbg\src\LingoFlow_artefacts\Debug\LingoFlow.exe"
 
-& $exe --smoke   # headless start/stop check: exit code 0, log file written
+& $exe --smoke   # headless start/stop check: exit 0 when the start succeeded, 2 when it did not
 & $exe           # operator window
 ```
 
@@ -116,12 +124,13 @@ cmake -S . -B D:/LingoFlow/build-debug   # documented convention: one tree per c
 cmake -S . -B build                      # also works: the source path is ASCII now
 ```
 
-Both forms are measured, not assumed. In-tree at `D:\work\LingoFlow` (2026-10-01):
-`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug` + `cmake --build build` + `ctest`
-→ **84/84 passed**, and the CMake log shows `juceaide` configuring, building, exporting and
-self-testing without complaint. Out-of-tree gives the same 84/84 in Debug and Release.
-Earlier, the in-tree form also passed on a clone at `D:\LiveAI\clone-test` (a pre-rename
-path) with 71/71.
+Both forms are measured, not assumed. Out-of-tree is the current evidence: after task 005
+the suite is **112 CTest entries**, and `D:\LingoFlow\build-debug` and
+`D:\LingoFlow\build-release` pass all 112 with zero compiler warnings. The in-tree form was
+measured at this path on 2026-10-01 (then 84/84): `cmake -S . -B build` +
+`cmake --build build` + `ctest`, with the CMake log showing `juceaide` configuring,
+building, exporting and self-testing normally; that test tree was deleted again. Earlier,
+the same in-tree form passed on a clone at `D:\LiveAI\clone-test` (a pre-rename path).
 
 So the constraint is the path, not the layout: the checkout can live anywhere with an
 ASCII path, and the vendored dependencies travel with it.
@@ -203,7 +212,7 @@ any of these defaults as measurements.
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
-src/Audio/              AudioEngine shell, IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
+src/Audio/              AudioEngine + pipeline (ring/jitter/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract, Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
@@ -211,7 +220,7 @@ src/Config/             AppConfig, ConfigSchema (validation + JSON text), Config
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
-tests/                  Catch2 unit tests + architecture boundary audit + self-test
+tests/                  Catch2 unit + pipeline tests, realtime allocation suite, architecture audit, realtime safety audit, self-tests
 docs/                   licensing, device defaults, architecture, environment report
 third_party/            vendored JUCE 9.0.3 and ASIO SDK 2.3.4 (see third_party/README.md)
 tasks/                  agent task files
@@ -265,11 +274,38 @@ Two CTest entries with the label `device` use the safe part of it automatically.
 | `--verify` | checks that enumeration matches `HKLM\SOFTWARE\ASIO` one-to-one | no |
 | `--probe "<device>" [--start]` | opens the device, reports channels/rates/buffers/latencies, optionally one start/stop | yes |
 | `--lifecycle "<device>" [--cycles N]` | N open/start/stop/close cycles through `AudioEngine` + `JuceAsioBackend`, asserting callbacks arrive and the backend ends `closed` | yes |
+| `--loopback "<device>" [--seconds N] [--input M] [--output K] [--jitter MS]` | runs the device through the real pipeline with input->output loopback and prints measured input/output levels once per second | yes |
 
-Exit codes: 0 ok, 1 verification failed, 2 the device refused to open, 3 usage error.
-`--verify` is the automated gate; `--probe`/`--lifecycle` against a live SoundGrid
-server stays a human check. What these commands measured on this machine:
+`--loopback` is how the task 005 hardware check is done on a rig: patch a source into
+`--input`, and the same audio must leave on `--output` roughly `--jitter` ms later, with
+`in=` and `out=` levels moving together. If both levels stay at digital silence the tool
+reports `LOOPBACK INCONCLUSIVE` and exits 1 - the pipeline ran, but there was no signal to
+loop, and it says so instead of calling that a pass. Measured on this PC (2026-10-02): the
+Waves driver refused with `input channels are not available: the driver reported none at
+all`, because `SoundGrid QRec` and the `SoundGrid Driver Control Panel` were running and an
+ASIO device is exclusive; `docs/device-defaults.md` records both observations.
+
+Exit codes: 0 ok, 1 verification failed / no callbacks / inconclusive silence, 2 the device
+refused to open, 3 usage error. `--verify` and `--list` are the automated part
+(CTest label `device`); `--probe`, `--lifecycle` and `--loopback` against a live SoundGrid
+system stay a human check. What these commands measured on this machine:
 `docs/device-defaults.md`.
+
+### Realtime safety gates
+
+Two CTest entries with the label `realtime` guard AGENTS.md 5 directly
+(`docs/architecture.md` explains the design):
+
+* `realtime_safety_audit` - extracts the body of every function reachable from the audio
+  callback and rejects allocations, locks, sleeping, filesystem, transport, UI and
+  exception constructs in it;
+* `realtime_safety_audit_selftest` - injects one violation of each class into a copy of
+  `src/` and requires the gate to reject it, so a gate that stopped working fails the run
+  instead of passing;
+* `lingoflow_realtime_tests` (a separate binary that replaces global `operator new`)
+  measures that the callback performs zero heap allocations over 5000 blocks.
+
+Run them alone: `ctest --test-dir D:\LingoFlow\build-debug -L realtime --output-on-failure`.
 
 ## Secrets
 

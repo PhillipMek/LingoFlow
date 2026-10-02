@@ -34,13 +34,21 @@ Utils          -> (nothing)                       logging, no JUCE
 Config         -> Utils                           settings: schema, validation, atomic file I/O
 Security       -> Utils                           credential store boundary, no config access
 Diagnostics    -> Utils                           atomic counters + snapshot
-Audio          -> Utils, Diagnostics              engine, IAudioBackend, ASIO model/policy, Null backend
+Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, meters, loopback,
+                                                  IAudioBackend, ASIO model/policy, Null backend
 Translation    -> Utils, Diagnostics              ITranslationBackend contract, Null backend
 NDI            -> Utils, Diagnostics              INdiOutput contract, Null output
 Platform       -> Audio, Utils, Diagnostics       JUCE adapters (ASIO device discovery/lifecycle)
 App            -> all of the above                ApplicationController (composition root)
-App/Main.cpp   -> App, Utils, JUCE                the only UI code
+App/Main.cpp   -> App, Platform, Utils, JUCE      UI + installation of the device backend factory
 ```
+
+The composition root is the only place that turns a device name from `config.json` into a
+backend: `ApplicationController` takes an `AudioBackendFactory` callback, and `Main.cpp`
+installs one that builds `platform::JuceAsioBackend`. That keeps the portable core free of
+JUCE while the product still opens the operator's chosen ASIO device, and it makes the
+"device selected but no backend available" case an explicit error instead of a silent fall
+back to the null device.
 
 `Platform` is the second and last place allowed to include JUCE. It exists so that
 device adapters can use JUCE without leaking it into the portable core: `Audio`
@@ -83,19 +91,93 @@ architecture is explicitly non-realtime:
 | Call | Thread | Realtime-safe contract |
 |---|---|---|
 | `IAudioProcessor::processAudio` | audio callback | `noexcept`, fixed work, relaxed atomics only |
+| `AudioEngine::processAudio` | audio callback | meters, `memcpy` into the input ring, `memcpy` out of the jitter buffer, relaxed atomic counters; never allocates or blocks |
+| `AudioRingBuffer::write / read / readOrSilence` | either side | lock-free SPSC: two atomic positions, `memcpy`, relaxed drop/underrun counters |
+| `AudioJitterBuffer::write / readOrSilence / setTargetFrames` | either side | same primitives plus an atomic pre-roll flag; overflow drops incoming frames, underflow plays silence |
+| `LevelMeter::measure` | audio callback | one pass over the block, one `sqrt`, atomic publish; non-finite samples counted as out-of-range |
 | `Platform::JuceAsioBackend::Callback::audioDeviceIOCallbackWithContext` | audio callback | forwards driver pointers into `processAudio`, views preallocated in `aboutToStart`, `audioDeviceError` sets a flag only |
+| `AudioLoopback::run` | worker | consumer/producer of the lock-free buffers; may sleep between polls; never called by the audio thread |
 | `IAudioProcessor::onAudioConfigurationChanged` | non-realtime | after `open()`, before first block |
+| `AudioEngine::activate / configure / deactivate` | control thread | the only place pipeline memory is allocated or released |
 | `ITranslationSink::on*` | network/worker | enqueue only, never play directly |
 | `INdiOutput::publish` | worker | drop on pressure, never block the producer |
 | `DiagnosticsManager::count*` | any, incl. audio | relaxed atomics |
 | `DiagnosticsManager::snapshot`, `note*` with strings | UI/worker | mutex-guarded, never from the audio thread |
 | `IAudioBackend::open/start/stop/close`, `AsioDiscovery::*` | control thread | may allocate and log; never called from the callback |
 
-`AudioEngine::processAudio` currently outputs silence on purpose: there is no
-translated audio source yet (task 012), and silence is the only correct outcome
-before it exists. The probe tool drives that same engine, so what it proves about a
-real device is callback delivery and clean shutdown - not signal content, which stays
-a human check (docs/device-defaults.md).
+## Realtime pipeline (task 005)
+
+The pipeline is the one from SPEC "Audio Pipeline", with the two translation stages
+still to be filled in:
+
+```text
+ASIO input -> AudioEngine::processAudio
+                  -> LevelMeter (input)
+                  -> AudioRingBuffer        (producer = audio thread)
+                        |
+                  [loopback worker now (AudioLoopback); OpenAI streaming worker in task 012]
+                        |
+                  AudioJitterBuffer         (consumer = audio thread)
+                  -> LevelMeter (output)
+                  -> ASIO output
+```
+
+Design decisions, and why:
+
+* **`AudioRingBuffer`** is single-producer/single-consumer with monotonic atomic
+  positions and a power-of-two capacity (mask instead of modulo). The audio thread is
+  always the producer on the input side and the consumer on the output side. Both
+  directions degrade the same way: overflow drops the newest frames and counts them,
+  underflow yields silence and counts the shortfall. Nothing in either path waits for
+  the other peer, which is what makes "the network must never be inside the callback"
+  a structural property rather than a convention.
+* **`AudioJitterBuffer`** is the ring plus an operator-configurable pre-roll
+  (`translation.jitterBufferMs`, SPEC range 20-500 ms, clamped to 500 by the engine).
+  Playback does not start until the pre-roll is buffered; a mid-stream drain counts one
+  underrun event and re-primes instead of streaming from an almost empty buffer, which
+  is what turns a single network hiccup into a burst of audible glitches.
+* **The output has exactly one source.** Only `write()` on the jitter buffer can put
+  audio on the wire, and that call belongs to the transport side (loopback today, task
+  012 later). Microphone audio therefore cannot reach the audience by a missing
+  underrun branch - the silence path is the default, not an extra case.
+* **`LevelMeter`** publishes peak and RMS of the last block plus cumulative clipping
+  and signalled-block counters. Task 006 acts on these numbers with gain; reading them
+  from the UI is safe at any time.
+* **Counters are engine-level, not buffer-level.** `deactivate()` releases the buffers,
+  so dropped/underrun/overrun totals live in `AudioEngine`'s own atomics and stay
+  readable after shutdown - that is where the operator's diagnostics (task 017) and the
+  long-run test (task 024) will read them.
+* **Loopback is never implicit.** `AudioEngine` outputs silence until something writes
+  to the jitter buffer, and the loopback worker has to be started on purpose (the probe
+  tool today; developer mode in task 019). Routing live microphone audio to the audience
+  is an operator action.
+
+### How the realtime rule is enforced
+
+Two independent gates, both in CTest (label `realtime`):
+
+1. `tests/RealtimeSafetyAudit.cmake` extracts the body of every function reachable from
+   the audio callback (engine, both buffers, meter, JUCE bridge) and rejects a list of
+   forbidden constructs: allocation (`new`, `make_unique`, `malloc`, container growth),
+   locks and waits, sleeping, filesystem/registry, transport (`json`, `websocket`,
+   sockets), UI, exceptions. `...SelfTest.cmake` injects one violation of each class
+   into a copy of `src/` and asserts the gate rejects it, and that a vanished function
+   fails the gate instead of shrinking it silently.
+2. `tests/realtime/TestRealtimeAllocations.cpp` replaces global `operator new` in its
+   own test binary and counts heap allocations during 5000 callbacks with the loopback
+   worker running: the count must be 0. It is a separate executable so the substitution
+   cannot influence any other suite.
+
+Both are behavioural *and* textual: the audit cannot see a violation hidden behind a
+macro, the allocation counter cannot see a lock. Together with the stress test in
+`tests/unit/TestAudioPipeline.cpp` (5000 blocks with a live consumer thread, frame
+accounting required to close) they cover the three failure modes that matter: allocating,
+blocking, and losing audio without counting it.
+
+`AudioEngine::processAudio` outputs silence while nothing feeds the jitter buffer, and
+that is still deliberate: there is no translated audio source before task 012. The probe
+tool adds `--loopback`, which turns the same pipeline into a measurable end-to-end path on
+a real device.
 
 ## Status path to the UI
 
