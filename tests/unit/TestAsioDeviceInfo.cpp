@@ -116,6 +116,35 @@ TEST_CASE("AsioDeviceInfo: capabilities of an unopened device cannot validate ch
     CHECK(error.find("never opened") != std::string::npos);
 }
 
+TEST_CASE("AsioDeviceInfo: a driver with no channels at all says so differently",
+          "[audio][asio][policy][honesty]")
+{
+    // Measured on this PC: while the SoundGrid Control Panel holds the device, the
+    // driver reports zero channels. That is not the same problem as a bad index, and
+    // the operator has to do something different about it.
+    DeviceCapabilitiesReport occupied;
+    occupied.name = "Waves SoundGrid ASIO";
+    occupied.opened = true;
+    occupied.inputChannels.clear();
+    occupied.outputChannels.clear();
+
+    std::string error;
+    CHECK_FALSE(asio::validateChannelSelection(occupied, 1, 1, error));
+    INFO(error);
+    CHECK(error.find("channels are not available") != std::string::npos);
+    CHECK(error.find("reported none at all") != std::string::npos);
+    CHECK(error.find("exclusive") != std::string::npos);
+    CHECK(error.find("Control Panel") != std::string::npos);
+
+    // The input half is named first, so the message is about what actually failed.
+    DeviceCapabilitiesReport noOutput = occupied;
+    noOutput.inputChannels = { "SoundGrid 1" };
+    error.clear();
+    CHECK_FALSE(asio::validateChannelSelection(noOutput, 1, 1, error));
+    INFO(error);
+    CHECK(error.find("output channels are not available") != std::string::npos);
+}
+
 TEST_CASE("AsioDeviceInfo: descriptions never invent numbers", "[audio][asio][policy][honesty]")
 {
     DeviceEntry entry;

@@ -57,7 +57,20 @@ void ApplicationController::setAudioBackend(std::unique_ptr<audio::IAudioBackend
         log::warning(kComponent, "audio backend replaced while not stopped - stopping first");
         stop();
     }
+
+    audioBackendOverridden_ = backend != nullptr;
     audioBackend_ = std::move(backend);
+}
+
+void ApplicationController::setAudioBackendFactory(AudioBackendFactory factory)
+{
+    if (state_ != ApplicationState::stopped)
+    {
+        log::warning(kComponent, "audio backend factory replaced while not stopped - stopping first");
+        stop();
+    }
+
+    audioBackendFactory_ = std::move(factory);
 }
 
 void ApplicationController::setTranslationBackend(std::unique_ptr<translation::ITranslationBackend> backend)
@@ -168,12 +181,56 @@ bool ApplicationController::startAudio(std::string& error)
         return false;
     }
 
-    // The device id is consumed by the ASIO backend, which task 005 wires in here.
+    // SPEC "ASIO Device Selection": a configured device is opened or the application
+    // reports that it is unavailable - it is never quietly swapped for another one.
+    const std::string deviceId = cfg.audio.inputDeviceId.empty() ? cfg.audio.outputDeviceId
+                                                                 : cfg.audio.inputDeviceId;
+
     audio::DeviceRequest request;
+    request.deviceId = deviceId;
     request.sampleRate = cfg.audio.sampleRate;
     request.bufferFrames = cfg.audio.bufferFrames;
     request.inputChannel = cfg.audio.inputChannel;
     request.outputChannel = cfg.audio.outputChannel;
+
+    // SPEC "Output Jitter Buffer": the operator's pre-roll, applied before the device
+    // starts so the buffers are allocated at the right size.
+    engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
+
+    if (!deviceId.empty())
+    {
+        if (audioBackendFactory_ != nullptr)
+        {
+            std::string factoryError;
+            auto built = audioBackendFactory_(request, factoryError);
+
+            if (built == nullptr)
+            {
+                error = "could not create an audio backend for the selected device '" + deviceId + "'";
+
+                if (!factoryError.empty())
+                    error += ": " + factoryError;
+
+                log::error(kComponent, error);
+                return false;
+            }
+
+            audioBackend_ = std::move(built);
+            log::info(kComponent, "opening the audio device selected in settings: '" + deviceId + "'");
+        }
+        else if (!audioBackendOverridden_)
+        {
+            error = "settings select the audio device '" + deviceId
+                  + "', but this build has no audio backend factory";
+            log::error(kComponent, error);
+            return false;
+        }
+    }
+    else if (!audioBackendOverridden_)
+    {
+        log::warning(kComponent,
+                     "no audio device selected in settings: running on the null backend, no live audio");
+    }
 
     if (!engine_.activate(*audioBackend_, request, error))
         return false;

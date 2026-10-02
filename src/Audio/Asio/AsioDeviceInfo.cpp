@@ -179,6 +179,20 @@ bool validateChannelSelection(const DeviceCapabilitiesReport& report,
             return false;
         }
 
+        // Zero channels is a different failure from a bad index, and the operator has
+        // to act on it differently. Measured on this PC: the Waves driver reports
+        // 32x32 while nothing else holds it, and 0 channels while the SoundGrid Control
+        // Panel (and its local server processes) is running. An ASIO device is
+        // exclusive, so both cases look the same from here.
+        if (channels.empty())
+        {
+            error = std::string(what)
+                  + " channels are not available: the driver reported none at all. An ASIO device is"
+                    " exclusive - close any other ASIO host (Waves SoundGrid Control Panel, a DAW) and"
+                    " check that a SoundGrid server is configured and reachable.";
+            return false;
+        }
+
         if (static_cast<std::size_t>(index) > channels.size())
         {
             error = std::string(what) + " channel " + std::to_string(index) + " does not exist: the device reported "

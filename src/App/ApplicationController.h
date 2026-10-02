@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -68,6 +69,15 @@ public:
     void setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend);
     void setTranslationBackend(std::unique_ptr<translation::ITranslationBackend> backend);
     void setNdiOutput(std::unique_ptr<ndi::INdiOutput> output);
+
+    /// Builds the backend for a device the operator selected in settings. Installed
+    /// by the composition root (Main.cpp) because the platform adapter is the only
+    /// JUCE user: the core must not know how an ASIO device is opened, only that a
+    /// device name can become an IAudioBackend. Must be called while stopped.
+    using AudioBackendFactory =
+        std::function<std::unique_ptr<audio::IAudioBackend>(const audio::DeviceRequest&, std::string& error)>;
+
+    void setAudioBackendFactory(AudioBackendFactory factory);
 
     // ------------------------------------------------------------------ lifecycle
     /// Brings audio, translation session and NDI up. Returns false and enters the
@@ -140,6 +150,12 @@ private:
     std::unique_ptr<audio::IAudioBackend> audioBackend_;
     std::unique_ptr<translation::ITranslationBackend> translationBackend_;
     std::unique_ptr<ndi::INdiOutput> ndiOutput_;
+
+    AudioBackendFactory audioBackendFactory_;
+    /// True once setAudioBackend() was called. Distinguishes "the tests or developer
+    /// mode chose this backend" from "this is the default null device", so a device
+    /// configured in settings is never quietly served by the null backend.
+    bool audioBackendOverridden_ = false;
 
     ApplicationState state_ = ApplicationState::stopped;
     std::string faultReason_;

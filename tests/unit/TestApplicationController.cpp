@@ -216,6 +216,12 @@ TEST_CASE("ApplicationController: two different ASIO devices in settings are ref
     QuietLog quiet;
     ApplicationController controller;
 
+    // The composition root normally installs a factory that turns a device name into
+    // a backend. Here it hands out a null backend, so the test exercises the rule
+    // about device *selection* without needing a driver.
+    controller.setAudioBackendFactory([](const audio::DeviceRequest&, std::string&)
+                                      { return std::make_unique<audio::NullAudioBackend>(); });
+
     // SPEC "ASIO Device Selection": one ASIO device carries both directions, and a
     // configured device must never be silently replaced.
     std::string error;
@@ -233,6 +239,36 @@ TEST_CASE("ApplicationController: two different ASIO devices in settings are ref
     // Naming the same device on both sides is fine.
     cfg = controller.config().current();
     cfg.audio.outputDeviceId = "Waves SoundGrid ASIO";
+    REQUIRE(controller.config().update(std::move(cfg), error));
+    CHECK(controller.start());
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: a selected device without a backend factory is an error",
+          "[app][audio][spec]")
+{
+    QuietLog quiet;
+    ApplicationController controller;   // no factory installed
+
+    std::string error;
+    auto cfg = controller.config().current();
+    cfg.audio.inputDeviceId = "Waves SoundGrid ASIO";
+    cfg.audio.outputDeviceId = "Waves SoundGrid ASIO";
+    REQUIRE(controller.config().update(std::move(cfg), error));
+
+    // SPEC: "ASIO device unavailable" - not "we quietly started the null device
+    // instead". A running application with silent inputs is worse than a refused start.
+    CHECK_FALSE(controller.start());
+    CHECK(controller.state() == ApplicationState::faulted);
+    CHECK(controller.status().detail.find("no audio backend factory") != std::string::npos);
+
+    controller.stop();
+
+    // And with no device selected at all the null backend is allowed, because that is
+    // the documented state "nothing chosen yet", not a substitution.
+    cfg = controller.config().current();
+    cfg.audio.inputDeviceId.clear();
+    cfg.audio.outputDeviceId.clear();
     REQUIRE(controller.config().update(std::move(cfg), error));
     CHECK(controller.start());
     controller.stop();

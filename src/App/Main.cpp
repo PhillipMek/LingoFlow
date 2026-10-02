@@ -8,6 +8,11 @@
 //   --smoke   start the subsystems, log the resulting status, stop, quit without
 //             creating a window. Used by the bootstrap verification and by CI; it
 //             is not a substitute for an operator-visible check.
+//
+// Exit codes:
+//   0   started (and, with --smoke, shut down) normally
+//   2   a subsystem refused to start (e.g. the selected ASIO device is unavailable).
+//       The reason is in the log and in the status detail.
 
 #include <JuceHeader.h>
 
@@ -17,11 +22,17 @@
 
 #include "App/ApplicationController.h"
 #include "Config/ConfigStore.h"
+#include "Platform/Asio/JuceAsioBackend.h"
 #include "Utils/Log.h"
 
 namespace {
 
 constexpr std::string_view kLogComponent = "app";
+
+/// Exit codes of the operator application. 0 always means "the application did what it
+/// was asked"; a non-zero code is a failure an operator or CI can branch on without
+/// reading the log.
+constexpr int kExitStartupFailure = 2;
 
 juce::File logDirectory()
 {
@@ -153,9 +164,27 @@ public:
             logging.diagnostics.writeLogFile = true;
         liveai::log::configure(makeLogConfig(logging, /*writeConsole = */ false));
 
+        // The platform adapter is created here, in the JUCE layer: the core only knows
+        // that a device name from settings has to become an IAudioBackend, not how an
+        // ASIO device is opened (AGENTS.md 7). Without this factory a configured device
+        // is reported as an error rather than silently ignored.
+        controller_.setAudioBackendFactory(
+            [](const liveai::audio::DeviceRequest& request, std::string& factoryError)
+                -> std::unique_ptr<liveai::audio::IAudioBackend>
+            {
+                (void)factoryError;
+                return std::make_unique<liveai::platform::JuceAsioBackend>(request.deviceId);
+            });
+
         if (!controller_.start())
         {
             liveai::log::error(kLogComponent, "application failed to start: " + controller_.status().detail);
+
+            // A start that failed must not look like a successful run: --smoke is used
+            // as evidence in CI and by the operator, so it reports the failure in the
+            // exit code as well as in the log.
+            setApplicationReturnValue(kExitStartupFailure);
+
             juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
             return;
         }

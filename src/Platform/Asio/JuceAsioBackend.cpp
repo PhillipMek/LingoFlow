@@ -100,6 +100,15 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
         return false;
     }
 
+    // The request carries the operator's device choice, so a backend built by the
+    // composition-root factory is told what to open. The constructor value stays as
+    // the default for tools that build one backend per device (the probe).
+    if (!request.deviceId.empty() && request.deviceId != deviceId_)
+    {
+        deviceId_ = request.deviceId;
+        displayName_ = "ASIO/" + deviceId_;
+    }
+
     if (deviceId_.empty())
     {
         error = "no ASIO device selected";
