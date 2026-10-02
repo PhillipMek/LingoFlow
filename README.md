@@ -7,25 +7,27 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-008 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-009 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
 input->output loopback, the translation backend contract with a deterministic test mock,
-Null implementations of the translation and NDI boundaries,
-versioned configuration with safe persistence, ASIO device discovery and device lifecycle
-on top of JUCE, and 163 tests.
-**No real translation runs yet** - the OpenAI backend is task 009, and the protocol it will
-code against is verified against the live official documentation, frozen in
-`docs/openai-realtime-protocol.md`, and spot-checked against the real service on 2026-10-02
-(dedicated `gpt-realtime-translate` endpoint, complete event surface, 24 kHz PCM16 audio
-contract, graceful close, all 13 target language codes; every citation and probe dated).
-What task 007 built is
-the seam it will plug into: translated audio delivered through it is routed to the
-engine's jitter buffer and reaches the audience through the same single output source as
-everything else, proven end to end with the mock. On a real device, until 009 the only
-thing that can leave on the output is loopback audio, and that has to be started
-explicitly.
+a real OpenAI realtime translation backend (`src/Network`, on the OS winhttp WebSocket
+stack with the 24<->48 kHz resampler inside it), Null implementations of the translation
+and NDI boundaries, versioned configuration with safe persistence, ASIO device discovery
+and device lifecycle on top of JUCE, and 197 tests.
+The OpenAI backend (`task 009`) codes against the protocol verified from the live official
+documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
+real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
+surface, 24 kHz PCM16 audio contract, graceful close, all 13 target language codes; every
+citation and probe dated). The backend has completed one real end-to-end round-trip
+through the shipped probe binary (English speech in, Russian translated audio + transcript
+out, graceful close drained); the operator ear-check of translation quality and the
+long-run/expiry and rig-routing behavior are the remaining human checkpoints (tasks
+012/018/010). On a real device the integration that routes the delivered audio to the
+audience is task 012; until then the backend is exercised through its contract and the
+probe, and the only thing that can leave on the output is loopback audio, which has to be
+started explicitly.
 
 Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
 which makes this product AGPLv3 and puts NDI behind runtime loading
@@ -80,11 +82,12 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-163 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
-suites), the end-to-end integration suite that runs the whole pipeline on the
-deterministic mock, the realtime allocation suite in its own binary, the architecture
-boundary audit plus its self-test, the realtime safety audit plus its self-test, and the
-two device entries that run the ASIO tool's driver-free modes.
+197 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+suites, and the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
+run the backend against a scripted offline transport), the end-to-end integration suite that
+runs the whole pipeline on the deterministic mock, the realtime allocation suite in its own
+binary, the architecture boundary audit plus its self-test, the realtime safety audit plus
+its self-test, and the two device entries that run the ASIO tool's driver-free modes.
 
 ```powershell
 cmd /c "call $vccmd && `"$cmake`" --test-dir $dbg --output-on-failure"
@@ -271,11 +274,12 @@ reference implementation enforces and the tests assert. What this means concrete
 * **Session requests carry rates.** The backend is told at what rate `submitAudio()` will
   arrive and at what rate the answer must be; every delivered block repeats its actual
   rate, so the receiver never trusts setup alone. Blocks at a wrong rate are refused and
-  counted (`rejectedAudioFrames`), never silently resampled - no resampler exists, and
-  playing 16 kHz at 48 kHz is not an option.
+  counted (`rejectedAudioFrames`), never silently resampled - resampling is the backend's
+  job on its own worker threads (task 009), and the controller still refuses what arrives
+  wrong; playing 16 kHz at 48 kHz is not an option.
 * **Errors have product vocabulary.** Five categories (`connection`, `rejectedRequest`,
-  `audioFormat`, `protocol`, `internal`) and a fatal flag; task 009 maps provider
-  failures onto them, so no OpenAI error name crosses the seam. A fatal error ends the
+  `audioFormat`, `protocol`, `internal`) and a fatal flag; the task 009 backend maps
+  provider failures onto them, so no OpenAI error name crosses the seam. A fatal error ends the
   session and changes nothing else: AGENTS.md 12 holds the audio path open, the reason
   goes to counters, log and `status().detail`.
 * **`closeSession()` guarantees no callbacks after it returns.** That is what lets the
@@ -295,6 +299,37 @@ reference implementation enforces and the tests assert. What this means concrete
   absent** - they are tasks 013 and 011; the contract names the extension points instead
   of pre-inventing the types.
 
+## The real OpenAI backend (task 009)
+
+`src/Network/OpenAIRealtimeBackend` implements the task 007 contract against the OpenAI
+realtime translation service, coding only to `docs/openai-realtime-protocol.md`. It is a
+separate `lingoflow_network` target so the portable core stays free of the OS network
+stack and of JSON parsing outside `Config` (the architecture audit now guards exactly
+that: only `App` may include `Network`).
+
+* **Transport: the Windows stack, not a new dependency.** `WinHttpTransport` uses
+  `winhttp.dll` for TLS, the HTTP->WS upgrade and RFC 6455 framing; the browser is never
+  involved. The seam is a 4-method `IWebSocketTransport`, so the whole protocol is tested
+  offline against a scripted fake with production-mirroring cancel semantics.
+* **Two threads, because the live service demanded it.** A pending synchronous
+  `WinHttpWebSocketReceive` blocks indefinitely and is not released by receive timeouts
+  (measured), so a dedicated **receiver** thread drains server events while a **sender**
+  thread keeps the continuous 200 ms append cadence (with silence) that both translation
+  quality and the service's keepalive need; closing the socket from the other thread is
+  what bounds every wait, including the graceful `session.close` drain.
+* **The 24 kHz wire contract lives here.** Input is float32 at the device rate and is
+  converted to base64 PCM16 mono 24 kHz; delivered deltas are decoded, their optional
+  `format`/`sample_rate`/`channels` fields validated as authoritative, and resampled to
+  the requested output rate by `PcmResampler` (a halfband FIR cascade covering only
+  24/48/96; 44.1k and friends are refused at configuration, so the session is refused
+  rather than guessed at).
+* **Faithful to the frozen protocol, honest about its limits.** Instructions are accepted,
+  ignored and reported (the model has no custom prompting - AGENTS.md 19); `session.updated`
+  is the usable trigger; in-session errors map to the five categories and leave the session
+  open, only transport death is fatal; no `*.done` events exist, so transcript fragments
+  arrive as partials and final text is left to task 013. The probe `lingoflow_openai_probe`
+  performs the one live functional round-trip through this exact binary.
+
 ## Layout
 
 ```text
@@ -303,13 +338,14 @@ src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract (states, request, errors, sink), Null/ backend
+src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
-tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend, realtime allocation suite, architecture audit, realtime safety audit, self-tests
+tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend + scripted WebSocket fake, realtime allocation suite, architecture audit, realtime safety audit, self-tests
 docs/                   licensing, device defaults, architecture, environment report, verified OpenAI realtime protocol reference
 third_party/            vendored JUCE 9.0.3 and ASIO SDK 2.3.4 (see third_party/README.md)
 tasks/                  agent task files

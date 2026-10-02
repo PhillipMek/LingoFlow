@@ -91,7 +91,11 @@ another reason the voice-agent docs must not be copied into our backend.
 The reference page for translation client events contains exactly three [R2]. Anything
 else is not protocol and must not be invented:
 
-1. **`session.update`** — fields it may carry: `audio.output.language`,
+1. **`session.update`** — wire shape (live-verified, section 15):
+   `{"type":"session.update","session":{ ... }}` — the configuration travels
+   inside a `session` object; without the wrapper the service rejects the event
+   with `Missing required parameter: 'session'`. Fields it may carry:
+   `audio.output.language`,
    `audio.input.transcription` (`{model}` or `null`), `audio.input.noise_reduction`
    (`{type: "near_field" | "far_field"}` or `null`). `type` and `model` cannot be
    changed. Optional `event_id`. Successful update returns `session.updated` [R2][R3].
@@ -405,6 +409,36 @@ Probes used a raw Node.js WebSocket client (built-ins only): handshake with the
 `Authorization: Bearer` header, base64 24 kHz PCM16 chunks appended at a 200 ms cadence,
 `session.update`/`session.close` as documented. No product source was involved.
 
+**Same-day implementation validation (task 009, the product backend against the live
+service):**
+
+- **`session.update` requires the `session` wrapper**: the first backend draft sent the
+  configuration at the top level and the service answered the `error` event
+  `Missing required parameter: 'session'`. The probes above had always wrapped it
+  (`{"type":"session.update","session":{…}}`); §5 now states the wire shape explicitly.
+  With the wrapper the full lifecycle runs through the product backend.
+- **Full-duplex transport facts (drives the backend's thread model)**: with one thread
+  blocked inside the synchronous `WinHttpWebSocketReceive`, 39 concurrent sends from a
+  second thread on the same handle all succeeded and the server answered them; an idle
+  blocking receive is NOT released by any receive timeout (request-level and handle-level
+  variants both ignored); `WinHttpWebSocketClose` DOES release the pending receive
+  (~225 ms observed, `ERROR_WINHTTP_OPERATION_CANCELLED`). The backend is therefore
+  receiver-thread + sender-thread, and every bounded wait ends via cancellation, never
+  via sleep-polling of the socket.
+- **Keepalive solved in layers**: WinHTTP's documented WebSocket keepalive interval
+  (minimum 15 s) provides transport-level client pings, and the backend's continuous
+  append cadence (including silence) keeps application traffic flowing; 19-20 s sessions
+  with a 2 s trailing-silence tail never hit the "keepalive ping timeout" close. This
+  refines the recommendation earlier in this section.
+- **Final functional round-trip through the shipped binary**
+  (`lingoflow_openai_probe`, in/24000 → out/48000, language ru): connected in 1.7 s;
+  11.43 s of English TTS streamed with zero queue rejections; graceful close drained
+  3.8 s; **1,593,600 translated samples delivered at 48000 Hz** (exercising the
+  backend's live 24→48 upsample), 187 characters of Russian transcript, 0 errors,
+  state transitions exactly `connecting → connected → closed`. Translated duration again
+  far exceeded the source (sparse/slow interpretation) - the 012/018 burst-sizing
+  conclusions stand.
+
 Remaining open items from section 14: 14.5 (silence/ducking behavior needs real speech
 in the target language - 012), and the long-run semantics of `expires_at` (what the
 server sends at expiry - 010/024).
@@ -452,8 +486,9 @@ The live probe data of section 15 is this repository's own measurement record fr
 
 Open a WebSocket to `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate`
 with the `Authorization: Bearer` header (and optionally `OpenAI-Safety-Identifier`),
-expect `session.created` first, send `session.update` with
-`audio.output.language` (and optional transcription/noise-reduction), stream base64
+expect `session.created` first, send `session.update` (configuration inside a `session`
+object - section 5) with `audio.output.language` (and optional
+transcription/noise-reduction), stream base64
 24 kHz mono little-endian PCM16 in ~200 ms chunks with continuous silence while the
 session is open, deliver `session.output_audio.delta` (base64 PCM16, validate
 `format`/`sample_rate`/`channels` when present) and `session.output_transcript.delta` /
