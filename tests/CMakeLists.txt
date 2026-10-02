@@ -26,6 +26,7 @@ else()
 endif()
 
 add_executable(lingoflow_tests
+    support/MockTranslationBackend.cpp
     unit/TestLog.cpp
     unit/TestConfig.cpp
     unit/TestConfigManager.cpp
@@ -36,7 +37,13 @@ add_executable(lingoflow_tests
     unit/TestGainStage.cpp
     unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp
-    unit/TestApplicationController.cpp)
+    unit/TestTranslationContract.cpp
+    unit/TestApplicationController.cpp
+    integration/TestTranslationEndToEnd.cpp)
+
+# The test tree is its own include root: tests include "support/..." by path,
+# and the mock deliberately lives here, not in the product core (task 007).
+target_include_directories(lingoflow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(lingoflow_tests
     PRIVATE
