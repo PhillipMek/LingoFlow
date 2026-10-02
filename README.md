@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-007 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-008 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -15,7 +15,10 @@ input->output loopback, the translation backend contract with a deterministic te
 Null implementations of the translation and NDI boundaries,
 versioned configuration with safe persistence, ASIO device discovery and device lifecycle
 on top of JUCE, and 163 tests.
-**No real translation runs yet** - the OpenAI backend is task 009. What task 007 built is
+**No real translation runs yet** - the OpenAI backend is task 009, and the protocol it will
+code against is now verified against the live official documentation and frozen in
+`docs/openai-realtime-protocol.md` (dedicated `gpt-realtime-translate` endpoint, complete event
+surface, 24 kHz PCM16 audio contract, error mapping; every citation dated). What task 007 built is
 the seam it will plug into: translated audio delivered through it is routed to the
 engine's jitter buffer and reaches the audience through the same single output source as
 everything else, proven end to end with the mock. On a real device, until 009 the only
@@ -305,7 +308,7 @@ src/Security/           ISecretStore boundary + NullSecretStore (credentials nev
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
 tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend, realtime allocation suite, architecture audit, realtime safety audit, self-tests
-docs/                   licensing, device defaults, architecture, environment report
+docs/                   licensing, device defaults, architecture, environment report, verified OpenAI realtime protocol reference
 third_party/            vendored JUCE 9.0.3 and ASIO SDK 2.3.4 (see third_party/README.md)
 tasks/                  agent task files
 ```
