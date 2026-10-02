@@ -19,7 +19,7 @@ Linking a proprietary library into a GPL/AGPL program adds a restriction the GPL
 does not allow. Therefore, with JUCE under AGPLv3:
 
 1. the NDI SDK import library `Processing.NDI.Lib.x64.lib` must **not** be linked
-   into `LiveAIInterpreter`;
+   into `LingoFlow`;
 2. NDI must be reached through runtime loading of `Processing.NDI.Lib.x64.dll`
    (`LoadLibrary` + `GetProcAddress` on the `NDIlib_*` C functions, or the SDK's
    `Processing.NDI.DynamicLoad.h`), behind the existing `INdiOutput` boundary;

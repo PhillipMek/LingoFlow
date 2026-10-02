@@ -48,7 +48,7 @@ TEST_CASE("Log: level filter suppresses quieter records", "[log]")
 {
     liveai::log::resetForTests();
 
-    const auto file = std::filesystem::temp_directory_path() / "liveai_log_filter_test.log";
+    const auto file = std::filesystem::temp_directory_path() / "lingoflow.log_filter_test.log";
     std::error_code removeEc;
     std::filesystem::remove(file, removeEc);
 

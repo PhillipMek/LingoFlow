@@ -25,7 +25,7 @@ else()
     find_package(Catch2 3 REQUIRED)
 endif()
 
-add_executable(liveai_tests
+add_executable(lingoflow_tests
     unit/TestLog.cpp
     unit/TestConfig.cpp
     unit/TestConfigManager.cpp
@@ -36,20 +36,20 @@ add_executable(liveai_tests
     unit/TestNullBackends.cpp
     unit/TestApplicationController.cpp)
 
-target_link_libraries(liveai_tests
+target_link_libraries(lingoflow_tests
     PRIVATE
-        liveai::core
+        lingoflow::core
         Catch2::Catch2WithMain)
 
 if(MSVC)
-    target_compile_options(liveai_tests PRIVATE /W4 /utf-8 /MP8)
+    target_compile_options(lingoflow_tests PRIVATE /W4 /utf-8 /MP8)
 else()
-    target_compile_options(liveai_tests PRIVATE -Wall -Wextra)
+    target_compile_options(lingoflow_tests PRIVATE -Wall -Wextra)
 endif()
 
 include(CTest)
 include(Catch)
-catch_discover_tests(liveai_tests)
+catch_discover_tests(lingoflow_tests)
 
 # --- architecture boundary gates ---------------------------------------------
 # 1) audit the real source tree; 2) prove the audit can fail (self-test).
@@ -75,15 +75,15 @@ set_property(TEST architecture_boundary_audit architecture_boundary_audit_selfte
 # it is safe in an automated run. Opening a device is NOT part of it: on a machine with
 # the SoundGrid driver but no server that needs a human (docs/device-defaults.md).
 add_test(NAME asio_discovery_verify
-         COMMAND $<TARGET_FILE:liveai_asio_probe> --verify)
+         COMMAND $<TARGET_FILE:lingoflow_asio_probe> --verify)
 
 set_property(TEST asio_discovery_verify PROPERTY LABELS device)
 set_property(TEST asio_discovery_verify PROPERTY TIMEOUT 120)
 
 add_test(NAME asio_discovery_list
-         COMMAND $<TARGET_FILE:liveai_asio_probe> --list)
+         COMMAND $<TARGET_FILE:lingoflow_asio_probe> --list)
 
 set_property(TEST asio_discovery_list PROPERTY LABELS device)
 set_property(TEST asio_discovery_list PROPERTY TIMEOUT 120)
 
-set_target_properties(liveai_tests PROPERTIES FOLDER "Tests")
+set_target_properties(lingoflow_tests PROPERTIES FOLDER "Tests")

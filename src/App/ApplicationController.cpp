@@ -291,7 +291,8 @@ translation::SessionState ApplicationController::sessionState() const noexcept
     return translationBackend_ != nullptr ? translationBackend_->state() : translation::SessionState::closed;
 }
 
-bool ApplicationController::loadSettings(const std::filesystem::path& file, std::string& note)
+bool ApplicationController::loadSettings(const std::filesystem::path& file, std::string& note,
+                                         const std::filesystem::path& persistTo)
 {
     config_.setStore(config::ConfigStore(file));
 
@@ -305,6 +306,20 @@ bool ApplicationController::loadSettings(const std::filesystem::path& file, std:
 
     for (const auto& problem : config_.lastLoad().problems)
         log::warning(kComponent, "settings field " + problem.field + ": " + problem.message);
+
+    if (!persistTo.empty() && persistTo != file)
+    {
+        // One-time move of the settings into the new location. The old file is left
+        // exactly where it is: a rename must not delete a user's data.
+        config_.setStore(config::ConfigStore(persistTo));
+
+        std::string error;
+        if (config_.save(error))
+            log::info(kComponent, "settings migrated from '" + file.string() + "' to '" + persistTo.string() + "'");
+        else
+            log::warning(kComponent, "settings were read but could not be written to '" + persistTo.string()
+                                         + "': " + error);
+    }
 
     return true;
 }

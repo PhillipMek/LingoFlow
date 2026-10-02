@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
 
-project(LiveAIInterpreter
+project(LingoFlow
     VERSION 0.1.0
-    DESCRIPTION "Live AI Interpreter - simultaneous speech translation for live events"
+    DESCRIPTION "LingoFlow - simultaneous speech translation for live events"
     LANGUAGES C CXX)
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ if(CMAKE_MATCH_1)
     set(LIVEAI_JUCE_VERSION "${CMAKE_MATCH_1}")
 endif()
 
-message(STATUS "LiveAIInterpreter: using JUCE ${LIVEAI_JUCE_VERSION} from ${LIVEAI_JUCE_PATH}")
+message(STATUS "LingoFlow: using JUCE ${LIVEAI_JUCE_VERSION} from ${LIVEAI_JUCE_PATH}")
 
 # JUCE needs C as a language; it is enabled in project() above.
 add_subdirectory("${LIVEAI_JUCE_PATH}" JUCE)
@@ -68,7 +68,7 @@ if(LIVEAI_FETCH_NLOHMANN_JSON)
     set(JSON_BuildTests OFF CACHE INTERNAL "")
     set(INSTALL_NLOHMANN_JSON OFF CACHE INTERNAL "")
     FetchContent_MakeAvailable(nlohmann_json)
-    message(STATUS "LiveAIInterpreter: using nlohmann/json ${nlohmann_json_VERSION} from FetchContent")
+    message(STATUS "LingoFlow: using nlohmann/json ${nlohmann_json_VERSION} from FetchContent")
 else()
     find_package(nlohmann_json REQUIRED)
 endif()
@@ -83,4 +83,4 @@ if(LIVEAI_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-message(STATUS "LiveAIInterpreter ${PROJECT_VERSION}: configure done")
+message(STATUS "LingoFlow ${PROJECT_VERSION}: configure done")

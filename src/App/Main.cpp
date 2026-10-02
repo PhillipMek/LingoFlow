@@ -1,4 +1,4 @@
-// Live AI Interpreter - operator application.
+// LingoFlow - operator application.
 //
 // The UI talks to exactly one object (ApplicationController) and reads exactly
 // one type (AppStatus). It has no knowledge of audio devices, wire protocols or
@@ -11,10 +11,12 @@
 
 #include <JuceHeader.h>
 
+#include <filesystem>
 #include <format>
 #include <string>
 
 #include "App/ApplicationController.h"
+#include "Config/ConfigStore.h"
 #include "Utils/Log.h"
 
 namespace {
@@ -23,8 +25,9 @@ constexpr std::string_view kLogComponent = "app";
 
 juce::File logDirectory()
 {
+    // Same folder name as the settings, so the rename to LingoFlow moved both at once.
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
-        .getChildFile("Live AI Interpreter")
+        .getChildFile(liveai::config::ConfigStore::applicationDirectoryName().data())
         .getChildFile("logs");
 }
 
@@ -34,7 +37,7 @@ liveai::LogConfig makeLogConfig(const liveai::AppConfig& settings, bool writeCon
     cfg.level = liveai::log::levelFromName(settings.diagnostics.logLevel);
     cfg.writeConsole = writeConsole;
     cfg.filePath = settings.diagnostics.writeLogFile
-                       ? logDirectory().getChildFile("liveai.log").getFullPathName().toStdString()
+                       ? logDirectory().getChildFile("lingoflow.log").getFullPathName().toStdString()
                        : std::string();
     return cfg;
 }
@@ -79,7 +82,7 @@ class MainWindow final : public juce::DocumentWindow
 {
 public:
     explicit MainWindow(const liveai::ApplicationController& controller)
-        : juce::DocumentWindow("Live AI Interpreter",
+        : juce::DocumentWindow("LingoFlow",
                                juce::Colour(0xff232629u),
                                juce::DocumentWindow::closeButton)
     {
@@ -104,7 +107,7 @@ private:
 } // namespace
 
 //==============================================================================
-class LiveAIInterpreterApplication final : public juce::JUCEApplication
+class LingoFlowApplication final : public juce::JUCEApplication
 {
 public:
     const juce::String getApplicationName() override { return JUCE_APPLICATION_NAME_STRING; }
@@ -127,7 +130,20 @@ public:
                                       juce::SystemStats::getOperatingSystemName().toStdString()));
 
         std::string settingsNote;
-        if (!controller_.loadSettings(liveai::config::ConfigStore::defaultFile(), settingsNote))
+
+        // A settings file written before the rename lives in %APPDATA%\Live AI Interpreter.
+        // Read it if that is all there is, and persist it once into the LingoFlow folder;
+        // the old copy is never deleted (AGENTS.md 12: recover, do not destroy).
+        bool fromLegacy = false;
+        const auto startupFile = liveai::config::ConfigStore::startupFile(fromLegacy);
+        const auto migrateTo = fromLegacy ? liveai::config::ConfigStore::defaultFile()
+                                          : std::filesystem::path{};
+
+        if (fromLegacy)
+            liveai::log::info(kLogComponent, "settings: reading the pre-rename location "
+                                                 + startupFile.string());
+
+        if (!controller_.loadSettings(startupFile, settingsNote, migrateTo))
             liveai::log::error(kLogComponent, "settings could not be read: " + settingsNote);
 
         // Settings decide the log level and whether a log file is written. In smoke
@@ -173,4 +189,4 @@ private:
     std::unique_ptr<MainWindow> window_;
 };
 
-START_JUCE_APPLICATION(LiveAIInterpreterApplication)
+START_JUCE_APPLICATION(LingoFlowApplication)

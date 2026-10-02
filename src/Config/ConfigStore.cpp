@@ -301,6 +301,25 @@ std::filesystem::path ConfigStore::defaultFile()
 
     const std::string profile = environmentVariable("USERPROFILE");
     if (!profile.empty())
+        return std::filesystem::path(profile) / ".lingoflow" / "config.json";
+
+    const std::string home = environmentVariable("HOME");
+    if (!home.empty())
+        return std::filesystem::path(home) / ".lingoflow" / "config.json";
+
+    return std::filesystem::path(".lingoflow") / "config.json";
+}
+
+std::filesystem::path ConfigStore::legacyFile()
+{
+#ifdef _WIN32
+    const std::string appData = environmentVariable("APPDATA");
+    if (!appData.empty())
+        return std::filesystem::path(appData) / legacyApplicationDirectoryName() / "config.json";
+#endif
+
+    const std::string profile = environmentVariable("USERPROFILE");
+    if (!profile.empty())
         return std::filesystem::path(profile) / ".liveai" / "config.json";
 
     const std::string home = environmentVariable("HOME");
@@ -308,6 +327,34 @@ std::filesystem::path ConfigStore::defaultFile()
         return std::filesystem::path(home) / ".liveai" / "config.json";
 
     return std::filesystem::path(".liveai") / "config.json";
+}
+
+std::filesystem::path ConfigStore::resolveStartupFile(const std::filesystem::path& current,
+                                                     const std::filesystem::path& legacy,
+                                                     bool& fromLegacy)
+{
+    std::error_code ec;
+
+    if (std::filesystem::exists(current, ec))
+    {
+        fromLegacy = false;
+        return current;
+    }
+
+    if (std::filesystem::exists(legacy, ec))
+    {
+        fromLegacy = true;
+        return legacy;
+    }
+
+    // First run: nothing to migrate, and the new location is the one to create.
+    fromLegacy = false;
+    return current;
+}
+
+std::filesystem::path ConfigStore::startupFile(bool& fromLegacy)
+{
+    return resolveStartupFile(defaultFile(), legacyFile(), fromLegacy);
 }
 
 } // namespace config

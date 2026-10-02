@@ -61,7 +61,7 @@ struct TranslationSettings
 struct NdiSettings
 {
     bool enabled = false;
-    std::string streamName = "LiveAI Interpreter";
+    std::string streamName = "LingoFlow";
 
     friend constexpr bool operator==(const NdiSettings&, const NdiSettings&) = default;
 };

@@ -32,7 +32,7 @@ AppConfig makeConfig()
     cfg.translation.modelHint = "capability-model";
     cfg.translation.jitterBufferMs = 200;
     cfg.ndi.enabled = true;
-    cfg.ndi.streamName = "LiveAI EN->RU";
+    cfg.ndi.streamName = "LingoFlow EN->RU";
     cfg.diagnostics.logLevel = "warning";
     cfg.diagnostics.writeLogFile = false;
     return cfg;
@@ -597,4 +597,43 @@ TEST_CASE("ConfigStore: defaultFile points into the application folder", "[confi
 
     CHECK(filename == "config.json");
     CHECK(parent == std::string(config::ConfigStore::applicationDirectoryName()));
+}
+
+TEST_CASE("ConfigStore: the pre-rename location is a different folder, same file name",
+          "[config][store][rename]")
+{
+    const auto current = config::ConfigStore::defaultFile();
+    const auto legacy = config::ConfigStore::legacyFile();
+
+    CHECK(current.filename() == legacy.filename());
+    CHECK(current.parent_path() != legacy.parent_path());
+    CHECK(std::string(config::ConfigStore::applicationDirectoryName()) == "LingoFlow");
+    CHECK(std::string(config::ConfigStore::legacyApplicationDirectoryName()) == "Live AI Interpreter");
+}
+
+TEST_CASE("ConfigStore: startup file prefers the current location", "[config][store][rename]")
+{
+    livetest::TempDirectory temp;
+    const auto current = temp.file("new/config.json");
+    const auto legacy = temp.file("old/config.json");
+
+    // Both exist -> the new one wins, and no migration is signalled.
+    std::filesystem::create_directories(current.parent_path());
+    std::filesystem::create_directories(legacy.parent_path());
+    livetest::writeFile(current, "{}");
+    livetest::writeFile(legacy, "{}");
+
+    bool fromLegacy = false;
+    CHECK(config::ConfigStore::resolveStartupFile(current, legacy, fromLegacy) == current);
+    CHECK_FALSE(fromLegacy);
+
+    // Only the legacy file -> read it, and say so.
+    std::filesystem::remove(current);
+    CHECK(config::ConfigStore::resolveStartupFile(current, legacy, fromLegacy) == legacy);
+    CHECK(fromLegacy);
+
+    // Neither -> first run, target is the new location, nothing to migrate.
+    std::filesystem::remove(legacy);
+    CHECK(config::ConfigStore::resolveStartupFile(current, legacy, fromLegacy) == current);
+    CHECK_FALSE(fromLegacy);
 }

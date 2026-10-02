@@ -61,12 +61,33 @@ public:
     /// both cases.
     bool save(const AppConfig& settings, std::string& error);
 
-    /// <user AppData>/Live AI Interpreter/config.json on Windows,
-    /// ~/.liveai/config.json elsewhere. Never creates the directory here.
+    /// <user AppData>/LingoFlow/config.json on Windows,
+    /// ~/.lingoflow/config.json elsewhere. Never creates the directory here.
     static std::filesystem::path defaultFile();
 
     /// Application folder name used for the config location.
-    static std::string_view applicationDirectoryName() noexcept { return "Live AI Interpreter"; }
+    static std::string_view applicationDirectoryName() noexcept { return "LingoFlow"; }
+
+    /// Folder name used before the product was renamed to LingoFlow. It exists only as
+    /// a read fallback (see startupFile): a renamed installation keeps its settings,
+    /// and nothing is ever written back to the old folder.
+    static std::string_view legacyApplicationDirectoryName() noexcept { return "Live AI Interpreter"; }
+
+    /// Settings file of a pre-rename installation: <user AppData>/Live AI Interpreter/
+    /// config.json on Windows, ~/.liveai/config.json elsewhere.
+    static std::filesystem::path legacyFile();
+
+    /// File to read at start-up: defaultFile() when it exists, otherwise legacyFile()
+    /// if an old installation left one there. `fromLegacy` reports which was chosen, so
+    /// the caller can persist the settings into the new location once. When neither
+    /// exists the current location is returned and fromLegacy is false (first run).
+    static std::filesystem::path startupFile(bool& fromLegacy);
+
+    /// The rule above, separated from the real paths so it can be tested with
+    /// temporary directories instead of only against the user's AppData folder.
+    static std::filesystem::path resolveStartupFile(const std::filesystem::path& current,
+                                                   const std::filesystem::path& legacy,
+                                                   bool& fromLegacy);
 
 private:
     std::filesystem::path quarantineUnreadable(const std::filesystem::path& source) const;

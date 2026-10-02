@@ -1,4 +1,4 @@
-# Live AI Interpreter
+# LingoFlow
 
 Windows desktop application for simultaneous speech translation at live events:
 
@@ -8,7 +8,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
 ```
 
 Status: **tasks 000-004 complete**. The repository contains a JUCE/CMake
-application, a portable core (`liveai_core`) with the module interfaces, Null
+application, a portable core (`lingoflow_core`) with the module interfaces, Null
 implementations of the audio, translation and NDI boundaries, versioned
 configuration with safe persistence, ASIO device discovery and device lifecycle on
 top of JUCE, and unit tests.
@@ -50,8 +50,8 @@ $ninja = "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 $vccmd = "`"$vs\VC\Auxiliary\Build\vcvars64.bat`""
 
 # Build trees stay on an ASCII path (see "Build tree must be on an ASCII path")
-$dbg = 'D:\LiveAI\build-debug'
-$rel = 'D:\LiveAI\build-release'
+$dbg = 'D:\LingoFlow\build-debug'
+$rel = 'D:\LingoFlow\build-release'
 
 cmd /c "call $vccmd && `"$cmake`" -S . -B $dbg -G Ninja -DCMAKE_BUILD_TYPE=Debug   -DCMAKE_MAKE_PROGRAM=`"$ninja`""
 cmd /c "call $vccmd && `"$cmake`" --build $dbg"
@@ -75,14 +75,14 @@ cmd /c "call $vccmd && `"$cmake`" --test-dir $rel --output-on-failure"
 ```
 
 (`ctest.exe` sits next to the bundled `cmake.exe`; if it is on `PATH`, plain
-`ctest --test-dir D:\LiveAI\build-debug --output-on-failure` works too.)
+`ctest --test-dir D:\LingoFlow\build-debug --output-on-failure` works too.)
 
 ## Run the application
 
 The executable name comes from `PRODUCT_NAME`, so it contains spaces:
 
 ```powershell
-$exe = "$dbg\src\LiveAIInterpreter_artefacts\Debug\Live AI Interpreter.exe"
+$exe = "$dbg\src\LingoFlow_artefacts\Debug\LingoFlow.exe"
 
 & $exe --smoke   # headless start/stop check: exit code 0, log file written
 & $exe           # operator window
@@ -93,7 +93,7 @@ a window. It is a startup/logging check only — it does not verify audio,
 translation quality or the operator-visible UI.
 
 The application writes a log file to
-`%APPDATA%\Live AI Interpreter\logs\liveai.log` (JUCE's
+`%APPDATA%\LingoFlow\logs\lingoflow.log` (JUCE's
 `File::userApplicationDataDirectory`, which is the Roaming profile folder on
 Windows).
 
@@ -107,26 +107,45 @@ running `juceaide rcfile` directly with ASCII and non-ASCII argument paths.
 The repository currently lives under `D:\Рабочий\...`. That is fine for sources:
 CMake, Ninja and MSVC compile and run correctly from it (JUCE objects build from
 `third_party/JUCE` under that path). Only the **build tree** must sit on an ASCII
-path, which is why the documented commands use `D:\LiveAI\build-debug`:
+path, which is why the documented commands use `D:\LingoFlow\build-debug`:
 
 ```powershell
-cmake -S . -B D:/LiveAI/build-debug ...   # works: source Cyrillic, build ASCII
+cmake -S . -B D:/LingoFlow/build-debug ...   # works: source Cyrillic, build ASCII
 cmake -S . -B build ...                   # fails here: build tree inherits the Cyrillic path
 ```
 
 If the repository is moved to an ASCII path, the plain in-tree form works again.
-Verified on a clone at `D:\LiveAI\clone-test`: `cmake -S . -B build` +
+Verified on a clone at `D:\LingoFlow\clone-test`: `cmake -S . -B build` +
 `cmake --build build` + `ctest` → 71/71 passed, using `third_party/JUCE`. So the
 constraint is the path, not the layout, and the vendored dependencies travel with
 the repository.
+
+## Naming
+
+The product is **LingoFlow**. It was called "Live AI Interpreter" through tasks
+000-004. The rename covers the product name, the executable (`LingoFlow.exe`), the
+CMake targets (`lingoflow_core`, `lingoflow_asio_probe`, `lingoflow_tests`), the
+bundle id, the NDI stream name default, the data folder and the log file
+(`lingoflow.log`).
+
+Two things deliberately kept their old names, because they are internal and renaming
+them would only churn the diff: the C++ namespace `liveai` and the `LIVEAI_*` CMake
+options (`LIVEAI_JUCE_PATH`, `LIVEAI_BUILD_TESTS`, `LIVEAI_FETCH_*`).
+
+Settings written before the rename (`%APPDATA%\Live AI Interpreter\config.json`) are
+read once when there is no file at the new location, then rewritten to
+`%APPDATA%\LingoFlow\config.json`. The old file is never modified or deleted, and the
+old path is never written to again. `ConfigStore::startupFile()` resolves it,
+`ApplicationController::loadSettings(..., persistTo)` performs the one-time move, and
+both are covered by tests.
 
 ## Configuration
 
 Settings live in one file, `config.json`, next to the log:
 
 ```text
-%APPDATA%\Live AI Interpreter\config.json          (Windows)
-~/.liveai/config.json                              (other platforms)
+%APPDATA%\LingoFlow\config.json          (Windows)
+~/.lingoflow/config.json                              (other platforms)
 ```
 
 The file is versioned (`schemaVersion`, currently `1`) and grouped into `audio`,
@@ -176,12 +195,12 @@ any of these defaults as measurements.
 
 ```text
 CMakeLists.txt          root project, JUCE discovery
-src/CMakeLists.txt      liveai_core + LiveAIInterpreter targets
+src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
 src/Audio/              AudioEngine shell, IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract, Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
-src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, liveai_asio_probe tool
+src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
@@ -227,11 +246,11 @@ Two CTest entries with label `architecture` guard the dependency direction
   `nlohmann/json.hpp` in `Config`). A gate that stops working therefore fails CI
   instead of passing silently.
 
-Run them alone: `ctest --test-dir D:\LiveAI\build-debug -L architecture --output-on-failure`.
+Run them alone: `ctest --test-dir D:\LingoFlow\build-debug -L architecture --output-on-failure`.
 
 ### ASIO discovery tool (task 004)
 
-`liveai_asio_probe.exe` is built next to the app; it exercises the real JUCE ASIO path.
+`lingoflow_asio_probe.exe` is built next to the app; it exercises the real JUCE ASIO path.
 Two CTest entries with the label `device` use the safe part of it automatically.
 
 | Command | What it does | Touches the driver? |

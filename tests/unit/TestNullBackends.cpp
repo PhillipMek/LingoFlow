@@ -154,9 +154,9 @@ TEST_CASE("NullNdiOutput: start/publish/stop state machine", "[ndi]")
     CHECK_FALSE(output.start("", error));
     CHECK(error.find("must not be empty") != std::string::npos);
 
-    REQUIRE(output.start("LiveAI EN->RU", error));
+    REQUIRE(output.start("LingoFlow EN->RU", error));
     CHECK(output.state() == OutputState::ready);
-    CHECK(output.streamName() == "LiveAI EN->RU");
+    CHECK(output.streamName() == "LingoFlow EN->RU");
 
     frame.final = true;
     frame.sequence = 1;

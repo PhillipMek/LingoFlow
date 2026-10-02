@@ -19,7 +19,7 @@ public:
     {
         static std::mt19937_64 engine{ std::random_device{}() };
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        const std::string name = std::string("liveai-") + std::string(tag) + "-"
+        const std::string name = std::string("lingoflow-") + std::string(tag) + "-"
                                + std::to_string(engine()) + "-" + std::to_string(stamp);
 
         path_ = std::filesystem::temp_directory_path() / name;

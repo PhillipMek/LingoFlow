@@ -42,7 +42,7 @@ public:
     virtual std::string_view name() const noexcept = 0;
     virtual OutputState state() const noexcept = 0;
 
-    /// Stream name visible to NDI receivers, e.g. "LiveAI Interpreter (EN->RU)".
+    /// Stream name visible to NDI receivers, e.g. "LingoFlow (EN->RU)".
     virtual bool start(std::string_view streamName, std::string& error) = 0;
     virtual void stop() noexcept = 0;
 

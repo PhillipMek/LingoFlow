@@ -1,12 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "App/ApplicationController.h"
 #include "Audio/Null/NullAudioBackend.h"
+#include "Config/ConfigSchema.h"
+#include "Config/ConfigStore.h"
 #include "NDI/Null/NullNdiOutput.h"
+#include "TestTempDir.h"
 #include "Translation/Null/NullTranslationBackend.h"
 #include "Utils/Log.h"
 
@@ -241,7 +245,7 @@ TEST_CASE("ApplicationController: text events reach NDI and diagnostics", "[app]
 
     auto cfg = controller.config().current();
     cfg.ndi.enabled = true;
-    cfg.ndi.streamName = "LiveAI EN->RU";
+    cfg.ndi.streamName = "LingoFlow EN->RU";
     std::string error;
     REQUIRE(controller.config().update(cfg, error));
 
@@ -342,4 +346,43 @@ TEST_CASE("ApplicationController: start after stop works again", "[app]")
     CHECK(controller.isRunning());
     controller.stop();
     CHECK(controller.state() == ApplicationState::stopped);
+}
+
+TEST_CASE("ApplicationController: settings from the pre-rename folder migrate once",
+          "[app][config][rename]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+
+    const auto legacy = temp.file("old/config.json");
+    const auto current = temp.file("new/config.json");
+
+    // A real installation's file, produced by the store itself, not hand-written.
+    {
+        auto stored = config::defaults();
+        stored.audio.sampleRate = 96000;
+        std::string error;
+        REQUIRE(config::ConfigStore(legacy).save(stored, error));
+    }
+
+    ApplicationController controller;
+    std::string note;
+    REQUIRE(controller.loadSettings(legacy, note, current));
+
+    CHECK(controller.config().current().audio.sampleRate == 96000);
+    CHECK(std::filesystem::exists(current));   // written into the new location
+    CHECK(std::filesystem::exists(legacy));    // the old file is never deleted
+
+    // And the store is re-pointed: a later save must not write to the old path again.
+    const auto oldContent = livetest::readFile(legacy);
+
+    auto cfg = controller.config().current();
+    cfg.audio.bufferFrames = 512;
+    std::string error;
+    REQUIRE(controller.config().update(std::move(cfg), error));
+    REQUIRE(controller.saveSettings(error));
+
+    CHECK(livetest::readFile(legacy) == oldContent);
+    CHECK(livetest::readFile(current).find("96000") != std::string::npos);
+    CHECK(livetest::readFile(current).find("512") != std::string::npos);
 }

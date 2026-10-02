@@ -1,4 +1,4 @@
-// liveai_asio_probe - ASIO discovery and lifecycle verification tool (task 004).
+// lingoflow_asio_probe - ASIO discovery and lifecycle verification tool (task 004).
 //
 // It exercises the same code paths the application will use in task 005:
 //   * Platform/Asio/AsioDiscovery   - enumeration and capability probing
@@ -44,7 +44,7 @@ using namespace liveai;
 void printUsage()
 {
     std::cout <<
-        "liveai_asio_probe - ASIO discovery and lifecycle check\n"
+        "lingoflow_asio_probe - ASIO discovery and lifecycle check\n"
         "  --list                      enumerate ASIO devices (no driver is loaded)\n"
         "  --verify                    check enumeration against HKLM\\SOFTWARE\\ASIO\n"
         "  --probe <device-id> [--start]  open device, read capabilities (optionally start/stop)\n"

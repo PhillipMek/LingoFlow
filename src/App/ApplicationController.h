@@ -99,7 +99,15 @@ public:
     /// store could not be read at all; `note` always says what happened (defaults,
     /// per-field repair, backup restore, refused future schema version). The result
     /// is always a usable configuration.
-    bool loadSettings(const std::filesystem::path& file, std::string& note);
+    ///
+    /// When `persistTo` is set and differs from `file`, the read settings are written
+    /// there once and the store is re-pointed at it, so every later save goes to the
+    /// new location. This is how a pre-rename installation ("Live AI Interpreter")
+    /// migrates into the LingoFlow folder instead of being read from the old path
+    /// forever. A failure to persist is logged, not reported as a load failure: the
+    /// settings in memory are valid either way.
+    bool loadSettings(const std::filesystem::path& file, std::string& note,
+                      const std::filesystem::path& persistTo = {});
 
     /// Writes the current settings atomically through the attached store.
     bool saveSettings(std::string& error);

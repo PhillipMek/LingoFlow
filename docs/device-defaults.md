@@ -25,7 +25,7 @@ agent-verifiable. Opening it is not.
 
 ## What is measured on this machine (2026-10-01, task 004)
 
-The probe tool (`liveai_asio_probe`) was run against the installed Waves driver.
+The probe tool (`lingoflow_asio_probe`) was run against the installed Waves driver.
 **The driver opens and runs even with no SoundGrid server present**, so most of the
 "needs hardware" list turned out to be verifiable here after all. Measured, Debug and
 Release builds, 10 open/start/stop/close cycles:
