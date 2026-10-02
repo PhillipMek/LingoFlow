@@ -324,8 +324,9 @@ machine. Before or during task 009/012, on a networked rig with a key:
 None of these block writing 009 (the backend can implement exactly what is documented);
 they block declaring 009/012 PASS on real traffic.
 
-*Update 2026-10-02: the owner supplied a key; items 1, 3, 4 and 6 (and most of 2) were
-verified live the same day - results in section 15. Items 2 (full) and 5 stay open.*
+*Update 2026-10-02: the owner supplied a key; items 1, 3, 4, 6 and 2 were verified live
+the same day (2 fully, including an owner ear-check of the delivered stream) - results in
+section 15. Item 5 and the long-run expiry semantics stay open.*
 
 ## 15. Live verification log (2026-10-02, owner-provided key, real traffic)
 
@@ -353,7 +354,7 @@ logged or committed). Probes run against the live service, closing parts of sect
 - **14.6 CLOSED (initial value)**: `expires_at` = creation time + 3600 s on every observed
   session. Session max duration 60 minutes: 010 MUST schedule a proactive reopen shortly
   before expiry (an operator-visible requirement for events longer than one hour).
-- **14.2 PARTIALLY CLOSED - output format**: 171 delivered `session.output_audio.delta`
+- **14.2 CLOSED - output format**: 171 delivered `session.output_audio.delta`
   events across two complete runs (11 s of English TTS speech in, target `ru`). EVERY
   delta carried `sample_rate:24000, channels:1, format:"pcm16"` and exactly 19200 bytes
   = 400 ms of PCM at 24 kHz (the cookbook's "200 ms chunks" [R8] is not what arrived;
@@ -365,9 +366,11 @@ logged or committed). Probes run against the live service, closing parts of sect
   Dominant pitch periods 95-116 samples = 207-253 Hz at 24 kHz, consistent with the
   female TTS source under the model's documented voice adaptation [R8]. Even/odd sample
   MAD ratio 0.22 - a single continuous stream, not duplicated stereo pairs. Verdict:
-  the delivered PCM is genuinely 24 kHz mono PCM16, as the events declare. An operator
-  ear-check of the saved `out_as_24k_mono.wav` is still welcome but not required to
-  proceed; overall translation QUALITY checks stay with 012/018 on real voice.
+  the delivered PCM is genuinely 24 kHz mono PCM16, as the events declare. **Owner
+  ear-check 2026-10-02, decisive**: `out_as_24k_mono.wav` sounds normal, while
+  `out_as_48k_mono.wav` and `out_as_24k_stereo.wav` both play ~2x fast - exactly the
+  pattern of mislabeled 24 kHz mono. Translation QUALITY checks (real voice, latency)
+  stay with 012/018.
 - **NEW (measured) - delivery rate is bursty, above real time**: each delta advanced
   `elapsed_ms` by 200 ms while carrying 400 ms of PCM (2x), and after `session.close`
   the drain delivered ~200 KB/s (~4.7x real time). Arrival therefore runs consistently
