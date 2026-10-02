@@ -104,22 +104,27 @@ JUCE's helper tool `juceaide` (it generates `*_resources.rc`) crashes with
 arguments**. This is about arguments, not about where the tools live - verified by
 running `juceaide rcfile` directly with ASCII and non-ASCII argument paths.
 
-The repository currently lives under `D:\Рабочий\...`. That is fine for sources:
-CMake, Ninja and MSVC compile and run correctly from it (JUCE objects build from
-`third_party/JUCE` under that path). Only the **build tree** must sit on an ASCII
-path, which is why the documented commands use `D:\LingoFlow\build-debug`:
+The repository lives at `D:\work\LingoFlow` - an ASCII path, which it did not have
+before (it used to sit under `D:\Рабочий\...`, where only the build tree could be ASCII:
+CMake, Ninja and MSVC compiled and ran fine from the Cyrillic path, but `juceaide`
+crashed when the build tree inherited it). Out-of-tree build trees on an ASCII path
+remain the documented convention, because they keep the checkout clean and let the same
+sources be configured for Debug and Release side by side:
 
 ```powershell
-cmake -S . -B D:/LingoFlow/build-debug ...   # works: source Cyrillic, build ASCII
-cmake -S . -B build ...                   # fails here: build tree inherits the Cyrillic path
+cmake -S . -B D:/LingoFlow/build-debug   # documented convention: one tree per config
+cmake -S . -B build                      # also works: the source path is ASCII now
 ```
 
-If the repository is moved to an ASCII path, the plain in-tree form works again.
-Verified on a clone at `D:\LiveAI\clone-test` (path from before the LingoFlow
-rename): `cmake -S . -B build` +
-`cmake --build build` + `ctest` → 71/71 passed, using `third_party/JUCE`. So the
-constraint is the path, not the layout, and the vendored dependencies travel with
-the repository.
+Both forms are measured, not assumed. In-tree at `D:\work\LingoFlow` (2026-10-01):
+`cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug` + `cmake --build build` + `ctest`
+→ **84/84 passed**, and the CMake log shows `juceaide` configuring, building, exporting and
+self-testing without complaint. Out-of-tree gives the same 84/84 in Debug and Release.
+Earlier, the in-tree form also passed on a clone at `D:\LiveAI\clone-test` (a pre-rename
+path) with 71/71.
+
+So the constraint is the path, not the layout: the checkout can live anywhere with an
+ASCII path, and the vendored dependencies travel with it.
 
 ## Naming
 
