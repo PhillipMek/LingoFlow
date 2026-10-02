@@ -18,6 +18,8 @@ endif()
 
 option(LIVEAI_BUILD_TESTS "Build automated tests" ON)
 
+include(FetchContent)
+
 # ---------------------------------------------------------------------------
 # JUCE
 #
@@ -52,6 +54,27 @@ message(STATUS "LiveAIInterpreter: using JUCE ${LIVEAI_JUCE_VERSION} from ${LIVE
 
 # JUCE needs C as a language; it is enabled in project() above.
 add_subdirectory("${LIVEAI_JUCE_PATH}" JUCE)
+
+# ---------------------------------------------------------------------------
+# nlohmann/json - used ONLY by the Config module (see tests/ArchitectureBoundaries.cmake).
+# Pinned to an official release tag; fetched on demand, never vendored.
+# ---------------------------------------------------------------------------
+option(LIVEAI_FETCH_NLOHMANN_JSON "Download nlohmann/json with FetchContent" ON)
+
+if(LIVEAI_FETCH_NLOHMANN_JSON)
+    FetchContent_Declare(
+        nlohmann_json
+        GIT_REPOSITORY https://github.com/nlohmann/json.git
+        GIT_TAG        v3.12.0
+        GIT_SHALLOW    TRUE)
+
+    set(JSON_BuildTests OFF CACHE INTERNAL "")
+    set(INSTALL_NLOHMANN_JSON OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(nlohmann_json)
+    message(STATUS "LiveAIInterpreter: using nlohmann/json ${nlohmann_json_VERSION} from FetchContent")
+else()
+    find_package(nlohmann_json REQUIRED)
+endif()
 
 # ---------------------------------------------------------------------------
 # Project

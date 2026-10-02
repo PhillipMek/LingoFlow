@@ -31,7 +31,8 @@ anything not listed is forbidden and is rejected by
 
 ```text
 Utils          -> (nothing)                       logging, no JUCE
-Config         -> Utils                           settings, no persistence yet (task 003)
+Config         -> Utils                           settings: schema, validation, atomic file I/O
+Security       -> Utils                           credential store boundary, no config access
 Diagnostics    -> Utils                           atomic counters + snapshot
 Audio          -> Utils, Diagnostics              engine, IAudioBackend, Null backend
 Translation    -> Utils, Diagnostics              ITranslationBackend contract, Null backend
@@ -39,6 +40,11 @@ NDI            -> Utils, Diagnostics              INdiOutput contract, Null outp
 App            -> all of the above                ApplicationController (composition root)
 App/Main.cpp   -> App, Utils, JUCE                the only JUCE-dependent code
 ```
+
+One dependency exception is registered in the audit: `nlohmann/json.hpp` may be
+included by `Config` only (and only in `.cpp` files, so no header in the project
+exposes a JSON type). Everything else - UI, audio, translation, NDI - still has no
+way to reach JSON or any wire protocol.
 
 Rules that the audit enforces:
 

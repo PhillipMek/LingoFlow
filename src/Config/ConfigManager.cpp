@@ -1,104 +1,86 @@
 #include "Config/ConfigManager.h"
 
-#include <algorithm>
+#include <utility>
 
 namespace liveai {
-namespace {
 
-constexpr int kMinBufferFrames = 64;
-constexpr int kMaxBufferFrames = 2048;
-constexpr float kMinGainDb = -60.0f;
-constexpr float kMaxGainDb = 12.0f;
-constexpr int kMaxJitterBufferMs = 1000;
+ConfigManager::ConfigManager() = default;
 
-bool isSupportedSampleRate(int sampleRate)
+ConfigManager::ConfigManager(config::ConfigStore store)
+    : store_(std::move(store))
 {
-    static constexpr int kSupported[] = { 44100, 48000, 88200, 96000 };
-    return std::find(std::begin(kSupported), std::end(kSupported), sampleRate) != std::end(kSupported);
 }
 
-} // namespace
-
-ConfigManager::ConfigManager()
+void ConfigManager::setStore(config::ConfigStore store)
 {
-    // SPEC "Audio": MVP prefers 48 kHz, float32, mono.
-    current_.interpreterInstructions =
-        "Preserve meaning, names, numbers, terminology and intent. Do not summarize, add "
-        "explanations or comments. Prioritize low latency without sacrificing quality.";
+    store_ = std::move(store);
 }
 
-bool ConfigManager::validate(const AppConfig& candidate, std::string& error)
+bool ConfigManager::load(std::string& note)
 {
-    error.clear();
-
-    if (!isSupportedSampleRate(candidate.sampleRate))
+    if (!store_.has_value())
     {
-        error = "unsupported sample rate: " + std::to_string(candidate.sampleRate);
+        note = "no configuration store is configured";
         return false;
     }
 
-    if (candidate.bufferFrames < kMinBufferFrames || candidate.bufferFrames > kMaxBufferFrames)
-    {
-        error = "buffer size must be between " + std::to_string(kMinBufferFrames) + " and "
-              + std::to_string(kMaxBufferFrames) + " frames";
-        return false;
-    }
+    lastLoad_ = store_->load();
+    current_ = lastLoad_.config;
 
-    if (candidate.inputChannel < 1 || candidate.outputChannel < 1)
-    {
-        error = "channel numbers are one-based and must be positive";
-        return false;
-    }
+    note = std::string(config::nameOf(lastLoad_.outcome));
+    if (!lastLoad_.message.empty())
+        note += ": " + lastLoad_.message;
 
-    if (candidate.inputGainDb < kMinGainDb || candidate.inputGainDb > kMaxGainDb
-        || candidate.outputGainDb < kMinGainDb || candidate.outputGainDb > kMaxGainDb)
-    {
-        error = "gain must be between " + std::to_string(static_cast<int>(kMinGainDb)) + " and "
-              + std::to_string(static_cast<int>(kMaxGainDb)) + " dB";
-        return false;
-    }
-
-    if (candidate.inputLanguage.empty() || candidate.outputLanguage.empty())
-    {
-        error = "input and output language must not be empty";
-        return false;
-    }
-
-    if (candidate.inputLanguage == candidate.outputLanguage)
-    {
-        error = "input and output language must differ";
-        return false;
-    }
-
-    if (candidate.jitterBufferMs < 0 || candidate.jitterBufferMs > kMaxJitterBufferMs)
-    {
-        error = "jitter buffer must be between 0 and " + std::to_string(kMaxJitterBufferMs) + " ms";
-        return false;
-    }
-
-    if (candidate.ndiEnabled && candidate.ndiStreamName.empty())
-    {
-        error = "NDI is enabled but the stream name is empty";
-        return false;
-    }
-
+    // Even a repaired configuration is applied: the operator must not lose sound
+    // because one field in a text file is wrong.
+    notify();
     return true;
+}
+
+bool ConfigManager::save(std::string& error)
+{
+    if (!store_.has_value())
+    {
+        error = "no configuration store is configured";
+        return false;
+    }
+
+    return store_->save(current_, error);
 }
 
 bool ConfigManager::update(AppConfig candidate, std::string& error)
 {
-    if (!validate(candidate, error))
-        return false;
-
-    current_ = std::move(candidate);
-
-    for (auto* listener : listeners_)
+    if (const auto problems = config::validate(candidate); !problems.empty())
     {
-        if (listener != nullptr)
-            listener->onConfigChanged(current_);
+        error.clear();
+        for (const auto& problem : problems)
+        {
+            if (!error.empty())
+                error += "; ";
+            error += problem.field + ": " + problem.message;
+        }
+        return false;
     }
 
+    error.clear();
+    current_ = std::move(candidate);
+    notify();
     return true;
+}
+
+bool ConfigManager::updateWith(std::string& error, const std::function<void(AppConfig&)>& mutate)
+{
+    AppConfig candidate = current_;
+    mutate(candidate);
+    return update(std::move(candidate), error);
+}
+
+bool ConfigManager::updateAndSave(AppConfig candidate, std::string& error)
+{
+    if (!update(std::move(candidate), error))
+        return false;
+
+    return save(error);
 }
 
 void ConfigManager::addListener(IConfigListener& listener)
@@ -106,10 +88,21 @@ void ConfigManager::addListener(IConfigListener& listener)
     listeners_.push_back(&listener);
 }
 
-void ConfigManager::resetForTests() noexcept
+void ConfigManager::notify()
 {
-    current_ = AppConfig{};
+    for (auto* listener : listeners_)
+    {
+        if (listener != nullptr)
+            listener->onConfigChanged(current_);
+    }
+}
+
+void ConfigManager::resetForTests()
+{
+    current_ = config::defaults();
+    lastLoad_ = config::LoadResult{};
     listeners_.clear();
+    store_.reset();
 }
 
 } // namespace liveai

@@ -192,7 +192,7 @@ TEST_CASE("ApplicationController: NDI failure does not stop audio", "[app][fault
     ApplicationController controller;
 
     auto cfg = controller.config().current();
-    cfg.ndiEnabled = true;
+    cfg.ndi.enabled = true;
     std::string error;
     REQUIRE(controller.config().update(cfg, error));
 
@@ -213,8 +213,8 @@ TEST_CASE("ApplicationController: text events reach NDI and diagnostics", "[app]
     ApplicationController controller;
 
     auto cfg = controller.config().current();
-    cfg.ndiEnabled = true;
-    cfg.ndiStreamName = "LiveAI EN->RU";
+    cfg.ndi.enabled = true;
+    cfg.ndi.streamName = "LiveAI EN->RU";
     std::string error;
     REQUIRE(controller.config().update(cfg, error));
 
@@ -263,9 +263,9 @@ TEST_CASE("ApplicationController: session uses the configured languages and inst
     ApplicationController controller;
 
     auto cfg = controller.config().current();
-    cfg.inputLanguage = "de";
-    cfg.outputLanguage = "ja";
-    cfg.interpreterInstructions = "custom instructions";
+    cfg.translation.inputLanguage = "de";
+    cfg.translation.outputLanguage = "ja";
+    cfg.translation.instructions = "custom instructions";
     std::string error;
     REQUIRE(controller.config().update(cfg, error));
 

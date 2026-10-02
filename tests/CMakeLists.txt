@@ -27,7 +27,9 @@ endif()
 
 add_executable(liveai_tests
     unit/TestLog.cpp
+    unit/TestConfig.cpp
     unit/TestConfigManager.cpp
+    unit/TestSecretStore.cpp
     unit/TestDiagnosticsManager.cpp
     unit/TestAudioEngine.cpp
     unit/TestNullBackends.cpp

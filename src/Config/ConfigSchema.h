@@ -1,0 +1,54 @@
+#pragma once
+//
+// ConfigSchema - defaults, validation and JSON text conversion for AppConfig.
+//
+// nlohmann/json is used only in the .cpp file: no header in the project sees a
+// JSON type, so the UI and the audio path cannot accidentally start parsing
+// configuration text themselves (tests/ArchitectureBoundaries.cmake allows this
+// one include inside Config only).
+//
+// Secret rule: a field whose name looks like a credential is never read and never
+// written. isSecretFieldName() is the single place that decides what "looks like
+// a credential" means.
+
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "Config/AppConfig.h"
+
+namespace liveai {
+namespace config {
+
+    /// Operator defaults (SPEC: 48 kHz, float32, mono, en<->ru).
+    AppConfig defaults() noexcept;
+
+    /// Validation problems only; empty means the configuration is usable.
+    ConfigProblems validate(const AppConfig& candidate);
+
+    /// Single error string for callers that do not need per-field detail.
+    bool validate(const AppConfig& candidate, std::string& error);
+
+    /// JSON text for the config file. Never contains a secret-looking field.
+    std::string toJsonText(const AppConfig& settings);
+
+    /// Parses config text onto a copy of `fallback`, keeping the fallback value for
+    /// every absent or invalid field. Returns false only when the text is not JSON
+    /// at all; field-level problems end up in `problems` (partial recovery, never a
+    /// crash and never a silent discard of the whole file).
+    bool fromJsonText(std::string_view text,
+                      AppConfig& out,
+                      ConfigProblems& problems,
+                      std::string& error,
+                      const AppConfig& fallback = defaults());
+
+    /// True when a key name refers to a credential and must not be stored or read
+    /// from the ordinary configuration file.
+    bool isSecretFieldName(std::string_view keyName) noexcept;
+
+    /// Schema version found in JSON text without parsing the rest; 0 when absent
+    /// or unreadable. Used by the store to refuse files from the future.
+    std::uint32_t schemaVersionOf(std::string_view text) noexcept;
+
+} // namespace config
+} // namespace liveai

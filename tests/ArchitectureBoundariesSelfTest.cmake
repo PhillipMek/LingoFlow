@@ -1,9 +1,10 @@
 # Self-test for the architecture boundary audit.
 #
 # A gate that cannot fail is not a gate. This script copies src/ into a scratch
-# directory, injects one violation at a time and asserts that
-# ArchitectureBoundaries.cmake rejects it with the expected reason - and that the
-# pristine copy is accepted.
+# directory, applies one modification at a time and asserts that
+# ArchitectureBoundaries.cmake answers correctly: violations must be rejected with
+# the expected AUDIT_* code, and the documented exceptions (nlohmann/json.hpp in
+# Config) must still be accepted.
 #
 #   cmake -DAUDIT_SRC_DIR=<repo>/src -DAUDIT_SCRIPT=<repo>/tests/ArchitectureBoundaries.cmake
 #         -DAUDIT_WORK_DIR=<scratch> -P tests/ArchitectureBoundariesSelfTest.cmake
@@ -18,40 +19,40 @@ if(NOT EXISTS "${AUDIT_SCRIPT}")
     message(FATAL_ERROR "audit script not found: ${AUDIT_SCRIPT}")
 endif()
 
-set(violations_found 0)
-
-# audit_case(<label> <CLEAN|APPEND|CREATE> <relative path> <text> <expected message regex>)
-function(audit_case label kind path text expect_regex)
+# prepare(<kind> <relative path> <text>): rebuild the scratch copy and apply one change
+function(prepare kind path text)
     file(REMOVE_RECURSE "${AUDIT_WORK_DIR}")
     file(COPY "${AUDIT_SRC_DIR}" DESTINATION "${AUDIT_WORK_DIR}")
-    set(copied_src "${AUDIT_WORK_DIR}/src")
 
     if(kind STREQUAL "APPEND")
-        if(NOT EXISTS "${copied_src}/${path}")
-            message(FATAL_ERROR "${label}: injection target does not exist: ${path}")
+        if(NOT EXISTS "${AUDIT_WORK_DIR}/src/${path}")
+            message(FATAL_ERROR "injection target does not exist: ${path}")
         endif()
-        file(READ "${copied_src}/${path}" original)
-        file(APPEND "${copied_src}/${path}" "\n${text}\n")
+        file(APPEND "${AUDIT_WORK_DIR}/src/${path}" "\n${text}\n")
     elseif(kind STREQUAL "CREATE")
-        get_filename_component(parent "${copied_src}/${path}" DIRECTORY)
-        file(WRITE "${copied_src}/${path}" "${text}\n")
+        file(WRITE "${AUDIT_WORK_DIR}/src/${path}" "${text}\n")
     elseif(NOT kind STREQUAL "CLEAN")
-        message(FATAL_ERROR "${label}: unknown injection kind '${kind}'")
+        message(FATAL_ERROR "unknown injection kind '${kind}'")
     endif()
+endfunction()
+
+# audit_expect(<label> <PASS|FAIL> <expect-regex> <kind> <path> <text>)
+function(audit_expect label verdict expect_regex kind path text)
+    prepare("${kind}" "${path}" "${text}")
 
     execute_process(
-        COMMAND "${CMAKE_COMMAND}" "-DAUDIT_SRC_DIR=${copied_src}" -P "${AUDIT_SCRIPT}"
+        COMMAND "${CMAKE_COMMAND}" "-DAUDIT_SRC_DIR=${AUDIT_WORK_DIR}/src" -P "${AUDIT_SCRIPT}"
         RESULT_VARIABLE result
         OUTPUT_VARIABLE out
         ERROR_VARIABLE err)
 
     set(output "${out}${err}")
 
-    if(kind STREQUAL "CLEAN")
+    if(verdict STREQUAL "PASS")
         if(NOT result EQUAL 0)
-            message(FATAL_ERROR "${label}: audit rejected a clean tree:\n${output}")
+            message(FATAL_ERROR "${label}: audit rejected something it must accept:\n${output}")
         endif()
-        message(STATUS "${label}: clean tree accepted")
+        message(STATUS "${label}: accepted")
         return()
     endif()
 
@@ -63,42 +64,60 @@ function(audit_case label kind path text expect_regex)
         message(FATAL_ERROR "${label}: audit rejected for the wrong reason.\nExpected /${expect_regex}/\nGot:\n${output}")
     endif()
 
-    message(STATUS "${label}: violation correctly rejected")
+    message(STATUS "${label}: rejected as expected (${expect_regex})")
 endfunction()
 
-audit_case("selftest/clean" CLEAN "" "" "")
+# --- the untouched tree is the baseline ---------------------------------------
+audit_expect("selftest/clean-tree" PASS "" CLEAN "" "")
 
-audit_case("selftest/audio-includes-translation" APPEND "Audio/IAudioBackend.h"
-    "#include \"Translation/ITranslationBackend.h\""
-    "AUDIT_INCLUDE_DIRECTION")
+# --- documented exceptions must keep working ----------------------------------
+audit_expect("selftest/json-in-config" PASS "" APPEND "Config/ConfigManager.h"
+    "#include <nlohmann/json.hpp>")
 
-audit_case("selftest/config-includes-audio" APPEND "Config/ConfigManager.h"
-    "#include \"Audio/AudioEngine.h\""
-    "AUDIT_INCLUDE_DIRECTION")
+# --- direction violations ------------------------------------------------------
+audit_expect("selftest/audio-includes-translation" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Audio/IAudioBackend.h" "#include \"Translation/ITranslationBackend.h\"")
 
-audit_case("selftest/juce-in-audio" APPEND "Audio/AudioTypes.h"
-    "#include <juce_core/juce_core.h>"
-    "AUDIT_JUCE_OUTSIDE_APP")
+audit_expect("selftest/config-includes-audio" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Config/ConfigManager.h" "#include \"Audio/AudioEngine.h\"")
 
-audit_case("selftest/protocol-include-in-ui" APPEND "App/Main.cpp"
-    "#include <nlohmann/json.hpp>"
-    "AUDIT_PROTOCOL_INCLUDE")
+audit_expect("selftest/app-includes-nothing-below-is-fine" PASS "" CLEAN "" "")
 
-audit_case("selftest/asio-include-in-core" APPEND "Utils/Log.h"
-    "#include <asiosys.h>"
-    "AUDIT_PROTOCOL_INCLUDE")
+audit_expect("selftest/diagnostics-includes-config" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Diagnostics/DiagnosticsManager.h" "#include \"Config/AppConfig.h\"")
 
-audit_case("selftest/dangling-project-include" APPEND "Audio/AudioEngine.h"
-    "#include \"Audio/NoSuchFile.h\""
-    "AUDIT_UNRESOLVED_INCLUDE")
+audit_expect("selftest/security-includes-config" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Security/ISecretStore.h" "#include \"Config/ConfigManager.h\"")
 
-audit_case("selftest/unknown-module-directory" CREATE "Widgets/Loose.h"
-    "// an unknown top-level directory must be reported"
-    "AUDIT_UNKNOWN_MODULE")
+# --- JUCE stays in the UI layer -------------------------------------------------
+audit_expect("selftest/juce-in-audio" FAIL "AUDIT_JUCE_OUTSIDE_APP"
+    APPEND "Audio/AudioTypes.h" "#include <juce_core/juce_core.h>")
 
-audit_case("selftest/file-outside-module" CREATE "Loose.cpp"
-    "// a file directly under src/ must be reported"
-    "AUDIT_LOOSE_FILE")
+audit_expect("selftest/juce-in-config" FAIL "AUDIT_JUCE_OUTSIDE_APP"
+    APPEND "Config/AppConfig.h" "#include <juce_data_structures/juce_data_structures.h>")
+
+# --- protocol/transport outside the owning module -------------------------------
+audit_expect("selftest/json-in-ui" FAIL "AUDIT_PROTOCOL_INCLUDE"
+    APPEND "App/Main.cpp" "#include <nlohmann/json.hpp>")
+
+audit_expect("selftest/json-in-audio" FAIL "AUDIT_PROTOCOL_INCLUDE"
+    APPEND "Audio/AudioEngine.h" "#include <nlohmann/json.hpp>")
+
+audit_expect("selftest/asio-in-core" FAIL "AUDIT_PROTOCOL_INCLUDE"
+    APPEND "Utils/Log.h" "#include <asiosys.h>")
+
+audit_expect("selftest/websocket-in-translation" FAIL "AUDIT_PROTOCOL_INCLUDE"
+    APPEND "Translation/ITranslationBackend.h" "#include <websocketpp/client.hpp>")
+
+# --- structural problems -------------------------------------------------------
+audit_expect("selftest/dangling-project-include" FAIL "AUDIT_UNRESOLVED_INCLUDE"
+    APPEND "Audio/AudioEngine.h" "#include \"Audio/NoSuchFile.h\"")
+
+audit_expect("selftest/unknown-module-directory" FAIL "AUDIT_UNKNOWN_MODULE"
+    CREATE "Widgets/Loose.h" "// an unknown top-level directory must be reported")
+
+audit_expect("selftest/file-outside-module" FAIL "AUDIT_LOOSE_FILE"
+    CREATE "Loose.cpp" "// a file directly under src/ must be reported")
 
 file(REMOVE_RECURSE "${AUDIT_WORK_DIR}")
-message(STATUS "architecture boundary audit self-test: OK (9 cases)")
+message(STATUS "architecture boundary audit self-test: OK (15 cases)")

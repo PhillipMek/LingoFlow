@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -92,6 +93,18 @@ public:
     DiagnosticsManager& diagnostics() noexcept { return diagnostics_; }
     const DiagnosticsManager& diagnostics() const noexcept { return diagnostics_; }
     translation::SessionState sessionState() const noexcept;
+
+    // ------------------------------------------------------------------- settings
+    /// Points the settings area at `file` and reads it. Returns false only when the
+    /// store could not be read at all; `note` always says what happened (defaults,
+    /// per-field repair, backup restore, refused future schema version). The result
+    /// is always a usable configuration.
+    bool loadSettings(const std::filesystem::path& file, std::string& note);
+
+    /// Writes the current settings atomically through the attached store.
+    bool saveSettings(std::string& error);
+
+    const config::LoadResult& settingsLoad() const noexcept { return config_.lastLoad(); }
 
     // -------------------------------------------------- translation::ITranslationSink
     // Called on network/worker threads, never on the audio thread.

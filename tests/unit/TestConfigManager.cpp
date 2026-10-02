@@ -1,10 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "Config/ConfigManager.h"
+#include <string>
 
-using liveai::AppConfig;
-using liveai::ConfigManager;
-using liveai::IConfigListener;
+#include "Config/ConfigManager.h"
+#include "Config/ConfigStore.h"
+#include "TestTempDir.h"
+
+using namespace liveai;
 
 namespace {
 
@@ -14,108 +16,201 @@ public:
     void onConfigChanged(const AppConfig& updated) override
     {
         ++calls;
-        lastSampleRate = updated.sampleRate;
+        lastSampleRate = updated.audio.sampleRate;
+        lastLanguage = updated.translation.outputLanguage;
     }
 
     int calls = 0;
     int lastSampleRate = 0;
+    std::string lastLanguage;
 };
 
 } // namespace
 
-TEST_CASE("ConfigManager: defaults are valid", "[config]")
+TEST_CASE("ConfigManager: starts from the operator defaults", "[config][manager]")
 {
-    ConfigManager config;
-    std::string error;
+    ConfigManager manager;
 
-    CHECK(ConfigManager::validate(config.current(), error));
-    CHECK(error.empty());
-    CHECK(config.current().sampleRate == 48000);
-    CHECK(config.current().bufferFrames == 480);
-    CHECK(config.current().inputLanguage == "en");
-    CHECK(config.current().outputLanguage == "ru");
-    CHECK_FALSE(config.current().ndiEnabled);
+    CHECK(manager.current() == config::defaults());
+    CHECK_FALSE(manager.hasStore());
+    CHECK(manager.current().audio.sampleRate == 48000);
+    CHECK(manager.current().translation.instructions == config::defaults().translation.instructions);
 }
 
-TEST_CASE("ConfigManager: default interpreter instructions carry the SPEC rules", "[config]")
+TEST_CASE("ConfigManager: without a store load and save are refused explicitly", "[config][manager]")
 {
-    ConfigManager config;
-    const auto& instructions = config.current().interpreterInstructions;
+    ConfigManager manager;
+    std::string message;
 
-    INFO(instructions);
-    CHECK(instructions.find("meaning") != std::string::npos);
-    CHECK(instructions.find("names") != std::string::npos);
-    CHECK(instructions.find("summarize") != std::string::npos);
-    CHECK(instructions.find("latency") != std::string::npos);
+    CHECK_FALSE(manager.load(message));
+    CHECK(message.find("no configuration store") != std::string::npos);
+
+    message.clear();
+    CHECK_FALSE(manager.save(message));
+    CHECK_FALSE(message.empty());
 }
 
-TEST_CASE("ConfigManager: rejects out-of-range values and leaves settings untouched", "[config]")
+TEST_CASE("ConfigManager: an invalid candidate is refused in full", "[config][manager]")
 {
-    ConfigManager config;
-    std::string error;
-
-    auto bad = config.current();
-    bad.sampleRate = 12345;
-    CHECK_FALSE(config.update(bad, error));
-    CHECK_FALSE(error.empty());
-    CHECK(config.current().sampleRate == 48000);
-
-    bad = config.current();
-    bad.sampleRate = 48000;
-    bad.bufferFrames = 8;                       // below the minimum
-    CHECK_FALSE(config.update(bad, error));
-    CHECK(error.find("buffer size") != std::string::npos);
-
-    bad.bufferFrames = 480;
-    bad.inputGainDb = 40.0f;                    // above the maximum
-    CHECK_FALSE(config.update(bad, error));
-    CHECK(error.find("gain") != std::string::npos);
-
-    bad.inputGainDb = 0.0f;
-    bad.outputLanguage = bad.inputLanguage;     // same language pair
-    CHECK_FALSE(config.update(bad, error));
-    CHECK(error.find("differ") != std::string::npos);
-
-    bad.outputLanguage = "ru";
-    bad.jitterBufferMs = 5000;                  // absurd jitter target
-    CHECK_FALSE(config.update(bad, error));
-    CHECK(error.find("jitter") != std::string::npos);
-}
-
-TEST_CASE("ConfigManager: NDI requires a stream name when enabled", "[config]")
-{
-    ConfigManager config;
-    std::string error;
-
-    auto candidate = config.current();
-    candidate.ndiEnabled = true;
-    candidate.ndiStreamName.clear();
-
-    CHECK_FALSE(config.update(candidate, error));
-    CHECK(error.find("NDI") != std::string::npos);
-
-    candidate.ndiStreamName = "LiveAI EN->RU";
-    CHECK(config.update(candidate, error));
-    CHECK(config.current().ndiEnabled);
-}
-
-TEST_CASE("ConfigManager: listeners are notified only after a successful update", "[config]")
-{
-    ConfigManager config;
+    ConfigManager manager;
     RecordingListener listener;
-    config.addListener(listener);
+    manager.addListener(listener);
     std::string error;
 
-    auto bad = config.current();
-    bad.bufferFrames = 99999;
-    CHECK_FALSE(config.update(bad, error));
-    CHECK(listener.calls == 0);
+    auto candidate = manager.current();
+    candidate.audio.sampleRate = 12345;              // invalid
+    candidate.audio.bufferFrames = 64;               // valid, but must not be applied either
+    candidate.translation.outputLanguage = "fr";
 
-    auto good = config.current();
-    good.bufferFrames = 960;
-    good.sampleRate = 96000;
-    CHECK(config.update(good, error));
+    CHECK_FALSE(manager.update(candidate, error));
+    CHECK(error.find("audio.sampleRate") != std::string::npos);
+
+    // Nothing partial was applied and nobody was notified.
+    CHECK(manager.current().audio.sampleRate == 48000);
+    CHECK(manager.current().audio.bufferFrames == 480);
+    CHECK(manager.current().translation.outputLanguage == "ru");
+    CHECK(listener.calls == 0);
+}
+
+TEST_CASE("ConfigManager: a valid update applies and notifies listeners", "[config][manager]")
+{
+    ConfigManager manager;
+    RecordingListener listener;
+    manager.addListener(listener);
+    std::string error;
+
+    auto candidate = manager.current();
+    candidate.audio.sampleRate = 96000;
+    candidate.translation.outputLanguage = "de";
+
+    REQUIRE(manager.update(candidate, error));
+    CHECK(error.empty());
     CHECK(listener.calls == 1);
     CHECK(listener.lastSampleRate == 96000);
-    CHECK(config.current().bufferFrames == 960);
+    CHECK(listener.lastLanguage == "de");
+    CHECK(manager.current().audio.sampleRate == 96000);
+}
+
+TEST_CASE("ConfigManager: updateWith validates the merged result", "[config][manager]")
+{
+    ConfigManager manager;
+    RecordingListener listener;
+    manager.addListener(listener);
+    std::string error;
+
+    CHECK(manager.updateWith(error, [](AppConfig& cfg) { cfg.audio.bufferFrames = 512; }));
+    CHECK(manager.current().audio.bufferFrames == 512);
+    CHECK(listener.calls == 1);
+
+    CHECK_FALSE(manager.updateWith(error, [](AppConfig& cfg) { cfg.translation.jitterBufferMs = 100000; }));
+    CHECK(manager.current().translation.jitterBufferMs == 120);   // unchanged
+    CHECK(listener.calls == 1);
+}
+
+TEST_CASE("ConfigManager: load reads the store and reports the outcome", "[config][manager]")
+{
+    livetest::TempDirectory temp;
+    const auto file = temp.file("config.json");
+
+    // Pre-write a file with one bad field and one good one.
+    config::ConfigStore writer(file);
+    livetest::writeFile(file, R"({"schemaVersion":1,"audio":{"sampleRate":12345,"bufferFrames":256}})");
+
+    ConfigManager manager(writer);
+    std::string note;
+    REQUIRE(manager.load(note));
+
+    CHECK(manager.current().audio.sampleRate == 48000);   // repaired
+    CHECK(manager.current().audio.bufferFrames == 256);   // kept
+    CHECK(manager.lastLoad().outcome == config::LoadOutcome::repaired);
+    CHECK_FALSE(manager.lastLoad().problems.empty());
+    CHECK(note.find("repaired") != std::string::npos);
+}
+
+TEST_CASE("ConfigManager: a missing file yields defaults without writing anything", "[config][manager]")
+{
+    livetest::TempDirectory temp;
+    const auto file = temp.path() / "settings" / "config.json";
+
+    config::ConfigStore store(file);
+    ConfigManager manager(std::move(store));
+    std::string note;
+    REQUIRE(manager.load(note));
+
+    CHECK(manager.current() == config::defaults());
+    CHECK(manager.lastLoad().outcome == config::LoadOutcome::fileAbsent);
+    CHECK_FALSE(std::filesystem::exists(file));
+    CHECK(note.find("file-absent") != std::string::npos);
+}
+
+TEST_CASE("ConfigManager: updateAndSave persists and survives a fresh manager", "[config][manager][roundtrip]")
+{
+    livetest::TempDirectory temp;
+    const auto file = temp.file("config.json");
+
+    std::string error;
+    {
+        config::ConfigStore store(file);
+    ConfigManager manager(std::move(store));
+        auto candidate = manager.current();
+        candidate.audio.inputDeviceId = "Waves SoundGrid ASIO:1";
+        candidate.translation.outputLanguage = "ru";
+        REQUIRE(manager.updateAndSave(candidate, error));
+    }
+
+    config::ConfigStore reopenedStore(file);
+    ConfigManager reopened(std::move(reopenedStore));
+    std::string note;
+    REQUIRE(reopened.load(note));
+
+    CHECK(reopened.lastLoad().outcome == config::LoadOutcome::loaded);
+    CHECK(reopened.current().audio.inputDeviceId == "Waves SoundGrid ASIO:1");
+    CHECK(std::filesystem::exists(file));
+}
+
+TEST_CASE("ConfigManager: an invalid update never touches the saved file", "[config][manager][corrupt]")
+{
+    livetest::TempDirectory temp;
+    const auto file = temp.file("config.json");
+
+    config::ConfigStore store(file);
+    ConfigManager manager(std::move(store));
+    std::string error;
+    REQUIRE(manager.save(error));                       // write the defaults first
+    const auto savedContent = livetest::readFile(file);
+
+    auto broken = manager.current();
+    broken.diagnostics.logLevel = "everything";
+    CHECK_FALSE(manager.updateAndSave(broken, error));
+
+    CHECK(livetest::readFile(file) == savedContent);
+    CHECK(manager.current().diagnostics.logLevel == "info");
+}
+
+TEST_CASE("ConfigManager: a store created for the default location is usable", "[config][manager]")
+{
+    const auto path = config::ConfigStore::defaultFile();
+
+    CHECK(path.filename() == "config.json");
+    CHECK(path.parent_path().filename() == std::string(config::ConfigStore::applicationDirectoryName()));
+}
+
+TEST_CASE("ConfigManager: resetForTests returns to a pristine manager", "[config][manager]")
+{
+    livetest::TempDirectory temp;
+    config::ConfigStore store(temp.file("config.json"));
+    ConfigManager manager(std::move(store));
+    RecordingListener listener;
+    manager.addListener(listener);
+
+    std::string error;
+    REQUIRE(manager.updateWith(error, [](AppConfig& cfg) { cfg.audio.sampleRate = 44100; }));
+    CHECK(listener.calls == 1);
+
+    manager.resetForTests();
+    CHECK_FALSE(manager.hasStore());
+    CHECK(manager.current() == config::defaults());
+
+    // No notification after reset.
+    CHECK(listener.calls == 1);
 }

@@ -28,12 +28,14 @@ juce::File logDirectory()
         .getChildFile("logs");
 }
 
-liveai::LogConfig makeLogConfig(bool writeConsole)
+liveai::LogConfig makeLogConfig(const liveai::AppConfig& settings, bool writeConsole)
 {
     liveai::LogConfig cfg;
-    cfg.level = liveai::LogLevel::debug;
+    cfg.level = liveai::log::levelFromName(settings.diagnostics.logLevel);
     cfg.writeConsole = writeConsole;
-    cfg.filePath = logDirectory().getChildFile("liveai.log").getFullPathName().toStdString();
+    cfg.filePath = settings.diagnostics.writeLogFile
+                       ? logDirectory().getChildFile("liveai.log").getFullPathName().toStdString()
+                       : std::string();
     return cfg;
 }
 
@@ -112,15 +114,28 @@ public:
     void initialise(const juce::String& commandLineParameters) override
     {
         const bool smoke = commandLineParameters.containsIgnoreCase("--smoke");
+
         // A windowed GUI process has no usable console, so the file sink is the
-        // source of truth for automated startup checks.
-        liveai::log::configure(makeLogConfig(/*writeConsole = */ false));
+        // source of truth for automated startup checks. Start from the operator
+        // defaults so the settings load itself gets logged.
+        liveai::log::configure(makeLogConfig(liveai::config::defaults(), /*writeConsole = */ false));
 
         liveai::log::info(kLogComponent,
                           std::format("application {} initialised (juce {} on {})",
                                       getApplicationVersion().toStdString(),
                                       juce::SystemStats::getJUCEVersion().toStdString(),
                                       juce::SystemStats::getOperatingSystemName().toStdString()));
+
+        std::string settingsNote;
+        if (!controller_.loadSettings(liveai::config::ConfigStore::defaultFile(), settingsNote))
+            liveai::log::error(kLogComponent, "settings could not be read: " + settingsNote);
+
+        // Settings decide the log level and whether a log file is written. In smoke
+        // mode the file stays on, because that file is how the startup is observed.
+        auto logging = controller_.config().current();
+        if (smoke)
+            logging.diagnostics.writeLogFile = true;
+        liveai::log::configure(makeLogConfig(logging, /*writeConsole = */ false));
 
         if (!controller_.start())
         {

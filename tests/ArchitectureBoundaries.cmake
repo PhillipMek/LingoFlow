@@ -23,15 +23,22 @@ if(NOT IS_DIRECTORY "${AUDIT_SRC_DIR}")
     message(FATAL_ERROR "AUDIT_SRC_DIR does not exist: ${AUDIT_SRC_DIR}")
 endif()
 
-set(audit_known_modules Utils Config Diagnostics Audio Translation NDI App)
+set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI App)
 
 set(AUDIT_ALLOWED_Utils       "Utils")
 set(AUDIT_ALLOWED_Config      "Config;Utils")
+set(AUDIT_ALLOWED_Security    "Security;Utils")
 set(AUDIT_ALLOWED_Diagnostics "Diagnostics;Utils")
 set(AUDIT_ALLOWED_Audio       "Audio;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Translation "Translation;Utils;Diagnostics")
 set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics")
-set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Diagnostics;Utils")
+set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Utils")
+
+# Protocol/transport headers are forbidden under src/ except in the module that
+# owns them. Config owns JSON text for config.json (nlohmann/json.hpp, used in a
+# .cpp only). Task 009 will add the OpenAI backend module with its own exception;
+# until then nothing else may reference a wire protocol.
+set(AUDIT_ALLOWED_PROTOCOL_Config "nlohmann/json.hpp")
 
 set(audit_juce_pattern "^juce|juceheader")
 set(audit_protocol_pattern "openai|websocket|nlohmann|asio|curl|json")
@@ -89,8 +96,13 @@ foreach(source IN LISTS audit_sources)
 
         # 1. protocol/transport leakage
         if(target_lower MATCHES "${audit_protocol_pattern}")
-            list(APPEND audit_failures
-                "AUDIT_PROTOCOL_INCLUDE: ${source} includes <${target}>; protocol/transport headers are not allowed under src/ at this stage")
+            set(allowed_protocol "${AUDIT_ALLOWED_PROTOCOL_${module}}")
+            list(FIND allowed_protocol "${target_lower}" protocol_index)
+
+            if(protocol_index EQUAL -1)
+                list(APPEND audit_failures
+                    "AUDIT_PROTOCOL_INCLUDE: ${source} includes <${target}>; protocol/transport headers are not allowed in module '${module}/'")
+            endif()
             continue()
         endif()
 

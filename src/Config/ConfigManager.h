@@ -1,45 +1,21 @@
 #pragma once
 //
-// ConfigManager - single Settings area (SPEC "Configuration").
+// ConfigManager - the single Settings area in memory (SPEC "Configuration").
 //
-// This task only establishes the boundary: who may read settings, how a change is
-// announced, and where secrets are NOT allowed to live. Atomic persistence,
-// schema/versioning and corruption recovery are task 003; the API key is task 015
-// and lives in the credential store, never in AppConfig.
+// Owns the current AppConfig, refuses invalid updates, notifies listeners and
+// delegates persistence to ConfigStore. Secrets are not part of AppConfig; they
+// belong to the credential store interface (src/Security), so nothing here can
+// write a credential into config.json (AGENTS.md 10).
 
-#include <cstdint>
+#include <functional>
+#include <optional>
 #include <string>
 #include <vector>
-#include <vector>
+
+#include "Config/AppConfig.h"
+#include "Config/ConfigStore.h"
 
 namespace liveai {
-
-/// Plain data settings. Implementation details of audio/network backends are not
-/// stored here (AGENTS.md 7: Config contains no backend internals).
-struct AppConfig
-{
-    // Audio
-    int sampleRate = 48000;
-    int bufferFrames = 480;
-    int inputChannel = 1;
-    int outputChannel = 1;
-    float inputGainDb = 0.0f;
-    float outputGainDb = 0.0f;
-
-    // Translation
-    std::string inputLanguage = "en";
-    std::string outputLanguage = "ru";
-    std::string interpreterInstructions;   // SPEC "Translation instructions"
-
-    // NDI
-    bool ndiEnabled = false;
-    std::string ndiStreamName = "LiveAI Interpreter";
-
-    // Latency/buffer tuning
-    int jitterBufferMs = 120;
-
-    std::uint32_t schemaVersion = 1;
-};
 
 /// Implemented by anything that must react to a settings change. Callbacks run on
 /// the thread that called update(); they must not block on realtime work.
@@ -53,26 +29,51 @@ public:
 class ConfigManager
 {
 public:
+    /// Starts from the operator defaults. Use load() to read the persisted file.
     ConfigManager();
 
-    const AppConfig& current() const noexcept { return current_; }
+    /// With a store, load()/save() know where the file lives.
+    explicit ConfigManager(config::ConfigStore store);
 
-    /// Validates then applies; returns false and leaves state untouched when the
-    /// value is invalid. Notifies listeners after a successful apply.
+    /// Points the manager at a config file without reading it yet.
+    void setStore(config::ConfigStore store);
+    const config::ConfigStore* store() const noexcept { return store_ ? &*store_ : nullptr; }
+
+    const AppConfig& current() const noexcept { return current_; }
+    const config::LoadResult& lastLoad() const noexcept { return lastLoad_; }
+    bool hasStore() const noexcept { return store_.has_value(); }
+
+    /// Reads the file. Always leaves a usable configuration: on damage the store
+    /// quarantines the file and returns defaults or the backup, and the outcome is
+    /// reported through lastLoad(). Returns false only when nothing could be read.
+    bool load(std::string& note);
+
+    /// Writes the current configuration atomically. Returns false with a message
+    /// when validation or the filesystem fails; the previous file stays intact.
+    bool save(std::string& error);
+
+    /// Validates then applies. An invalid candidate is refused in full: no part of
+    /// it is applied, so the UI cannot end up with a half-written state.
     bool update(AppConfig candidate, std::string& error);
 
-    /// Registers a listener; ownership stays with the caller.
+    /// update() + save() in one step, for settings dialogs.
+    bool updateAndSave(AppConfig candidate, std::string& error);
+
+    /// Applies values that came from another component (e.g. a device selected in
+    /// the UI) and notifies listeners. Validation is performed on the merged result.
+    bool updateWith(std::string& error, const std::function<void(AppConfig&)>& mutate);
+
     void addListener(IConfigListener& listener);
 
-    /// Test helper.
-    void resetForTests() noexcept;
-
-    /// Validates a candidate configuration. Task 003 extends this with the full
-    /// schema; boundary values are already enforced here.
-    static bool validate(const AppConfig& candidate, std::string& error);
+    /// Test helper: defaults, no listeners, no store.
+    void resetForTests();
 
 private:
+    void notify();
+
+    std::optional<config::ConfigStore> store_;
     AppConfig current_;
+    config::LoadResult lastLoad_;
     std::vector<IConfigListener*> listeners_;
 };
 

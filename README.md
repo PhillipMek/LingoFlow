@@ -7,9 +7,10 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-002 complete**. The repository contains a JUCE/CMake
-application, a portable core (`liveai_core`) with the module interfaces and Null
-implementations of the audio, translation and NDI boundaries, and unit tests.
+Status: **tasks 000-003 complete**. The repository contains a JUCE/CMake
+application, a portable core (`liveai_core`) with the module interfaces, Null
+implementations of the audio, translation and NDI boundaries, versioned
+configuration with safe persistence, and unit tests.
 **No real audio device is opened and no network request is sent yet** - the ASIO
 backend is task 004/005, the OpenAI backend is task 009.
 
@@ -23,6 +24,7 @@ Verified on this machine (`docs/environment-report.md` has the full evidence):
 | MSVC (Visual Studio 2022) | 19.44.35229 | local install |
 | CMake | 3.31.6-msvc6 | bundled in Visual Studio, **not on PATH** |
 | Ninja | 1.12.1 | bundled in Visual Studio, **not on PATH** |
+| nlohmann/json | v3.12.0 | CMake `FetchContent`; used only inside `src/Config/*.cpp` |
 | JUCE | 9.0.3 | local source tree, path passed with `-DLIVEAI_JUCE_PATH=...` |
 | ASIO SDK | 2.3.4 | local source tree (used from task 004 on) |
 | Waves SoundGrid ASIO driver | 16.5.197.301 | installed product |
@@ -101,6 +103,37 @@ cmake -S . -B build-debug ...               # juceaide fails: rcfile step
 Verified by running `juceaide rcfile` directly with ASCII and non-ASCII
 arguments: ASCII → exit 0, non-ASCII → exit 1.
 
+## Configuration
+
+Settings live in one file, `config.json`, next to the log:
+
+```text
+%APPDATA%\Live AI Interpreter\config.json          (Windows)
+~/.liveai/config.json                              (other platforms)
+```
+
+The file is versioned (`schemaVersion`, currently `1`) and grouped into `audio`,
+`translation`, `ndi`, `diagnostics`. Behaviour, all covered by tests:
+
+| Situation | What happens |
+|---|---|
+| no file yet | defaults are used, **nothing is written** |
+| one field invalid (bad rate, gain, language, log level...) | only that field falls back to its default, the rest is kept, each repair is logged as a warning |
+| unknown field or section | reported as ignored, never written back out |
+| not valid JSON | the file is renamed to `config.json.corrupt-<timestamp>`, `%...config.json.bak` is used if present, otherwise defaults |
+| `schemaVersion` newer than this build | file is refused and left untouched, defaults are used |
+| `schemaVersion` missing | treated as version 0, migrated to the current version |
+| candidate settings fail validation | `update()` refuses them in full, `save()` refuses to write |
+
+Saving is atomic: write `<file>.tmp`, read it back and re-parse it, copy the
+previous file to `<file>.bak`, only then replace `<file>`.
+
+**Credentials are never in this file.** `api_key`, `token`, `secret`, `password`,
+`credential`, `authorization`, `bearer` (and their spellings) are detected while
+parsing, reported and dropped. They belong to `security::ISecretStore` (task 015
+implements it on Windows secure storage). The application must keep running when
+no credential exists: only the translation backend becomes unavailable.
+
 ## Layout
 
 ```text
@@ -110,7 +143,8 @@ src/App/                ApplicationController (composition root), JUCE entry poi
 src/Audio/              AudioEngine shell, IAudioBackend, Null/ device
 src/Translation/        ITranslationBackend contract, Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
-src/Config/             AppConfig + ConfigManager (validation only so far)
+src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
+src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
 tests/                  Catch2 unit tests + architecture boundary audit

@@ -14,8 +14,16 @@ add_library(liveai_core STATIC
     Utils/Log.cpp
     Utils/Log.h
 
+    Config/AppConfig.h
+    Config/ConfigSchema.cpp
+    Config/ConfigSchema.h
+    Config/ConfigStore.cpp
+    Config/ConfigStore.h
     Config/ConfigManager.cpp
     Config/ConfigManager.h
+
+    Security/ISecretStore.cpp
+    Security/ISecretStore.h
 
     Diagnostics/DiagnosticsManager.cpp
     Diagnostics/DiagnosticsManager.h
@@ -45,6 +53,10 @@ add_library(liveai::core ALIAS liveai_core)
 
 target_include_directories(liveai_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(liveai_core PUBLIC cxx_std_20)
+
+# nlohmann/json is a PRIVATE dependency: it stays inside Config/*.cpp, so no other
+# module (and no UI code) can start parsing JSON.
+target_link_libraries(liveai_core PRIVATE nlohmann_json::nlohmann_json)
 
 if(MSVC)
     target_compile_options(liveai_core PRIVATE /W4 /utf-8 /MP8)

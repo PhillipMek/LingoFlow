@@ -157,7 +157,7 @@ bool ApplicationController::startAudio(std::string& error)
     }
 
     const auto& cfg = config_.current();
-    if (!engine_.activate(*audioBackend_, cfg.sampleRate, cfg.bufferFrames, error))
+    if (!engine_.activate(*audioBackend_, cfg.audio.sampleRate, cfg.audio.bufferFrames, error))
         return false;
 
     lastAudioError_.clear();
@@ -180,9 +180,9 @@ bool ApplicationController::startSession(std::string& error)
     translationBackend_->setSink(*this);
 
     translation::SessionRequest request;
-    request.pair.input = config_.current().inputLanguage;
-    request.pair.output = config_.current().outputLanguage;
-    request.instructions = config_.current().interpreterInstructions;
+    request.pair.input = config_.current().translation.inputLanguage;
+    request.pair.output = config_.current().translation.outputLanguage;
+    request.instructions = config_.current().translation.instructions;
 
     return translationBackend_->openSession(request, error);
 }
@@ -195,7 +195,7 @@ void ApplicationController::stopSession() noexcept
 
 bool ApplicationController::startNdi(std::string& error)
 {
-    if (!config_.current().ndiEnabled)
+    if (!config_.current().ndi.enabled)
         return true;   // disabled by settings: nothing to start, not a failure
 
     if (ndiOutput_ == nullptr)
@@ -204,7 +204,7 @@ bool ApplicationController::startNdi(std::string& error)
         return false;
     }
 
-    if (!ndiOutput_->start(config_.current().ndiStreamName, error))
+    if (!ndiOutput_->start(config_.current().ndi.streamName, error))
     {
         ndiOutput_->stop();
         return false;
@@ -271,6 +271,29 @@ AppStatus ApplicationController::status() const
 translation::SessionState ApplicationController::sessionState() const noexcept
 {
     return translationBackend_ != nullptr ? translationBackend_->state() : translation::SessionState::closed;
+}
+
+bool ApplicationController::loadSettings(const std::filesystem::path& file, std::string& note)
+{
+    config_.setStore(config::ConfigStore(file));
+
+    if (!config_.load(note))
+        return false;
+
+    // Recovery details belong in the log: an operator must be able to see that the
+    // file was repaired, not silently get defaults.
+    if (!note.empty())
+        log::info(kComponent, "settings: " + note);
+
+    for (const auto& problem : config_.lastLoad().problems)
+        log::warning(kComponent, "settings field " + problem.field + ": " + problem.message);
+
+    return true;
+}
+
+bool ApplicationController::saveSettings(std::string& error)
+{
+    return config_.save(error);
 }
 
 void ApplicationController::onTranslatedAudio(const float* samples, int frameCount, int sampleRate)
