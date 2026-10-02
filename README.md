@@ -16,9 +16,11 @@ Null implementations of the translation and NDI boundaries,
 versioned configuration with safe persistence, ASIO device discovery and device lifecycle
 on top of JUCE, and 163 tests.
 **No real translation runs yet** - the OpenAI backend is task 009, and the protocol it will
-code against is now verified against the live official documentation and frozen in
-`docs/openai-realtime-protocol.md` (dedicated `gpt-realtime-translate` endpoint, complete event
-surface, 24 kHz PCM16 audio contract, error mapping; every citation dated). What task 007 built is
+code against is verified against the live official documentation, frozen in
+`docs/openai-realtime-protocol.md`, and spot-checked against the real service on 2026-10-02
+(dedicated `gpt-realtime-translate` endpoint, complete event surface, 24 kHz PCM16 audio
+contract, graceful close, all 13 target language codes; every citation and probe dated).
+What task 007 built is
 the seam it will plug into: translated audio delivered through it is routed to the
 engine's jitter buffer and reaches the audience through the same single output source as
 everything else, proven end to end with the mock. On a real device, until 009 the only

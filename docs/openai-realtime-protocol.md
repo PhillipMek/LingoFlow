@@ -140,7 +140,11 @@ No `*.done` events exist in the reference. Do not wait for one; do not invent on
 - `session.output_audio.delta` carries PCM16 whose "length can vary"; clients must decode
   and queue the whole delta, never assume a fixed size [R3];
 - the cookbook states translated audio is emitted as **base64 24 kHz mono PCM16 in
-  200 ms chunks** [R8]; the event's `format` field enum is `"pcm16"` [R3];
+  200 ms chunks** [R8]; the event's `format` field enum is `"pcm16"` [R3]. Measured
+  live (section 15): the server delivered fixed 19200-byte (400 ms) deltas while
+  `elapsed_ms` advanced 200 ms per delta, arriving in bursts above real time - the
+  backend must trust the event fields, accept variable block sizes, and the jitter
+  buffer must be sized for bursts, not for the nominal chunk time;
 - `sample_rate` and `channels` are *optional* fields on the event [R3]. The backend must
   treat them as authoritative when present and validate against what it assumed; the
   value the real API sends must be observed at the human checkpoint (14.2).
@@ -216,7 +220,10 @@ What it does **not** provide (do not invent):
 - no resume/attach protocol for translation sessions - reconnection means a new
   WebSocket, a new `session.created`, and a fresh `session.update`;
 - no documented session duration value or expiry behavior beyond the presence of
-  `expires_at` (seconds since epoch) [R3];
+  `expires_at` (seconds since epoch) [R3]; the live probe observed `expires_at` =
+  creation + 3600 s on every session (section 15) - treat one hour as the practical
+  session ceiling and reopen proactively (task 010); what the server does AT expiry is
+  still unobserved;
 - no documented WebSocket close-code semantics for this endpoint;
 - no "flush done" signal other than `session.closed` itself.
 
@@ -317,7 +324,89 @@ machine. Before or during task 009/012, on a networked rig with a key:
 None of these block writing 009 (the backend can implement exactly what is documented);
 they block declaring 009/012 PASS on real traffic.
 
-## 15. References (all fetched 2026-10-02, official OpenAI properties)
+*Update 2026-10-02: the owner supplied a key; items 1, 3, 4 and 6 (and most of 2) were
+verified live the same day - results in section 15. Items 2 (full) and 5 stay open.*
+
+## 15. Live verification log (2026-10-02, owner-provided key, real traffic)
+
+The owner supplied an `OPENAI_API_KEY` (User-scope environment variable; value never
+logged or committed). Probes run against the live service, closing parts of section 14:
+
+- **14.1 CLOSED - model acceptance**: WS upgrade to the translation endpoint returned
+  `101 Switching Protocols`; the first server event was `session.created` with
+  `type:"translation"`, `model:"gpt-realtime-translate"`, `id:"sess_…"` exactly as [R3].
+- **Server defaults observed**: `audio.input = {noise_reduction: null, transcription:
+  null}`, `audio.output.language = "es"`. We configure what we need; the default is not
+  ours to rely on.
+- **14.3 CLOSED (ordering)**: `session.update` sent immediately after `session.created`
+  was answered by `session.updated` with the resolved config (~0.2 s round trip). Either
+  event may be the "usable" trigger; 009 will treat `session.updated` as usable because
+  our configuration must be confirmed before audio flows (this is now a documented
+  product decision, not a protocol fact).
+- **14.4 CLOSED - language codes**: all 13 target languages accepted as ISO 639-1 codes
+  (`es pt fr ja ru zh de ko hi id vi it en`); `ru` verified explicitly with the resolved
+  session echoing `language:"ru"`. Most ISO 639-3 forms (`spa`, `rus`, `deu`…) are also
+  accepted; `zho` is REJECTED with `invalid_request_error/invalid_value`, and the error
+  message itself disclosed the supported-value set (the 2-letter list incl. `af ar az be
+  bg bs …` - the 70+ input languages of [R8] as codes). The 011 manifest should use
+  ISO 639-1 two-letter codes only.
+- **14.6 CLOSED (initial value)**: `expires_at` = creation time + 3600 s on every observed
+  session. Session max duration 60 minutes: 010 MUST schedule a proactive reopen shortly
+  before expiry (an operator-visible requirement for events longer than one hour).
+- **14.2 PARTIALLY CLOSED - output format**: 171 delivered `session.output_audio.delta`
+  events across two complete runs (11 s of English TTS speech in, target `ru`). EVERY
+  delta carried `sample_rate:24000, channels:1, format:"pcm16"` and exactly 19200 bytes
+  = 400 ms of PCM at 24 kHz (the cookbook's "200 ms chunks" [R8] is not what arrived;
+  the event fields were unanimous, and the raw stream was saved and measured).
+  Content analysis of the concatenated 1.6 MB stream, since a byte stream cannot reveal
+  its own rate directly: ~6.8 s of voiced content in ~34 s at the 24 kHz label - a
+  normal speaking rate for the 124-character Russian output; the same 1.6 MB read at a
+  48 kHz label would mean 3.4 s of speech for 124 characters (~2.5x speed, implausible).
+  Dominant pitch periods 95-116 samples = 207-253 Hz at 24 kHz, consistent with the
+  female TTS source under the model's documented voice adaptation [R8]. Even/odd sample
+  MAD ratio 0.22 - a single continuous stream, not duplicated stereo pairs. Verdict:
+  the delivered PCM is genuinely 24 kHz mono PCM16, as the events declare. An operator
+  ear-check of the saved `out_as_24k_mono.wav` is still welcome but not required to
+  proceed; overall translation QUALITY checks stay with 012/018 on real voice.
+- **NEW (measured) - delivery rate is bursty, above real time**: each delta advanced
+  `elapsed_ms` by 200 ms while carrying 400 ms of PCM (2x), and after `session.close`
+  the drain delivered ~200 KB/s (~4.7x real time). Arrival therefore runs consistently
+  and burstily AHEAD of consumption. Consequences fixed for 012: the jitter buffer's
+  default target (120 ms) and capacity (target+360 ms) are marginal for a single 400 ms
+  delta - defaults must be re-sized, and overflow policy (007's counted drops) is the
+  safety net, not an error path. This is measurement, not OpenAI documentation; 018
+  re-measures on real audio.
+- **Transcript deltas live**: `session.output_transcript.delta` (Russian text, 32 append-only
+  deltas, spacing included in the fragments) and `session.input_transcript.delta` (source
+  English) emitted with `elapsed_ms` advancing in 200 ms steps and repeating across
+  events - matching [R3] word for word. `gpt-realtime-whisper` accepted as
+  `audio.input.transcription.model`.
+- **Graceful close live**: `session.close` → remaining queued `session.output_audio.delta`
+  continued to arrive (68% of deltas post-close in one run) → then `session.closed`.
+  Rule 5 (007) is exactly right: after sending close, the backend MUST keep draining
+  until `session.closed`; closing the socket early drops translated audio.
+- **NEW (not in docs) - transport keepalive**: one idle probe (connected, configured,
+  no audio, silent) was closed by the server with WS close reason `keepalive ping
+  timeout`. Respond to server pings (RFC-6455 pong) AND send periodic client pings
+  (~4-15 s) in 009; also start streaming audio promptly after opening.
+- **NEW - key scopes**: this key gets `403 Missing scopes: api.model.read` on
+  `GET /v1/models` while working fine on the translations endpoint. Consequence for
+  011: dynamic capability discovery via `/v1/models` is NOT available with this key -
+  the versioned capability manifest (AGENTS.md 9) is the path, not a fallback.
+- **NEW - quality caveat for synthetic input**: on TTS voice the translation stuttered
+  and merged words ("сетидля"); this is why 012/018 human checks use real microphone
+  audio. Also visible: translated audio duration far exceeded source duration at times
+  (interpretation verbosity) - jitter buffer sizing (018) must budget for that.
+
+Probes used a raw Node.js WebSocket client (built-ins only): handshake with the
+`Authorization: Bearer` header, base64 24 kHz PCM16 chunks appended at a 200 ms cadence,
+`session.update`/`session.close` as documented. No product source was involved.
+
+Remaining open items from section 14: 14.5 (silence/ducking behavior needs real speech
+in the target language - 012), and the long-run semantics of `expires_at` (what the
+server sends at expiry - 010/024).
+
+## 16. References (all fetched 2026-10-02, official OpenAI properties)
 
 - [R1] Realtime translation guide — `https://developers.openai.com/api/docs/guides/realtime-translation`
   (endpoint vs voice-agent table, transports, WS examples, `session.close` flush semantics,
@@ -353,7 +442,10 @@ they block declaring 009/012 PASS on real traffic.
 - [R-doc] `docs/device-defaults.md` (this repo): engine dev rate 48 kHz — context for
   section 7, not an OpenAI source.
 
-## 16. What task 009 may rely on, in one paragraph
+The live probe data of section 15 is this repository's own measurement record from
+2026-10-02, not an OpenAI publication.
+
+## 17. What task 009 may rely on, in one paragraph
 
 Open a WebSocket to `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate`
 with the `Authorization: Bearer` header (and optionally `OpenAI-Safety-Identifier`),
@@ -366,4 +458,8 @@ session is open, deliver `session.output_audio.delta` (base64 PCM16, validate
 `error` events through the category table in section 9 without the session dying
 (most are recoverable), and on close send `session.close`, keep reading until
 `session.closed`, then drop the socket - with all resampling (48↔24) inside the
-backend's worker threads and nothing invented beyond this file.
+backend's worker threads and nothing invented beyond this file. Three live additions
+(section 15): treat `session.updated` as the usable trigger; answer server pings AND
+send periodic client pings (a silent connection was closed with `keepalive ping
+timeout`); expect output deltas that arrive in bursts well above real time and continue
+for a moment after `session.close`, so drain fully before dropping the socket.
