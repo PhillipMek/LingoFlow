@@ -103,7 +103,7 @@ architecture is explicitly non-realtime:
 | `IAudioProcessor::onAudioConfigurationChanged` | non-realtime | after `open()`, before first block |
 | `AudioEngine::activate / configure / deactivate` | control thread | the only place pipeline memory is allocated or released |
 | `AudioEngine::setInputGainDb / setOutputGainDb / setInputMuted / setOutputMuted / setGainRampMs` | any thread, UI in particular | relaxed atomic publish; the callback picks the new target up at the start of its next block. No lock, no allocation, no wait |
-| `ITranslationSink::on*` | network/worker | enqueue only, never play directly |
+| `ITranslationSink::on*` (audio, text, state, error) | network/worker | enqueue only, never play directly; delivered audio goes to the engine's jitter buffer, wrong-rate blocks are rejected and counted, never resampled in silence |
 | `INdiOutput::publish` | worker | drop on pressure, never block the producer |
 | `DiagnosticsManager::count*` | any, incl. audio | relaxed atomics |
 | `DiagnosticsManager::snapshot`, `note*` with strings | UI/worker | mutex-guarded, never from the audio thread |
@@ -236,9 +236,86 @@ accounting required to close) they cover the three failure modes that matter: al
 blocking, and losing audio without counting it.
 
 `AudioEngine::processAudio` outputs silence while nothing feeds the jitter buffer, and
-that is still deliberate: there is no translated audio source before task 012. The probe
-tool adds `--loopback`, which turns the same pipeline into a measurable end-to-end path on
+that is still deliberate: the only sources are loopback (probe today, developer mode in
+task 019) and translated audio delivered through the task 007 contract. The probe tool
+adds `--loopback`, which turns the same pipeline into a measurable end-to-end path on
 a real device.
+
+## Translation contract (task 007)
+
+`Translation/ITranslationBackend.h` is the whole seam between the product and any
+translation provider. It is a contract, not a skeleton: six lifecycle rules are stated
+in the header and enforced by the reference implementation the tests run against, so
+task 009 is written against behaviour that already has proof, not against comments.
+
+* **The shape** (SPEC "Translation Provider Interface"): `openSession(SessionRequest)` /
+  `submitAudio(float mono)` / `closeSession()` on the control side; five sink callbacks
+  on the delivery side - translated audio, partial text, final text, session state and
+  errors. Audio and text are separate methods on purpose (SPEC: "The audio callback and
+  text callback must be independent") and the contract tests prove the sink sees one
+  without the other.
+* **`SessionRequest` carries rates and an opaque model string.** The backend cannot
+  translate what it does not know the rate of, and the application cannot play what it
+  did not ask for; both numbers are in the request, and the delivered block repeats its
+  actual rate in every call so the receiver never has to trust the setup. `model` is an
+  opaque string - empty means "backend default", the set of legal values comes from
+  task 008's documentation research, not from the application's imagination (AGENTS.md 8).
+* **`TranslationError`** has five categories (`connection`, `rejectedRequest`,
+  `audioFormat`, `protocol`, `internal`) and a `fatal` flag. Categories are vocabulary
+  the product owns; task 009 maps provider-specific failures onto them, so no OpenAI
+  error name crosses this line. Fatal means "this session is over" - it never means
+  "stop anything": the controller logs, counts and records it, and AGENTS.md 12 holds
+  the audio path running either way.
+* **Every transition reports exactly once, and a refusal that changes nothing reports
+  nothing.** That is what makes the state trace assertable, which is what makes the
+  reconnect logic of task 010 testable.
+* **`closeSession()` guarantees no sink callbacks after it returns.** For a real
+  backend that means joining or draining its worker inside close. This guarantee is
+  load-bearing for shutdown order: `ApplicationController::stop()` closes the session
+  before deactivating the device, so a late network callback can never write into a
+  destroyed pipeline. The controller's own guards (checked drop into `outputJitter`,
+  counted in `rejectedAudioFrames`) are the second layer, for the callbacks task 010
+  will one day race against a restart.
+* **Translated audio has exactly one delivery route.** The controller writes accepted
+  blocks into the engine's output jitter buffer - the one source of audible audio from
+  task 005. Wrong-rate blocks are rejected and counted, never silently resampled or
+  played fast: a resampler does not exist yet and inventing one outside task 012/018
+  would change measured latency without telling anyone.
+* **Diagnostics answer three questions separately**: `translatedAudioFrames` (what was
+  accepted), `rejectedAudioFrames` (what arrived unusable - rate, null, empty) and
+  `translatedAudioDroppedFrames` (what our own full buffer dropped). "The translator
+  stopped delivering" and "delivery went somewhere wrong" are different operator
+  problems and get different numbers.
+* **Deliberately not here yet**: typed text events (`TranslationTextEvent`,
+  sequence numbers, timestamps) belong to task 013, and `getCapabilities()` to task 011
+  - both extension points are named in the header, so neither can be quietly invented
+  by a task that was not its owner.
+
+### Where the mock lives, and why
+
+`tests/support/MockTranslationBackend.{h,cpp}` is the deterministic reference
+implementation: no threads, no timers, no clock - callbacks fire synchronously inside
+the call that produced them, and per-session state resets on reopen. Determinism is a
+contract obligation, not a convenience: the tests run the identical script twice and
+compare whole callback traces, and the end-to-end suite asserts exact float values
+(0.4 in, -0.2 out) at the device output.
+
+It lives in the test tree because task 019 makes "mock behaviour leaking into
+production" a FAIL criterion, and `src/` keeps only the Null backend - a shell that
+produces nothing, precisely so that no subsystem can mistake it for translation
+(AGENTS.md 19). Task 019's interactive mock is a different thing built on top of this
+contract.
+
+### End to end without a provider
+
+The integration suite (`tests/integration/TestTranslationEndToEnd.cpp`) runs the whole
+chain on the Null audio device and the mock: device callback → input gain → ring →
+submit → mock → translated audio → controller → jitter buffer → output gain → wire,
+and proves four operator-relevant properties: buffered translation is what plays (not
+the microphone), a wrong-rate delivery silences nothing else and stops nothing else
+(text keeps flowing to NDI and history counters), a fatal error leaves
+`status().audio == running` and puts the reason into `status().detail`, and restart
+opens a fresh session whose first submit behaves like a first submit again.
 
 ## Status path to the UI
 

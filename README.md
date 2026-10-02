@@ -7,16 +7,18 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-006 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-007 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
-input->output loopback, Null implementations of the translation and NDI boundaries,
+input->output loopback, the translation backend contract with a deterministic test mock,
+Null implementations of the translation and NDI boundaries,
 versioned configuration with safe persistence, ASIO device discovery and device lifecycle
-on top of JUCE, and 144 tests.
-**No translated audio reaches a real device and no network request is sent yet** -
-the OpenAI backend is task 009 and translated audio reaches the output in task 012. The
-operator application does open the ASIO device named in settings, but until 012 the only
+on top of JUCE, and 163 tests.
+**No real translation runs yet** - the OpenAI backend is task 009. What task 007 built is
+the seam it will plug into: translated audio delivered through it is routed to the
+engine's jitter buffer and reaches the audience through the same single output source as
+everything else, proven end to end with the mock. On a real device, until 009 the only
 thing that can leave on the output is loopback audio, and that has to be started
 explicitly.
 
@@ -73,10 +75,11 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-144 CTest entries: Catch2 unit/integration suites (including the gain-stage suite), the
-realtime allocation suite in its own binary, the architecture boundary audit plus its
-self-test, the realtime safety audit plus its self-test, and the two device entries that
-run the ASIO tool's driver-free modes.
+163 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+suites), the end-to-end integration suite that runs the whole pipeline on the
+deterministic mock, the realtime allocation suite in its own binary, the architecture
+boundary audit plus its self-test, the realtime safety audit plus its self-test, and the
+two device entries that run the ASIO tool's driver-free modes.
 
 ```powershell
 cmd /c "call $vccmd && `"$cmake`" --test-dir $dbg --output-on-failure"
@@ -254,6 +257,39 @@ without changing what the translator was fed). Behaviour, all covered by tests:
   glide 20 ms`. The slider, the numeric box, the reset button and the mute button themselves
   are task 014; the engine API they will call already exists.
 
+## Translation contract and the deterministic mock (task 007)
+
+`src/Translation/ITranslationBackend.h` is now a complete contract, not a skeleton:
+lifecycle, translated audio, text, errors and state, with six numbered rules that the
+reference implementation enforces and the tests assert. What this means concretely:
+
+* **Session requests carry rates.** The backend is told at what rate `submitAudio()` will
+  arrive and at what rate the answer must be; every delivered block repeats its actual
+  rate, so the receiver never trusts setup alone. Blocks at a wrong rate are refused and
+  counted (`rejectedAudioFrames`), never silently resampled - no resampler exists, and
+  playing 16 kHz at 48 kHz is not an option.
+* **Errors have product vocabulary.** Five categories (`connection`, `rejectedRequest`,
+  `audioFormat`, `protocol`, `internal`) and a fatal flag; task 009 maps provider
+  failures onto them, so no OpenAI error name crosses the seam. A fatal error ends the
+  session and changes nothing else: AGENTS.md 12 holds the audio path open, the reason
+  goes to counters, log and `status().detail`.
+* **`closeSession()` guarantees no callbacks after it returns.** That is what lets the
+  controller stop the session before the device without a race.
+* **Every state transition is reported exactly once; a refusal that changes nothing
+  reports nothing.** This makes the trace assertable - which is what task 010's
+  reconnect logic will be built on.
+* **The deterministic mock lives in `tests/support/`, not in the product.** No threads,
+  no timers, no clock: callbacks fire synchronously, scripts replay identically, and the
+  whole chain is testable without a network. The product's Null backend remains silent on
+  purpose (AGENTS.md 19); task 019's mock *mode* is a different, built-on-top thing.
+* **End to end is proven on the mock:** device callback → input gain → ring → submit →
+  mock → translated audio → controller → jitter buffer → output gain → wire, with exact
+  float values checked at the output. The mock's audio is deliberately sign-flipped and
+  scaled so it can never be mistaken for loopback.
+* **Typed text events (`TranslationTextEvent`) and `getCapabilities()` are deliberately
+  absent** - they are tasks 013 and 011; the contract names the extension points instead
+  of pre-inventing the types.
+
 ## Layout
 
 ```text
@@ -261,14 +297,14 @@ CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
-src/Translation/        ITranslationBackend contract, Null/ backend
+src/Translation/        ITranslationBackend contract (states, request, errors, sink), Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
-tests/                  Catch2 unit + pipeline tests, realtime allocation suite, architecture audit, realtime safety audit, self-tests
+tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend, realtime allocation suite, architecture audit, realtime safety audit, self-tests
 docs/                   licensing, device defaults, architecture, environment report
 third_party/            vendored JUCE 9.0.3 and ASIO SDK 2.3.4 (see third_party/README.md)
 tasks/                  agent task files
