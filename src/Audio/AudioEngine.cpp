@@ -6,10 +6,145 @@
 #include "Diagnostics/DiagnosticsManager.h"
 
 namespace liveai {
+namespace {
+
+/// How much input a ring must be able to hold without dropping. Two seconds is a
+/// deliberate bound, not a measurement: it is long enough that a short network stall
+/// does not lose microphone audio, and short enough that memory stays predictable
+/// (48000 * 2 * 4 B = 384 KB per channel).
+constexpr int kInputRingSeconds = 2;
+
+/// Minimum size in device blocks, so a tiny block size does not produce a ring that
+/// overflows on the first scheduler hiccup.
+constexpr std::size_t kMinBlocksBuffered = 4;
+
+/// SPEC "Output Jitter Buffer" suggests 20-500 ms. Config validates 0-1000; the
+/// engine clamps to the SPEC window so a hand-edited file cannot ask for a second
+/// of stored delay without anyone noticing.
+constexpr int kJitterMinMs = 0;
+constexpr int kJitterMaxMs = 500;
+
+std::size_t clampedJitterMs(int jitterBufferMs) noexcept
+{
+    return static_cast<std::size_t>(std::clamp(jitterBufferMs, kJitterMinMs, kJitterMaxMs));
+}
+
+} // namespace
 
 AudioEngine::AudioEngine(DiagnosticsManager* diagnostics) noexcept
     : diagnostics_(diagnostics)
 {
+}
+
+// --------------------------------------------------------------------------- sizing
+
+std::size_t AudioEngine::inputRingCapacity(int sampleRate, int blockFrames) noexcept
+{
+    const std::size_t framesPerSecond = sampleRate > 0 ? static_cast<std::size_t>(sampleRate) : 48000;
+    const std::size_t block = blockFrames > 0 ? static_cast<std::size_t>(blockFrames) : 480;
+
+    const std::size_t bySeconds = framesPerSecond * static_cast<std::size_t>(kInputRingSeconds);
+    const std::size_t byBlocks = block * kMinBlocksBuffered;
+
+    return std::max(bySeconds, byBlocks);
+}
+
+std::size_t AudioEngine::jitterTargetFrames(int sampleRate, int jitterBufferMs) noexcept
+{
+    const std::size_t framesPerSecond = sampleRate > 0 ? static_cast<std::size_t>(sampleRate) : 48000;
+    return framesPerSecond * clampedJitterMs(jitterBufferMs) / 1000;
+}
+
+std::size_t AudioEngine::jitterCapacity(int sampleRate, int jitterBufferMs, int blockFrames) noexcept
+{
+    const std::size_t target = jitterTargetFrames(sampleRate, jitterBufferMs);
+    const std::size_t block = blockFrames > 0 ? static_cast<std::size_t>(blockFrames) : 480;
+
+    // Room for the pre-roll plus one more pre-roll plus two blocks of slack, so the
+    // producer is never the reason a block is dropped.
+    const std::size_t byTarget = target * 2 + block * 2;
+
+    return std::max(byTarget, block * kMinBlocksBuffered);
+}
+
+// ------------------------------------------------------------------------- lifecycle
+
+bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChannels, int outputChannels,
+                                std::string& error)
+{
+    // A device that reports no channels is treated as mono rather than as an error:
+    // the driver has been observed to open with 1x1 configurations and the pipeline
+    // must still be able to run silence.
+    inputChannels = std::clamp(inputChannels, 1, 64);
+    outputChannels = std::clamp(outputChannels, 1, 64);
+
+    const std::size_t ringCapacity = inputRingCapacity(sampleRate, blockFrames);
+    const std::size_t jitterCapacityForChannel = jitterCapacity(sampleRate, jitterMs_.load(std::memory_order_relaxed), blockFrames);
+    const std::size_t jitterTarget = jitterTargetFrames(sampleRate, jitterMs_.load(std::memory_order_relaxed));
+
+    std::vector<std::unique_ptr<audio::AudioRingBuffer>> rings;
+    std::vector<std::unique_ptr<audio::AudioJitterBuffer>> jitters;
+    std::vector<std::unique_ptr<audio::LevelMeter>> inMeters;
+    std::vector<std::unique_ptr<audio::LevelMeter>> outMeters;
+
+    try
+    {
+        rings.reserve(static_cast<std::size_t>(inputChannels));
+        inMeters.reserve(static_cast<std::size_t>(inputChannels));
+
+        for (int channel = 0; channel < inputChannels; ++channel)
+        {
+            rings.push_back(std::make_unique<audio::AudioRingBuffer>(ringCapacity));
+            inMeters.push_back(std::make_unique<audio::LevelMeter>());
+        }
+
+        jitters.reserve(static_cast<std::size_t>(outputChannels));
+        outMeters.reserve(static_cast<std::size_t>(outputChannels));
+
+        for (int channel = 0; channel < outputChannels; ++channel)
+        {
+            jitters.push_back(std::make_unique<audio::AudioJitterBuffer>(jitterCapacityForChannel, jitterTarget));
+            outMeters.push_back(std::make_unique<audio::LevelMeter>());
+        }
+    }
+    catch (...)
+    {
+        // Allocation failure at setup time. This is the last place where it is
+        // allowed to be handled at all - never inside processAudio().
+        error = "could not allocate the audio pipeline (" + std::to_string(ringCapacity) + " input frames, "
+              + std::to_string(jitterCapacityForChannel) + " jitter frames)";
+        return false;
+    }
+
+    if (rings.empty() || jitters.empty() || !rings.front()->valid() || !jitters.front()->valid())
+    {
+        error = "audio pipeline geometry is invalid";
+        return false;
+    }
+
+    inputRings_ = std::move(rings);
+    outputJitters_ = std::move(jitters);
+    inputMeters_ = std::move(inMeters);
+    outputMeters_ = std::move(outMeters);
+
+    inputChannels_.store(static_cast<int>(inputRings_.size()), std::memory_order_relaxed);
+    outputChannels_.store(static_cast<int>(outputJitters_.size()), std::memory_order_relaxed);
+
+    pipelineReady_.store(true, std::memory_order_release);
+    return true;
+}
+
+void AudioEngine::releasePipeline() noexcept
+{
+    pipelineReady_.store(false, std::memory_order_release);
+
+    inputRings_.clear();
+    outputJitters_.clear();
+    inputMeters_.clear();
+    outputMeters_.clear();
+
+    inputChannels_.store(0, std::memory_order_relaxed);
+    outputChannels_.store(0, std::memory_order_relaxed);
 }
 
 bool AudioEngine::activate(audio::IAudioBackend& backend, const audio::DeviceRequest& request, std::string& error)
@@ -23,16 +158,30 @@ bool AudioEngine::activate(audio::IAudioBackend& backend, const audio::DeviceReq
     if (!backend.open(*this, request, error))
         return false;
 
+    const auto capabilities = backend.capabilities();
+
+    // The pipeline has to exist before the first callback: processAudio() may not
+    // allocate. Anything that fails here leaves the device closed again.
+    if (!buildPipeline(capabilities.sampleRate > 0 ? capabilities.sampleRate : request.sampleRate,
+                       capabilities.preferredBufferFrames > 0 ? capabilities.preferredBufferFrames : request.bufferFrames,
+                       capabilities.inputChannels,
+                       capabilities.outputChannels,
+                       error))
+    {
+        backend.close();
+        return false;
+    }
+
     backend_ = &backend;
 
     if (!backend.start(error))
     {
         backend.close();
         backend_ = nullptr;
+        releasePipeline();
         return false;
     }
 
-    const auto capabilities = backend.capabilities();
     onAudioConfigurationChanged(capabilities.sampleRate, capabilities.preferredBufferFrames);
 
     if (diagnostics_ != nullptr)
@@ -51,31 +200,151 @@ void AudioEngine::deactivate() noexcept
     backend_->close();
     backend_ = nullptr;
 
+    // The device is stopped, so no callback can be running: the buffers are released
+    // only after that. Consumers must have been stopped by their owner beforehand.
+    consumerAttached_.store(false, std::memory_order_relaxed);
+    releasePipeline();
+
     if (diagnostics_ != nullptr)
         diagnostics_->noteAudioBackendStopped();
 }
 
-void AudioEngine::processAudio(const float* const* input,
-                               float* const* output,
-                               int frameCount) noexcept
+void AudioEngine::setJitterBufferMs(int jitterBufferMs) noexcept
 {
-    // Realtime thread: fixed-size work only. No allocation, no logging, no
-    // network, no filesystem, no locks. Atomic relaxed counters are permitted.
+    const int clamped = static_cast<int>(clampedJitterMs(jitterBufferMs));
+    jitterMs_.store(clamped, std::memory_order_relaxed);
+
+    const std::size_t target = jitterTargetFrames(sampleRate_.load(std::memory_order_relaxed), clamped);
+
+    for (auto& jitter : outputJitters_)
+    {
+        if (jitter != nullptr)
+            jitter->setTargetFrames(target);
+    }
+}
+
+// -------------------------------------------------------------------------- realtime
+
+void AudioEngine::processAudio(const float* const* input,
+                              float* const* output,
+                              int frameCount) noexcept
+{
+    // Realtime thread: fixed-size work only. No allocation, no logging, no network,
+    // no filesystem, no locks. Relaxed atomics and memcpy are all that appears here.
     if (frameCount <= 0)
-        return;
+        return;   // an empty block is not work, and not a defect either
 
-    if (input == nullptr || output == nullptr || output[0] == nullptr)
-        return;
+    const std::size_t frames = static_cast<std::size_t>(frameCount);
 
-    // Silence is the correct output until translated audio exists (task 012):
-    // an underrun must never leak unprocessed microphone audio to the audience.
-    std::memset(output[0], 0, static_cast<std::size_t>(frameCount) * sizeof(float));
+    // Anything below this point is the backend breaking its contract: the interface
+    // promises `inputChannels` readable input pointers and `outputChannels` writable
+    // output pointers for frameCount frames. The engine reports it instead of
+    // pretending it processed audio, and still leaves silence on the wire.
+    if (output == nullptr)
+    {
+        malformedCallbacks_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    if (input == nullptr)
+    {
+        malformedCallbacks_.fetch_add(1, std::memory_order_relaxed);
+
+        if (output[0] != nullptr)
+            std::memset(output[0], 0, frames * sizeof(float));
+
+        return;
+    }
 
     blocks_.fetch_add(1, std::memory_order_relaxed);
     frames_.fetch_add(static_cast<std::uint64_t>(frameCount), std::memory_order_relaxed);
 
     if (diagnostics_ != nullptr)
         diagnostics_->countAudioBlock(frameCount);
+
+    const bool ready = pipelineReady_.load(std::memory_order_acquire);
+
+    // ------------------------------------------------------------- input side
+    if (ready)
+    {
+        const int channels = inputChannels_.load(std::memory_order_relaxed);
+        const bool forwarding = consumerAttached_.load(std::memory_order_relaxed);
+
+        for (int channel = 0; channel < channels; ++channel)
+        {
+            const float* source = input[channel];
+
+            if (source == nullptr)
+                continue;
+
+            inputMeters_[static_cast<std::size_t>(channel)]->measure(source, frames);
+            inputCaptured_.fetch_add(static_cast<std::uint64_t>(frameCount), std::memory_order_relaxed);
+
+            if (!forwarding)
+            {
+                // Nobody is draining the rings yet (no translation worker, no
+                // loopback). Counting this as an overrun would be a lie: nothing
+                // overflowed, there was simply no consumer.
+                inputDropped_.fetch_add(static_cast<std::uint64_t>(frameCount), std::memory_order_relaxed);
+                continue;
+            }
+
+            auto* ring = inputRings_[static_cast<std::size_t>(channel)].get();
+            const std::size_t written = ring->write(source, frames);
+
+            inputForwarded_.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
+
+            if (written != frames)
+            {
+                overruns_.fetch_add(1, std::memory_order_relaxed);
+
+                // Counted at engine level on purpose: deactivate() destroys the ring
+                // objects, and a counter that reads through to them would silently
+                // report 0 after shutdown, exactly when the operator wants to see it.
+                ringDropped_.fetch_add(static_cast<std::uint64_t>(frames - written), std::memory_order_relaxed);
+
+                if (diagnostics_ != nullptr)
+                    diagnostics_->countOverrun();
+            }
+        }
+    }
+
+    // ------------------------------------------------------------ output side
+    if (ready)
+    {
+        const int outChannels = outputChannels_.load(std::memory_order_relaxed);
+
+        for (int channel = 0; channel < outChannels; ++channel)
+        {
+            float* destination = output[channel];
+
+            if (destination == nullptr)
+                continue;
+
+            // The jitter buffer is the ONLY source of output audio, which is what makes
+            // it impossible for the microphone to reach the audience by accident.
+            const std::size_t taken = outputJitters_[static_cast<std::size_t>(channel)]->readOrSilence(destination, frames);
+
+            if (taken != frames)
+            {
+                outputSilence_.fetch_add(static_cast<std::uint64_t>(frames - taken), std::memory_order_relaxed);
+                underruns_.fetch_add(1, std::memory_order_relaxed);
+
+                if (diagnostics_ != nullptr)
+                    diagnostics_->countUnderrun();
+            }
+
+            outputMeters_[static_cast<std::size_t>(channel)]->measure(destination, frames);
+        }
+
+        return;
+    }
+
+    // No pipeline: nothing was ever configured, so only the contract's first channel
+    // can be answered. A real backend always goes through activate(), which builds the
+    // pipeline before the device starts; this branch exists for direct calls in tests.
+    if (output[0] != nullptr)
+        std::memset(output[0], 0, frames * sizeof(float));
 }
 
 void AudioEngine::onAudioConfigurationChanged(int sampleRate, int bufferFrames)
@@ -86,6 +355,48 @@ void AudioEngine::onAudioConfigurationChanged(int sampleRate, int bufferFrames)
 
     if (diagnostics_ != nullptr)
         diagnostics_->noteAudioGeometry(sampleRate, bufferFrames);
+}
+
+// -------------------------------------------------------------------------- readouts
+
+audio::AudioRingBuffer* AudioEngine::inputRing(int channel) noexcept
+{
+    if (channel < 0 || static_cast<std::size_t>(channel) >= inputRings_.size())
+        return nullptr;
+
+    return inputRings_[static_cast<std::size_t>(channel)].get();
+}
+
+audio::AudioJitterBuffer* AudioEngine::outputJitter(int channel) noexcept
+{
+    if (channel < 0 || static_cast<std::size_t>(channel) >= outputJitters_.size())
+        return nullptr;
+
+    return outputJitters_[static_cast<std::size_t>(channel)].get();
+}
+
+const audio::LevelMeter* AudioEngine::inputMeter(int channel) const noexcept
+{
+    if (channel < 0 || static_cast<std::size_t>(channel) >= inputMeters_.size())
+        return nullptr;
+
+    return inputMeters_[static_cast<std::size_t>(channel)].get();
+}
+
+const audio::LevelMeter* AudioEngine::outputMeter(int channel) const noexcept
+{
+    if (channel < 0 || static_cast<std::size_t>(channel) >= outputMeters_.size())
+        return nullptr;
+
+    return outputMeters_[static_cast<std::size_t>(channel)].get();
+}
+
+std::size_t AudioEngine::jitterFillFrames() const noexcept
+{
+    if (outputJitters_.empty() || outputJitters_.front() == nullptr)
+        return 0;
+
+    return outputJitters_.front()->available();
 }
 
 } // namespace liveai

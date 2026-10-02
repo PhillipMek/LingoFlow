@@ -25,6 +25,10 @@ namespace audio {
 /// port carries the FOH feed" is operator knowledge, not driver knowledge.
 struct DeviceRequest
 {
+    /// ASIO device name as reported by discovery (Platform/Asio/AsioDiscovery).
+    /// Empty means "no device selected yet", which the composition root treats as
+    /// "stay on the null backend" rather than as a license to pick any device.
+    std::string deviceId;
     int sampleRate = 48000;
     int bufferFrames = 480;
     int inputChannel = 1;

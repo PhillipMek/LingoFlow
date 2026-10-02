@@ -33,6 +33,14 @@ add_library(lingoflow_core STATIC
     Audio/IAudioBackend.h
     Audio/AudioEngine.cpp
     Audio/AudioEngine.h
+    Audio/AudioJitterBuffer.cpp
+    Audio/AudioJitterBuffer.h
+    Audio/AudioLoopback.cpp
+    Audio/AudioLoopback.h
+    Audio/AudioRingBuffer.cpp
+    Audio/AudioRingBuffer.h
+    Audio/LevelMeter.cpp
+    Audio/LevelMeter.h
     Audio/Asio/AsioDeviceInfo.cpp
     Audio/Asio/AsioDeviceInfo.h
     Audio/Null/NullAudioBackend.cpp
@@ -67,6 +75,36 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# lingoflow_platform_asio - the JUCE-backed ASIO adapter (task 004/005).
+#
+# A separate target because it is the only code that links juce_audio_devices:
+# the portable core stays JUCE-free, and both consumers (the operator app and the
+# probe tool) inherit the same JUCE_ASIO=1 setting. That matters: JUCE compiles the
+# module sources per target, so compiling JuceAsioBackend with ASIO on and the app
+# with ASIO off would link two different definitions of the same classes.
+# ---------------------------------------------------------------------------
+add_library(lingoflow_platform_asio STATIC
+    Platform/Asio/AsioDiscovery.cpp
+    Platform/Asio/AsioDiscovery.h
+    Platform/Asio/JuceAsioBackend.cpp
+    Platform/Asio/JuceAsioBackend.h
+    Platform/Asio/JuceAsioCommon.h)
+
+target_compile_definitions(lingoflow_platform_asio PUBLIC JUCE_ASIO=1)
+
+target_link_libraries(lingoflow_platform_asio
+    PUBLIC
+        lingoflow::core
+        juce::juce_audio_devices
+        juce::juce_events)
+
+if(MSVC)
+    target_compile_options(lingoflow_platform_asio PRIVATE /W4 /utf-8 /MP8)
+endif()
+
+set_target_properties(lingoflow_platform_asio PROPERTIES FOLDER "Core")
+
+# ---------------------------------------------------------------------------
 # Operator application (JUCE GUI shell only at this stage)
 # ---------------------------------------------------------------------------
 juce_add_gui_app(LingoFlow
@@ -93,6 +131,7 @@ target_compile_definitions(LingoFlow
 target_link_libraries(LingoFlow
     PRIVATE
         lingoflow::core
+        lingoflow_platform_asio
         juce::juce_gui_basics
         juce::juce_data_structures
     PUBLIC
@@ -105,33 +144,25 @@ endif()
 
 set_target_properties(LingoFlow PROPERTIES FOLDER "App")
 set_target_properties(lingoflow_core PROPERTIES FOLDER "Core")
+set_target_properties(lingoflow_platform_asio PROPERTIES FOLDER "Core")
 
 # ---------------------------------------------------------------------------
-# lingoflow_asio_probe - ASIO discovery/lifecycle verification tool (task 004).
+# lingoflow_asio_probe - ASIO discovery/lifecycle/loopback verification tool.
 #
-# This is the only JUCE-dependent target besides the operator app, and the only
-# place that links juce_audio_devices. JUCE ASIO support is switched on here with
-# JUCE_ASIO=1; JUCE 9 carries the ASIO interface headers itself, and
-# third_party/asiosdk holds the full SDK for driver-side/reference work.
+# It links the same adapter the operator app links, so whatever this tool proves
+# about a device is what the product actually does. JUCE_ASIO=1 arrives through
+# lingoflow_platform_asio.
 # ---------------------------------------------------------------------------
 add_executable(lingoflow_asio_probe
-    Platform/Asio/AsioDiscovery.cpp
-    Platform/Asio/JuceAsioBackend.cpp
     Platform/Asio/AsioProbeMain.cpp)
 
-# JUCE_ASIO=1 is what switches the JUCE ASIO backend on. JUCE 9 carries the ASIO
-# interface headers itself (modules/juce_audio_devices/native/asio), the vendored
-# third_party/asiosdk is for driver-side and reference host work.
 target_compile_definitions(lingoflow_asio_probe
     PRIVATE
-        JUCE_ASIO=1
         JUCE_STANDALONE_APPLICATION=1)
 
 target_link_libraries(lingoflow_asio_probe
     PRIVATE
-        lingoflow::core
-        juce::juce_audio_devices
-        juce::juce_events
+        lingoflow_platform_asio
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

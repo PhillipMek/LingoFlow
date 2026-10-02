@@ -1,15 +1,19 @@
-// lingoflow_asio_probe - ASIO discovery and lifecycle verification tool (task 004).
+// lingoflow_asio_probe - ASIO discovery, lifecycle and loopback verification tool.
 //
-// It exercises the same code paths the application will use in task 005:
+// It exercises exactly the code paths the application uses:
 //   * Platform/Asio/AsioDiscovery   - enumeration and capability probing
 //   * Platform/Asio/JuceAsioBackend - open/start/stop/close through audio::IAudioBackend
-//   * Audio/AudioEngine             - the realtime sink the backend drives
+//   * Audio/AudioEngine             - the realtime pipeline (ring, jitter, meters)
+//   * Audio/AudioLoopback           - input -> output loopback worker
 //
 // Modes:
-//   --list                 enumerate ASIO devices (registry-only scan, driver untouched)
-//   --verify               compare JUCE enumeration with HKLM\SOFTWARE\ASIO contents
-//   --probe <id> [--start] open a device, read capabilities, optionally start/stop once
-//   --lifecycle <id> [--cycles N]  repeated open/start/stop/close through AudioEngine
+//   --list                     enumerate ASIO devices (registry-only, no driver load)
+//   --verify                   compare JUCE enumeration with HKLM\SOFTWARE\ASIO contents
+//   --probe <id> [--start]     open a device, read capabilities, optionally start/stop once
+//   --lifecycle <id> [--cycles N]   repeated open/start/stop/close through AudioEngine
+//   --loopback <id> [--seconds N] [--input M] [--output K] [--jitter MS]
+//                              run the real device through the engine with input->output
+//                              loopback and print measured levels (task 005 hardware check)
 //   --help
 //
 // Exit codes:
@@ -31,7 +35,9 @@
 #include <juce_events/juce_events.h>
 
 #include "Audio/AudioEngine.h"
+#include "Audio/AudioLoopback.h"
 #include "Audio/Asio/AsioDeviceInfo.h"
+#include "Audio/LevelMeter.h"
 #include "Diagnostics/DiagnosticsManager.h"
 #include "Platform/Asio/AsioDiscovery.h"
 #include "Platform/Asio/JuceAsioBackend.h"
@@ -44,13 +50,17 @@ using namespace liveai;
 void printUsage()
 {
     std::cout <<
-        "lingoflow_asio_probe - ASIO discovery and lifecycle check\n"
+        "lingoflow_asio_probe - ASIO discovery, lifecycle and loopback check\n"
         "  --list                      enumerate ASIO devices (no driver is loaded)\n"
         "  --verify                    check enumeration against HKLM\\SOFTWARE\\ASIO\n"
         "  --probe <device-id> [--start]  open device, read capabilities (optionally start/stop)\n"
         "  --lifecycle <device-id> [--cycles N]  open/start/stop/close cycles via AudioEngine\n"
+        "  --loopback <device-id> [--seconds N] [--input M] [--output K] [--jitter MS]\n"
+        "        run the device through AudioEngine with input->output loopback and print the\n"
+        "        measured input/output levels once per second (task 005 hardware check)\n"
         "  --help                      this text\n"
-        "exit: 0 ok, 1 verification failed, 2 device refused to open, 3 usage error\n";
+        "exit: 0 ok, 1 verification failed / no callbacks / inconclusive silence,\n"
+        "      2 device refused to open, 3 usage error\n";
 }
 
 std::string findOption(int argc, char** argv, std::string_view name)
@@ -62,6 +72,27 @@ std::string findOption(int argc, char** argv, std::string_view name)
             return i + 1 < argc ? std::string(argv[i + 1]) : std::string();
     }
     return {};
+}
+
+/// findOption parsed as a decimal integer, with `fallback` when it is absent or not
+/// a number (atoi would silently return 0, which is a channel index nobody means).
+int readIntOption(int argc, char** argv, std::string_view name, int fallback)
+{
+    const std::string text = findOption(argc, argv, name);
+
+    if (text.empty())
+        return fallback;
+
+    for (const char character : text)
+    {
+        if (character < '0' || character > '9')
+        {
+            std::cout << "option --" << name.substr(2) << " needs a positive number, got '" << text << "'\n";
+            return fallback;
+        }
+    }
+
+    return std::atoi(text.c_str());
 }
 
 bool hasFlag(int argc, char** argv, std::string_view name)
@@ -339,6 +370,131 @@ int runLifecycle(const std::string& deviceId, int cycles)
 
 } // namespace
 
+/// The task 005 hardware check, as one command. Runs the real device through the
+/// engine with the input->output loopback worker and prints, once per second, the
+/// levels the engine actually measured: what arrived on the ASIO input and what is
+/// leaving on the ASIO output.
+///
+/// On a bench with a SoundGrid server the expectation is simple to see: make noise on
+/// the patched console channel and the input level moves; because loopback copies that
+/// same audio to the output after the jitter pre-roll, the output level follows it,
+/// delayed by roughly --jitter milliseconds. Without a server this PC only proves that
+/// the machinery runs: both levels stay at silence, which is the honest reading, and the
+/// tool says so instead of calling it a pass.
+int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int outputChannel, int jitterMs)
+{
+    juce::ScopedJuceInitialiser_GUI gui;   // ASIO internals use juce::Timer
+
+    DiagnosticsManager diagnostics;
+    AudioEngine engine(&diagnostics);
+    platform::JuceAsioBackend backend(deviceId);
+
+    engine.setJitterBufferMs(jitterMs);
+
+    audio::DeviceRequest request;
+    request.deviceId = deviceId;
+    request.sampleRate = 48000;
+    request.bufferFrames = 480;
+    request.inputChannel = inputChannel;
+    request.outputChannel = outputChannel;
+
+    std::string error;
+
+    if (!engine.activate(backend, request, error))
+    {
+        std::cout << "LOOPBACK: could not activate '" << deviceId << "': " << error << "\n";
+        return backend.state() == audio::BackendState::faulted ? 2 : 1;
+    }
+
+    audio::AudioLoopback loopback(engine);
+
+    if (!loopback.start(error))
+    {
+        std::cout << "LOOPBACK: engine is running but the loopback worker refused: " << error << "\n";
+        engine.deactivate();
+        return 1;
+    }
+
+    std::cout << "loopback on '" << deviceId << "' input channel " << inputChannel
+              << " -> output channel " << outputChannel << ", jitter pre-roll "
+              << engine.jitterBufferMs() << " ms, device "
+              << engine.sampleRate() << " Hz / " << engine.bufferFrames() << " frames\n";
+
+    float maxInputPeak = 0.0f;
+    float maxOutputPeak = 0.0f;
+
+    const auto started = std::chrono::steady_clock::now();
+    int second = 0;
+
+    while (std::chrono::steady_clock::now() - started < std::chrono::seconds(seconds))
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        ++second;
+
+        const auto* inMeter = engine.inputMeter(0);
+        const auto* outMeter = engine.outputMeter(0);
+
+        const float inPeak = inMeter != nullptr ? inMeter->peakLinear() : 0.0f;
+        const float outPeak = outMeter != nullptr ? outMeter->peakLinear() : 0.0f;
+
+        maxInputPeak = std::max(maxInputPeak, inPeak);
+        maxOutputPeak = std::max(maxOutputPeak, outPeak);
+
+        std::cout << "  t=" << second << "s"
+                  << " in=" << static_cast<int>(audio::linearToDb(inPeak)) << " dBFS"
+                  << " out=" << static_cast<int>(audio::linearToDb(outPeak)) << " dBFS"
+                  << " blocks=" << engine.blockCount()
+                  << " forwarded=" << engine.inputFramesForwarded()
+                  << " looped=" << loopback.transferredFrames()
+                  << " underruns=" << engine.underrunEvents()
+                  << " overruns=" << engine.overrunEvents()
+                  << " fill=" << engine.jitterFillFrames() << " frames\n";
+    }
+
+    const std::uint64_t callbacks = backend.callbackBlocks();
+    const std::uint64_t blocks = engine.blockCount();
+    const int xruns = backend.lastXRunCount();
+
+    loopback.stop();
+    engine.deactivate();
+
+    std::cout << "summary: deviceCallbacks=" << callbacks << " engineBlocks=" << blocks
+              << " loopbackTransferred=" << loopback.transferredFrames()
+              << " maxInput=" << static_cast<int>(audio::linearToDb(maxInputPeak)) << " dBFS"
+              << " maxOutput=" << static_cast<int>(audio::linearToDb(maxOutputPeak)) << " dBFS"
+              << " underruns=" << engine.underrunEvents()
+              << " overruns=" << engine.overrunEvents()
+              << " ringDrops=" << engine.inputRingDroppedFrames()
+              << " malformed=" << engine.malformedCallbacks()
+              << " xruns=" << asio::describeXRunCount(xruns)
+              << " state after close=" << audio::nameOf(backend.state()) << "\n";
+
+    if (callbacks == 0 || blocks == 0)
+    {
+        std::cout << "LOOPBACK FAILED: the device delivered no callbacks through the engine\n";
+        return 1;
+    }
+
+    if (engine.malformedCallbacks() != 0)
+    {
+        std::cout << "LOOPBACK FAILED: the backend broke the processor contract\n";
+        return 1;
+    }
+
+    if (maxInputPeak <= 0.0f && maxOutputPeak <= 0.0f)
+    {
+        std::cout << "LOOPBACK INCONCLUSIVE: both channels stayed digital silence.\n"
+                     "  The pipeline ran, but no audio was present to loop. On this PC\n"
+                     "  (Waves driver, no SoundGrid server) that is the expected result.\n"
+                     "  Patch a real source into input channel " << inputChannel
+                  << " on a machine with a server, or use developer mode routing (task 019).\n";
+        return 1;
+    }
+
+    std::cout << "LOOPBACK OK: audio measured at the input also left on the output\n";
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     liveai::LogConfig config;
@@ -357,6 +513,7 @@ int main(int argc, char** argv)
                            : hasFlag(argc, argv, "--verify") ? "verify"
                            : hasFlag(argc, argv, "--probe") ? "probe"
                            : hasFlag(argc, argv, "--lifecycle") ? "lifecycle"
+                           : hasFlag(argc, argv, "--loopback") ? "loopback"
                            : "";
 
     if (mode.empty())
@@ -371,9 +528,9 @@ int main(int argc, char** argv)
     if (mode == "verify")
         return runVerify();
 
-    const std::string deviceId = mode == "probe"
-        ? findOption(argc, argv, "--probe")
-        : findOption(argc, argv, "--lifecycle");
+    const std::string deviceId = mode == "probe"      ? findOption(argc, argv, "--probe")
+                               : mode == "lifecycle"  ? findOption(argc, argv, "--lifecycle")
+                                                      : findOption(argc, argv, "--loopback");
 
     if (deviceId.empty())
     {
@@ -383,6 +540,18 @@ int main(int argc, char** argv)
 
     if (mode == "probe")
         return runProbe(deviceId, hasFlag(argc, argv, "--start"));
+
+    if (mode == "loopback")
+    {
+        const std::string secondsText = findOption(argc, argv, "--seconds");
+        const int seconds = std::clamp(secondsText.empty() ? 10 : std::atoi(secondsText.c_str()), 1, 600);
+
+        return runLoopback(deviceId,
+                           seconds,
+                           readIntOption(argc, argv, "--input", 1),
+                           readIntOption(argc, argv, "--output", 1),
+                           readIntOption(argc, argv, "--jitter", 120));
+    }
 
     const std::string cyclesText = findOption(argc, argv, "--cycles");
     int cycles = cyclesText.empty() ? 3 : std::atoi(cyclesText.c_str());

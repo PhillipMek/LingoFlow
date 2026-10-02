@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <string>
 #include <vector>
 
@@ -109,7 +110,7 @@ TEST_CASE("AudioEngine: callback produces silence, never the input signal", "[au
     engine.deactivate();
 }
 
-TEST_CASE("AudioEngine: blocks with no frames are ignored", "[audio][engine]")
+TEST_CASE("AudioEngine: malformed and empty callbacks are not counted as blocks", "[audio][engine]")
 {
     AudioEngine engine;
     NullAudioBackend backend(mono48k());
@@ -117,15 +118,30 @@ TEST_CASE("AudioEngine: blocks with no frames are ignored", "[audio][engine]")
     std::string error;
     REQUIRE(engine.activate(backend, request(), error));
 
-    float sample = 0.0f;
-    const float* in[] = { &sample };
-    float* out[] = { &sample };
+    // The contract says every channel pointer refers to frameCount frames, so the
+    // buffers here are honestly sized: a one-float array with frameCount 480 would
+    // be a test lying about its own buffer, and would hide real overflow bugs.
+    std::array<float, static_cast<std::size_t>(kFrames)> sample{};
+    const float* in[] = { sample.data() };
+    float* out[] = { sample.data() };
 
-    engine.processAudio(in, out, 0);
-    engine.processAudio(nullptr, out, kFrames);
-    engine.processAudio(in, nullptr, kFrames);
-
+    engine.processAudio(in, out, 0);                 // empty block: nothing to do
     CHECK(engine.blockCount() == 0);
+    CHECK(engine.malformedCallbacks() == 0);
+
+    engine.processAudio(nullptr, out, kFrames);      // backend broke the contract
+    CHECK(engine.blockCount() == 0);
+    CHECK(engine.malformedCallbacks() == 1);
+    CHECK(sample[0] == 0.0f);                        // silence, never stale memory
+
+    engine.processAudio(in, nullptr, kFrames);       // also a contract violation
+    CHECK(engine.blockCount() == 0);
+    CHECK(engine.malformedCallbacks() == 2);
+
+    engine.processAudio(in, out, kFrames);           // one correct callback
+    CHECK(engine.blockCount() == 1);
+    CHECK(engine.frameCount() == static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.malformedCallbacks() == 2);
 
     engine.deactivate();
 }

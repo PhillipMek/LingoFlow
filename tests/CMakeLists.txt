@@ -32,6 +32,7 @@ add_executable(lingoflow_tests
     unit/TestSecretStore.cpp
     unit/TestDiagnosticsManager.cpp
     unit/TestAudioEngine.cpp
+    unit/TestAudioPipeline.cpp
     unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp
     unit/TestApplicationController.cpp)
@@ -51,6 +52,25 @@ include(CTest)
 include(Catch)
 catch_discover_tests(lingoflow_tests)
 
+# --- realtime allocation gate (task 005) ---------------------------------------
+# A separate executable, because it replaces global operator new to count heap
+# allocations. Isolated so no other suite's behaviour changes.
+add_executable(lingoflow_realtime_tests
+    realtime/TestRealtimeAllocations.cpp)
+
+target_link_libraries(lingoflow_realtime_tests
+    PRIVATE
+        lingoflow::core
+        Catch2::Catch2WithMain)
+
+if(MSVC)
+    target_compile_options(lingoflow_realtime_tests PRIVATE /W4 /utf-8 /MP8)
+else()
+    target_compile_options(lingoflow_realtime_tests PRIVATE -Wall -Wextra)
+endif()
+
+catch_discover_tests(lingoflow_realtime_tests)
+
 # --- architecture boundary gates ---------------------------------------------
 # 1) audit the real source tree; 2) prove the audit can fail (self-test).
 # These run without Catch2 and without a device, so they are usable in CI.
@@ -69,6 +89,24 @@ add_test(NAME architecture_boundary_audit_selftest
 set_property(TEST architecture_boundary_audit architecture_boundary_audit_selftest
              PROPERTY LABELS architecture)
 
+# --- realtime safety gates (task 005) -------------------------------------------
+# 1) scan the realtime functions of the real source tree for forbidden operations;
+# 2) prove that gate can still fail by injecting each forbidden class into a copy.
+add_test(NAME realtime_safety_audit
+         COMMAND ${CMAKE_COMMAND}
+                 -DRT_AUDIT_SRC_DIR=${CMAKE_SOURCE_DIR}/src
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/RealtimeSafetyAudit.cmake)
+
+add_test(NAME realtime_safety_audit_selftest
+         COMMAND ${CMAKE_COMMAND}
+                 -DRT_AUDIT_SRC_DIR=${CMAKE_SOURCE_DIR}/src
+                 -DRT_AUDIT_SCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/RealtimeSafetyAudit.cmake
+                 -DRT_AUDIT_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/rt-audit-selftest
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/RealtimeSafetyAuditSelfTest.cmake)
+
+set_property(TEST realtime_safety_audit realtime_safety_audit_selftest
+             PROPERTY LABELS realtime)
+
 # --- ASIO discovery (task 004) -------------------------------------------------
 # The probe tool exercises the real JUCE ASIO path. --verify compares the devices JUCE
 # enumerates with the HKLM\SOFTWARE\ASIO registrations, without loading any driver, so
@@ -86,4 +124,4 @@ add_test(NAME asio_discovery_list
 set_property(TEST asio_discovery_list PROPERTY LABELS device)
 set_property(TEST asio_discovery_list PROPERTY TIMEOUT 120)
 
-set_target_properties(lingoflow_tests PROPERTIES FOLDER "Tests")
+set_target_properties(lingoflow_tests lingoflow_realtime_tests PROPERTIES FOLDER "Tests")
