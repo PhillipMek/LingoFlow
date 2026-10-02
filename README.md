@@ -115,7 +115,8 @@ cmake -S . -B build ...                   # fails here: build tree inherits the 
 ```
 
 If the repository is moved to an ASCII path, the plain in-tree form works again.
-Verified on a clone at `D:\LingoFlow\clone-test`: `cmake -S . -B build` +
+Verified on a clone at `D:\LiveAI\clone-test` (path from before the LingoFlow
+rename): `cmake -S . -B build` +
 `cmake --build build` + `ctest` → 71/71 passed, using `third_party/JUCE`. So the
 constraint is the path, not the layout, and the vendored dependencies travel with
 the repository.
