@@ -95,20 +95,28 @@ The application writes a log file to
 `File::userApplicationDataDirectory`, which is the Roaming profile folder on
 Windows).
 
-### Build tree must be on an ASCII path
+### Paths and the `juceaide` limitation
 
-The repository lives under `D:\Рабочий\...`. CMake, Ninja and MSVC handle that
-path correctly, but JUCE's helper tool `juceaide` crashes ("Unhandled
-exception") as soon as a **non-ASCII path appears in its command line**, which
-is what generates `*_resources.rc`. Keep the build directory on an ASCII path:
+JUCE's helper tool `juceaide` (it generates `*_resources.rc`) crashes with
+"Unhandled exception" when a **non-ASCII path appears in its command-line
+arguments**. This is about arguments, not about where the tools live - verified by
+running `juceaide rcfile` directly with ASCII and non-ASCII argument paths.
+
+The repository currently lives under `D:\Рабочий\...`. That is fine for sources:
+CMake, Ninja and MSVC compile and run correctly from it (JUCE objects build from
+`third_party/JUCE` under that path). Only the **build tree** must sit on an ASCII
+path, which is why the documented commands use `D:\LiveAI\build-debug`:
 
 ```powershell
-cmake -S . -B D:/LiveAI/build-debug ...     # works
-cmake -S . -B build-debug ...               # juceaide fails: rcfile step
+cmake -S . -B D:/LiveAI/build-debug ...   # works: source Cyrillic, build ASCII
+cmake -S . -B build ...                   # fails here: build tree inherits the Cyrillic path
 ```
 
-Verified by running `juceaide rcfile` directly with ASCII and non-ASCII
-arguments: ASCII → exit 0, non-ASCII → exit 1.
+If the repository is moved to an ASCII path, the plain in-tree form works again.
+Verified on a clone at `D:\LiveAI\clone-test`: `cmake -S . -B build` +
+`cmake --build build` + `ctest` → 71/71 passed, using `third_party/JUCE`. So the
+constraint is the path, not the layout, and the vendored dependencies travel with
+the repository.
 
 ## Configuration
 
