@@ -165,6 +165,47 @@ where a real console feed reaches the selected input channel. Expected observati
 `underruns` staying at 0 while the source is continuous, and the patched output audible in
 the monitor path.
 
+## What task 006 (gain, mute, clipping) proved, and what it adds to the rig check
+
+Proven on this machine, without a device:
+
+* both trims sit where SPEC "Audio Pipeline" puts them - input gain before the ring (the
+  translator receives the operator's level, verified by reading the ring back), output gain
+  after the jitter buffer (verified on the frames that go to the wire), and the two compose
+  so that -6 dB in and +6 dB out returns the original number;
+* a gain or mute change glides instead of jumping, measured rather than asserted: cutting a
+  500 Hz sine at its peak by 12 dB produces a 0.37 sample step with an instant change and
+  nothing above the wave's own slew (~0.033) with the 20 ms glide; a 20 000-block sweep run
+  while another thread moves the level stays inside the same bound;
+* the callback still allocates nothing while the level changes every block
+  (`Realtime path: a gain change costs no allocations and no locks`), and the lexical gate
+  now reads the bodies of `GainStage::process` and `GainStage::dbToLinear`, with its
+  self-test injecting violations into both so the coverage is proven, not assumed;
+* clipping is counted as three different facts (from the device, created by the input trim,
+  sent to the audience), so turning the gain down cannot hide a console that already
+  arrived at full scale - `attenuation cannot hide clipping that came from the device`;
+* refusing to limit is a tested property, not a comment: a sample above full scale passes
+  through untouched, and only a value that is not a number at all (an overflowed product)
+  is turned into full scale and counted;
+* levels, mute state and clipping history survive `deactivate()` and are re-applied by the
+  next `activate()`, so a device restart does not reset the room;
+* settings really reach the DSP: with `audio.inputGainDb = -6.5, audio.outputGainDb = 3.0`
+  in the live `%APPDATA%\LingoFlow\config.json`, `--smoke` logged
+  `audio gains in effect: input -6.5 dB, output +3.0 dB, glide 20 ms` and exited 0.
+
+What the rig check (still open from task 005) now has to confirm with ears as well as
+numbers:
+
+```powershell
+.\lingoflow_asio_probe.exe --loopback "Waves SoundGrid ASIO" --seconds 20 --input 17 --output 3 --jitter 120 --gain-out -6
+```
+
+Expected: `in=` and `out=` move together about 120 ms apart, `out=` sits roughly 6 dB below
+`in=` with `--gain-out -6`, `appliedGain=` shows 0.0/-6.0 once the glide has landed, and
+while dragging nothing is heard but smooth level change - no click, no tick, no step at the
+moment the number changes. Pushing `--gain-in` until `clip=out` appears and
+`clipping after close ... toAudience>0` is the positive test that the indication works.
+
 ## Remaining human checkpoints (hardware)
 
 | Task | What a human must confirm, on a machine with a SoundGrid server |

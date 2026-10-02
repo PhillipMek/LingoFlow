@@ -7,12 +7,13 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-005 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-006 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
-audio pipeline (lock-free ring buffer, output jitter buffer, level meters,
-underrun/overrun counters) with input->output loopback, Null implementations of the
-translation and NDI boundaries, versioned configuration with safe persistence, ASIO
-device discovery and device lifecycle on top of JUCE, and 112 tests.
+audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
+click-free gliding, level meters, clipping and underrun/overrun counters) with
+input->output loopback, Null implementations of the translation and NDI boundaries,
+versioned configuration with safe persistence, ASIO device discovery and device lifecycle
+on top of JUCE, and 144 tests.
 **No translated audio reaches a real device and no network request is sent yet** -
 the OpenAI backend is task 009 and translated audio reaches the output in task 012. The
 operator application does open the ASIO device named in settings, but until 012 the only
@@ -72,9 +73,10 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-112 CTest entries: Catch2 unit/integration suites, the realtime allocation suite in its
-own binary, the architecture boundary audit plus its self-test, the realtime safety audit
-plus its self-test, and the two device entries that run the ASIO tool's driver-free modes.
+144 CTest entries: Catch2 unit/integration suites (including the gain-stage suite), the
+realtime allocation suite in its own binary, the architecture boundary audit plus its
+self-test, the realtime safety audit plus its self-test, and the two device entries that
+run the ASIO tool's driver-free modes.
 
 ```powershell
 cmd /c "call $vccmd && `"$cmake`" --test-dir $dbg --output-on-failure"
@@ -206,13 +208,59 @@ our 10 ms choice. The installed driver offers 256 only, so the engine falls back
 nearest offered size and logs the fallback - never silently. The UI must never present
 any of these defaults as measurements.
 
+## Gain, mute and clipping (task 006)
+
+Two independent digital trims, exactly where SPEC "Audio Pipeline" puts them: the input
+trim is applied before the ring buffer (so the translator gets the level the operator
+chose) and the output trim after the jitter buffer (so the audience level can be matched
+without changing what the translator was fed). Behaviour, all covered by tests:
+
+* **dB, not a linear knob.** `audio.inputGainDb` / `audio.outputGainDb` in settings; the
+  stage converts with `exp2` against a documented constant, and the window it accepts is
+  -96..+24 dB (SPEC suggests -24..+24 and keeps it configurable, so the stage window
+  contains everything the configuration layer can validate). A request outside it is
+  clamped and counted, not swallowed; a non-finite request is refused and the previous
+  level stays.
+* **Changes glide, they do not jump.** A gain or mute change moves the coefficient to its
+  target over `kDefaultRampMs` (20 ms) and lands exactly on it, which is what makes the
+  PASS criterion "no clicks" measurable: cutting a 500 Hz sine at its peak and dropping
+  12 dB produces a 0.37 sample step with an instant change and nothing above the wave's
+  own slew (~0.033) with the glide. The one setting that can click is a 0 ms glide, and it
+  has to be asked for. `activate()` lands instead of gliding, so the first block of a run
+  already plays the configured level.
+* **Input mute and output mute are separate.** Muting the input stops feeding the
+  translator while the audience keeps hearing the translation already in the buffer;
+  muting the output silences the room while the translator keeps being fed. Neither is
+  stored in settings: mute is live stage state, and a room that came back muted after a
+  restart would be a fault nobody asked for.
+* **This is not a limiter.** SPEC puts a limiter under "Future architecture", so samples
+  above full scale are reported and passed through untouched. The only value rewritten is
+  one that stopped being a number at all (a product that overflowed to infinity becomes
+  full scale) - and every such sample is counted.
+* **Clipping is counted three times, because there are three questions.** What arrived at
+  full scale from the device (`inputClippedFrames`), what our own input trim produced on
+  the way to the translator (`inputGainClippedFrames`) and what is heading at the audience
+  (`outputGainClippedFrames`). Turning the gain down cannot hide the first one, which is
+  the whole reason the meters read post-gain audio but the stage also counts pre-gain
+  full-scale samples. A latching `takeInputClipIndicator()` / `takeOutputClipIndicator()`
+  is what the UI lamp will use.
+* **Non-finite samples become silence, counted.** One NaN from a driver silences one
+  sample (`nonFiniteInputFrames`) instead of poisoning the translation stream or the room.
+* **Levels survive a device restart.** The stages are not released by `deactivate()`, so a
+  re-opened ASIO device starts with the same gains, the same mute state and the same
+  clipping history.
+* **`--smoke` logs the levels in effect**, so "my settings were applied" is distinguishable
+  from "the defaults were used": `audio gains in effect: input -6.5 dB, output +3.0 dB,
+  glide 20 ms`. The slider, the numeric box, the reset button and the mute button themselves
+  are task 014; the engine API they will call already exists.
+
 ## Layout
 
 ```text
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
-src/Audio/              AudioEngine + pipeline (ring/jitter/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
+src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract, Null/ backend
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
@@ -274,16 +322,19 @@ Two CTest entries with the label `device` use the safe part of it automatically.
 | `--verify` | checks that enumeration matches `HKLM\SOFTWARE\ASIO` one-to-one | no |
 | `--probe "<device>" [--start]` | opens the device, reports channels/rates/buffers/latencies, optionally one start/stop | yes |
 | `--lifecycle "<device>" [--cycles N]` | N open/start/stop/close cycles through `AudioEngine` + `JuceAsioBackend`, asserting callbacks arrive and the backend ends `closed` | yes |
-| `--loopback "<device>" [--seconds N] [--input M] [--output K] [--jitter MS]` | runs the device through the real pipeline with input->output loopback and prints measured input/output levels once per second | yes |
+| `--loopback "<device>" [--seconds N] [--input M] [--output K] [--jitter MS] [--gain-in DB] [--gain-out DB]` | runs the device through the real pipeline (gain, ring, loopback, jitter, gain, meters) and prints measured input/output levels once per second | yes |
 
-`--loopback` is how the task 005 hardware check is done on a rig: patch a source into
-`--input`, and the same audio must leave on `--output` roughly `--jitter` ms later, with
-`in=` and `out=` levels moving together. If both levels stay at digital silence the tool
-reports `LOOPBACK INCONCLUSIVE` and exits 1 - the pipeline ran, but there was no signal to
-loop, and it says so instead of calling that a pass. Measured on this PC (2026-10-02): the
-Waves driver refused with `input channels are not available: the driver reported none at
-all`, because `SoundGrid QRec` and the `SoundGrid Driver Control Panel` were running and an
-ASIO device is exclusive; `docs/device-defaults.md` records both observations.
+`--loopback` is how the task 005 and 006 hardware checks are done on a rig: patch a source
+into `--input`, and the same audio must leave on `--output` roughly `--jitter` ms later, with
+`in=` and `out=` levels moving together. `--gain-out -6` should then be visibly 6 dB quieter
+on the `out=` line and `--gain-in` should move `in=` (which reads the post-gain signal),
+while `appliedGain=` shows the level the callback is really using during a glide. If both
+levels stay at digital silence the tool reports `LOOPBACK INCONCLUSIVE` and exits 1 - the
+pipeline ran, but there was no signal to loop, and it says so instead of calling that a
+pass. Measured on this PC (2026-10-02): the Waves driver refused with `input channels are
+not available: the driver reported none at all`, because `SoundGrid QRec` and the
+`SoundGrid Driver Control Panel` were running and an ASIO device is exclusive;
+`docs/device-defaults.md` records both observations.
 
 Exit codes: 0 ok, 1 verification failed / no callbacks / inconclusive silence, 2 the device
 refused to open, 3 usage error. `--verify` and `--list` are the automated part
@@ -297,13 +348,15 @@ Two CTest entries with the label `realtime` guard AGENTS.md 5 directly
 (`docs/architecture.md` explains the design):
 
 * `realtime_safety_audit` - extracts the body of every function reachable from the audio
-  callback and rejects allocations, locks, sleeping, filesystem, transport, UI and
+  callback (12 of them: the engine, both buffers, the meter, both gain entry points and the
+  JUCE bridge) and rejects allocations, locks, sleeping, filesystem, transport, UI and
   exception constructs in it;
 * `realtime_safety_audit_selftest` - injects one violation of each class into a copy of
-  `src/` and requires the gate to reject it, so a gate that stopped working fails the run
-  instead of passing;
+  `src` (12 cases, including two inside the gain stage) and requires the gate to reject it,
+  so a gate that stopped working fails the run instead of passing;
 * `lingoflow_realtime_tests` (a separate binary that replaces global `operator new`)
-  measures that the callback performs zero heap allocations over 5000 blocks.
+  measures that the callback performs zero heap allocations over 5000 blocks, and that
+  changing the gain while the callback runs costs zero too.
 
 Run them alone: `ctest --test-dir D:\LingoFlow\build-debug -L realtime --output-on-failure`.
 

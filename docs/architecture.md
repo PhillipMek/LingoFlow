@@ -34,8 +34,9 @@ Utils          -> (nothing)                       logging, no JUCE
 Config         -> Utils                           settings: schema, validation, atomic file I/O
 Security       -> Utils                           credential store boundary, no config access
 Diagnostics    -> Utils                           atomic counters + snapshot
-Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, meters, loopback,
-                                                  IAudioBackend, ASIO model/policy, Null backend
+Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, gain stages,
+                                                  meters, loopback, IAudioBackend,
+                                                  ASIO model/policy, Null backend
 Translation    -> Utils, Diagnostics              ITranslationBackend contract, Null backend
 NDI            -> Utils, Diagnostics              INdiOutput contract, Null output
 Platform       -> Audio, Utils, Diagnostics       JUCE adapters (ASIO device discovery/lifecycle)
@@ -95,29 +96,34 @@ architecture is explicitly non-realtime:
 | `AudioRingBuffer::write / read / readOrSilence` | either side | lock-free SPSC: two atomic positions, `memcpy`, relaxed drop/underrun counters |
 | `AudioJitterBuffer::write / readOrSilence / setTargetFrames` | either side | same primitives plus an atomic pre-roll flag; overflow drops incoming frames, underflow plays silence |
 | `LevelMeter::measure` | audio callback | one pass over the block, one `sqrt`, atomic publish; non-finite samples counted as out-of-range |
+| `GainStage::process` | audio callback | per sample: one finite check, one multiply, two magnitude compares; the coefficient is a plain float advanced toward an atomic target |
+| `GainStage::dbToLinear` | audio callback (once per block) | `exp2` against a documented constant, no libm path that can allocate |
 | `Platform::JuceAsioBackend::Callback::audioDeviceIOCallbackWithContext` | audio callback | forwards driver pointers into `processAudio`, views preallocated in `aboutToStart`, `audioDeviceError` sets a flag only |
 | `AudioLoopback::run` | worker | consumer/producer of the lock-free buffers; may sleep between polls; never called by the audio thread |
 | `IAudioProcessor::onAudioConfigurationChanged` | non-realtime | after `open()`, before first block |
 | `AudioEngine::activate / configure / deactivate` | control thread | the only place pipeline memory is allocated or released |
+| `AudioEngine::setInputGainDb / setOutputGainDb / setInputMuted / setOutputMuted / setGainRampMs` | any thread, UI in particular | relaxed atomic publish; the callback picks the new target up at the start of its next block. No lock, no allocation, no wait |
 | `ITranslationSink::on*` | network/worker | enqueue only, never play directly |
 | `INdiOutput::publish` | worker | drop on pressure, never block the producer |
 | `DiagnosticsManager::count*` | any, incl. audio | relaxed atomics |
 | `DiagnosticsManager::snapshot`, `note*` with strings | UI/worker | mutex-guarded, never from the audio thread |
 | `IAudioBackend::open/start/stop/close`, `AsioDiscovery::*` | control thread | may allocate and log; never called from the callback |
 
-## Realtime pipeline (task 005)
+## Realtime pipeline (tasks 005 and 006)
 
 The pipeline is the one from SPEC "Audio Pipeline", with the two translation stages
 still to be filled in:
 
 ```text
 ASIO input -> AudioEngine::processAudio
-                  -> LevelMeter (input)
+                  -> GainStage (input)       -6 dB .. +24 dB, mute, click-free glide
+                  -> LevelMeter (input)      reads the post-gain block
                   -> AudioRingBuffer        (producer = audio thread)
                         |
                   [loopback worker now (AudioLoopback); OpenAI streaming worker in task 012]
                         |
                   AudioJitterBuffer         (consumer = audio thread)
+                  -> GainStage (output)      separate trim, separate mute
                   -> LevelMeter (output)
                   -> ASIO output
 ```
@@ -141,8 +147,10 @@ Design decisions, and why:
   012 later). Microphone audio therefore cannot reach the audience by a missing
   underrun branch - the silence path is the default, not an extra case.
 * **`LevelMeter`** publishes peak and RMS of the last block plus cumulative clipping
-  and signalled-block counters. Task 006 acts on these numbers with gain; reading them
-  from the UI is safe at any time.
+  and signalled-block counters, and it reads the *post-gain* signal on both sides: a knob
+  that does not move the meter looks broken to an operator. What arrived at full scale
+  before the application's own trim is counted separately, by the gain stage, so turning
+  the level down cannot hide a damaged console feed.
 * **Counters are engine-level, not buffer-level.** `deactivate()` releases the buffers,
   so dropped/underrun/overrun totals live in `AudioEngine`'s own atomics and stay
   readable after shutdown - that is where the operator's diagnostics (task 017) and the
@@ -152,21 +160,74 @@ Design decisions, and why:
   tool today; developer mode in task 019). Routing live microphone audio to the audience
   is an operator action.
 
+### Gain, mute and clipping (task 006)
+
+`GainStage` is one class used in both positions of the SPEC pipeline, because both
+positions need the same three things: a dB value the operator sets, a mute, and the
+guarantee that changing either makes no click.
+
+* **The glide is the point.** The requested coefficient is published as a relaxed atomic
+  and the callback walks its own coefficient toward it over `kDefaultRampMs` (20 ms, = 960
+  samples at 48 kHz), landing exactly on the target rather than drifting near it. A test
+  measures the consequence: cutting a 500 Hz sine at its peak and dropping the level by
+  12 dB produces a 0.37 sample step without the glide and nothing above the wave's own
+  slew (~0.033) with it. That is what PASS criterion "no clicks" means in numbers.
+* **`configure()` lands instead of gliding.** At `activate()` the stage is set directly to
+  the level the settings already show: an operator who set -6 dB must not get 20 ms of
+  audio at 0 dB at the start of every run.
+* **Gain values are validated twice, in different ways.** `ConfigSchema` refuses a
+  hand-edited file outside its window, while `GainStage` clamps anything handed to it at
+  run time and counts it (`gainRequestsClamped()`), and refuses non-finite values,
+  keeping the previous level instead of inventing one (`gainRequestsRejected()`). A
+  refused request is never silent.
+* **Three clipping counts, because they are three different questions.**
+  `inputClippedFrames()` (the device fed us full scale), `inputGainClippedFrames()` (our
+  own trim created it on the way to the translator) and `outputGainClippedFrames()` (what
+  is heading at the audience). A latching `takeInputClipIndicator()` /
+  `takeOutputClipIndicator()` exists for the UI lamp, so the interface does not have to
+  diff counters between frames.
+* **This stage does not limit.** SPEC puts a limiter under "Future architecture", so a
+  sample above full scale is reported and passed through untouched. There is one
+  exception, and it is a validity guard rather than dynamics: a product that overflows
+  to infinity becomes full scale, because no converter can reproduce infinity, and every
+  such sample is counted. A test pins the rule so a future limiter cannot arrive quietly.
+* **Non-finite samples become silence, counted.** NaN from a driver is not audio; one
+  poisoned sample silences one sample (`nonFiniteInputFrames()`) instead of propagating
+  into the translation stream or the room.
+* **Input mute and output mute are different controls.** Muting the input stops feeding
+  the translator; muting the output stops the audience hearing anything. One shared
+  "mute" would be the wrong control on a live show, so the engine keeps them apart and a
+  test proves the difference in both directions.
+* **Gain settings and their history belong to the operator, not the device.** The stages
+  are not released by `deactivate()`: levels, mute state and the clipping counts survive a
+  device restart, and a re-`activate()` re-applies them. A room does not lose its levels
+  because ASIO was re-opened.
+* **Oversized blocks are chunked, not overrun.** The input side needs scratch because the
+  device hands the callback a const pointer, so `kGainChunkFrames` (4096) is preallocated
+  per channel; a block larger than that is processed in chunks, still gained in full, and
+  counted in `oversizedCallbacks()`. Task 005 learned this the hard way, when a test's
+  badly sized buffer wrote past an array.
+
 ### How the realtime rule is enforced
 
 Two independent gates, both in CTest (label `realtime`):
 
 1. `tests/RealtimeSafetyAudit.cmake` extracts the body of every function reachable from
-   the audio callback (engine, both buffers, meter, JUCE bridge) and rejects a list of
-   forbidden constructs: allocation (`new`, `make_unique`, `malloc`, container growth),
-   locks and waits, sleeping, filesystem/registry, transport (`json`, `websocket`,
-   sockets), UI, exceptions. `...SelfTest.cmake` injects one violation of each class
-   into a copy of `src/` and asserts the gate rejects it, and that a vanished function
-   fails the gate instead of shrinking it silently.
+   the audio callback - today twelve: the engine, both buffers, the meter, `GainStage::process`
+   and `GainStage::dbToLinear`, and the JUCE bridge - and rejects a list of forbidden
+   constructs: allocation (`new`, `make_unique`, `malloc`, container growth), locks and
+   waits, sleeping, filesystem/registry, transport (`json`, `websocket`, sockets), UI,
+   exceptions. `...SelfTest.cmake` injects one violation of each class into a copy of `src/`
+   (twelve injections, two of them inside the gain stage, because a new audited function is
+   only really guarded once something proves the gate reads its body) and asserts the gate
+   rejects each one, accepts the clean tree, and reports `RT_AUDIT_FUNCTION_NOT_FOUND`
+   rather than silently shrinking when a realtime function disappears.
 2. `tests/realtime/TestRealtimeAllocations.cpp` replaces global `operator new` in its
    own test binary and counts heap allocations during 5000 callbacks with the loopback
-   worker running: the count must be 0. It is a separate executable so the substitution
-   cannot influence any other suite.
+   worker running: the count must be 0. A third case there does the same while the gain and
+   mute are being changed every block, because the SPEC allows gain state to be set from
+   another thread only if doing so cannot allocate. It is a separate executable so the
+   substitution cannot influence any other suite.
 
 Both are behavioural *and* textual: the audit cannot see a violation hidden behind a
 macro, the allocation counter cannot see a lock. Together with the stress test in
