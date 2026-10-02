@@ -124,6 +124,24 @@ audit_expect("selftest/asio-in-core" FAIL "AUDIT_PROTOCOL_INCLUDE"
 audit_expect("selftest/websocket-in-translation" FAIL "AUDIT_PROTOCOL_INCLUDE"
     APPEND "Translation/ITranslationBackend.h" "#include <websocketpp/client.hpp>")
 
+# --- Network module (task 009) ---------------------------------------------------
+# JSON is allowed where the OpenAI protocol lives (Network) and nowhere new; the
+# module boundary points only at Translation/Security/Utils, never upward.
+audit_expect("selftest/json-in-network-allowed" PASS "" APPEND "Network/WinHttpTransport.h"
+    "#include <nlohmann/json.hpp>")
+
+audit_expect("selftest/json-in-platform" FAIL "AUDIT_PROTOCOL_INCLUDE"
+    APPEND "Platform/Asio/JuceAsioCommon.h" "#include <nlohmann/json.hpp>")
+
+audit_expect("selftest/audio-includes-network" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Audio/AudioEngine.h" "#include \"Network/OpenAIRealtimeBackend.h\"")
+
+audit_expect("selftest/network-includes-audio" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Network/Base64.h" "#include \"Audio/AudioEngine.h\"")
+
+audit_expect("selftest/network-project-include-allowed" PASS ""
+    APPEND "Network/Base64.cpp" "#include \"Network/IWebSocketTransport.h\"")
+
 # --- structural problems -------------------------------------------------------
 audit_expect("selftest/dangling-project-include" FAIL "AUDIT_UNRESOLVED_INCLUDE"
     APPEND "Audio/AudioEngine.h" "#include \"Audio/NoSuchFile.h\"")

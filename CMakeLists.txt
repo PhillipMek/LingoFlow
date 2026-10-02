@@ -53,7 +53,9 @@ message(STATUS "LingoFlow: using JUCE ${LIVEAI_JUCE_VERSION} from ${LIVEAI_JUCE_
 add_subdirectory("${LIVEAI_JUCE_PATH}" JUCE)
 
 # ---------------------------------------------------------------------------
-# nlohmann/json - used ONLY by the Config module (see tests/ArchitectureBoundaries.cmake).
+# nlohmann/json - used by the Config module and by the Network backend
+# (docs/openai-realtime-protocol.md consumer, task 009); both link it PRIVATE,
+# so no other module can start parsing JSON (tests/ArchitectureBoundaries.cmake).
 # Pinned to an official release tag; fetched on demand, never vendored.
 # ---------------------------------------------------------------------------
 option(LIVEAI_FETCH_NLOHMANN_JSON "Download nlohmann/json with FetchContent" ON)

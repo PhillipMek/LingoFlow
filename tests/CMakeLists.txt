@@ -41,6 +41,18 @@ add_executable(lingoflow_tests
     unit/TestApplicationController.cpp
     integration/TestTranslationEndToEnd.cpp)
 
+# Task 009: the OpenAI backend exists only where its transport (winhttp) exists.
+# Its tests also need the nlohmann-free public surface of the Network target and
+# the scripted transport fake.
+if(WIN32)
+    target_sources(lingoflow_tests
+        PRIVATE
+            support/FakeWebSocketTransport.h
+            unit/TestBase64.cpp
+            unit/TestPcmResampler.cpp
+            unit/TestOpenAIProtocol.cpp)
+endif()
+
 # The test tree is its own include root: tests include "support/..." by path,
 # and the mock deliberately lives here, not in the product core (task 007).
 target_include_directories(lingoflow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -49,6 +61,10 @@ target_link_libraries(lingoflow_tests
     PRIVATE
         lingoflow::core
         Catch2::Catch2WithMain)
+
+if(WIN32)
+    target_link_libraries(lingoflow_tests PRIVATE lingoflow_network)
+endif()
 
 if(MSVC)
     target_compile_options(lingoflow_tests PRIVATE /W4 /utf-8 /MP8)

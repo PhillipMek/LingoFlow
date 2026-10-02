@@ -6,6 +6,10 @@
 #   Audio                       <- Audio + Diagnostics + Utils
 #   Translation                 <- Translation + Utils
 #   NDI                         <- NDI + Utils
+#   Network                     <- Network + Translation + Security + Utils (task 009;
+#                                  a separate target: nlohmann/json and winhttp stay
+#                                  private to it, and no portable-core module can see
+#                                  the OpenAI protocol)
 #   App                         <- everything above (composition root)
 # tests/ArchitectureBoundaries.cmake fails the test run if an include leaks
 # across those boundaries.
@@ -105,6 +109,61 @@ if(MSVC)
 endif()
 
 set_target_properties(lingoflow_platform_asio PROPERTIES FOLDER "Core")
+
+# ---------------------------------------------------------------------------
+# lingoflow_network - the OpenAI realtime translation backend (task 009).
+#
+# A separate target because it owns the protocol: nlohmann/json is PRIVATE
+# here (only Network/*.cpp may parse JSON - same rule the Config module has),
+# and winhttp is PUBLIC because every consumer of the production transport
+# links that system library. Nothing below this target may include anything
+# from it except the App composition root (tests/ArchitectureBoundaries.cmake).
+# Windows-only: the transport is winhttp, the product is a Windows app.
+# ---------------------------------------------------------------------------
+if(WIN32)
+    add_library(lingoflow_network STATIC
+        Network/IWebSocketTransport.h
+        Network/Base64.cpp
+        Network/Base64.h
+        Network/PcmResampler.cpp
+        Network/PcmResampler.h
+        Network/OpenAIRealtimeBackend.cpp
+        Network/OpenAIRealtimeBackend.h
+        Network/WinHttpTransport.cpp
+        Network/WinHttpTransport.h)
+
+    target_link_libraries(lingoflow_network
+        PUBLIC
+            lingoflow::core
+            winhttp
+        PRIVATE
+            nlohmann_json::nlohmann_json)
+
+    if(MSVC)
+        target_compile_options(lingoflow_network PRIVATE /W4 /utf-8 /MP8)
+    endif()
+
+    set_target_properties(lingoflow_network PROPERTIES FOLDER "Core")
+
+    # ---------------------------------------------------------------------------
+    # lingoflow_openai_probe - live validation tool (task 009 HUMAN CHECKPOINT).
+    # Links the exact backend the operator app will use, so what the probe shows
+    # on real traffic is what the product does.
+    # ---------------------------------------------------------------------------
+    add_executable(lingoflow_openai_probe
+        Network/OpenAIProbeMain.cpp)
+
+    target_link_libraries(lingoflow_openai_probe
+        PRIVATE
+            lingoflow_network
+            advapi32)
+
+    if(MSVC)
+        target_compile_options(lingoflow_openai_probe PRIVATE /W4 /utf-8 /MP8)
+    endif()
+
+    set_target_properties(lingoflow_openai_probe PROPERTIES FOLDER "Tools")
+endif()
 
 # ---------------------------------------------------------------------------
 # Operator application (JUCE GUI shell only at this stage)

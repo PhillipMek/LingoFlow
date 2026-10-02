@@ -9,8 +9,8 @@
 #   1. A module may include only the modules listed in AUDIT_ALLOWED_<module>.
 #   2. JUCE headers are allowed only in App (the UI) and Platform (the adapters).
 #   3. Protocol/transport headers (openai, websocket, json, asio, curl) are not
-#      allowed outside the module registered for them. Config owns nlohmann/json.hpp;
-#      task 009 will register the OpenAI backend module the same way.
+#      allowed outside the module registered for them. Config and Network own
+#      nlohmann/json.hpp (Network registered in task 009 for the OpenAI backend).
 #
 # Every failure line starts with a stable AUDIT_* code so the self-test can assert on
 # the reason without depending on prose or CMake's message wrapping.
@@ -23,7 +23,7 @@ if(NOT IS_DIRECTORY "${AUDIT_SRC_DIR}")
     message(FATAL_ERROR "AUDIT_SRC_DIR does not exist: ${AUDIT_SRC_DIR}")
 endif()
 
-set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI Platform App)
+set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI Platform Network App)
 
 set(AUDIT_ALLOWED_Utils       "Utils")
 set(AUDIT_ALLOWED_Config      "Config;Utils")
@@ -33,14 +33,19 @@ set(AUDIT_ALLOWED_Audio       "Audio;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Translation "Translation;Utils;Diagnostics")
 set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Platform    "Platform;Audio;Utils;Diagnostics")
-set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Platform;Utils")
+# Task 009: the OpenAI protocol lives only here; it may see the contract
+# (Translation), the credential store (Security) and logging (Utils), nothing
+# else. Only the App composition root may include Network.
+set(AUDIT_ALLOWED_Network     "Network;Translation;Security;Utils")
+set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Platform;Network;Utils")
 
 # The UI is src/App; the JUCE-backed device adapters are src/Platform. Only those two
 # may include JUCE, so Audio/Translation/NDI/Config/Diagnostics/Utils stay portable.
 set(audit_juce_modules "App;Platform")
 
 # Module -> external protocol/transport includes it is allowed to use.
-set(AUDIT_ALLOWED_PROTOCOL_Config "nlohmann/json.hpp")
+set(AUDIT_ALLOWED_PROTOCOL_Config  "nlohmann/json.hpp")
+set(AUDIT_ALLOWED_PROTOCOL_Network "nlohmann/json.hpp")
 
 set(audit_juce_pattern "^juce|juceheader")
 set(audit_protocol_pattern "openai|websocket|nlohmann|asio|curl|json")
