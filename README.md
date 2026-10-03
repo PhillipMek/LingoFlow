@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-010 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-011 complete**. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -15,8 +15,9 @@ input->output loopback, the translation backend contract with a deterministic te
 a real OpenAI realtime translation backend (`src/Network`, on the OS winhttp WebSocket
 stack with the 24<->48 kHz resampler inside it), Null implementations of the translation
 and NDI boundaries, versioned configuration with safe persistence, ASIO device discovery
-and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor,
-and 213 tests.
+and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor, the
+single language registry with its versioned OpenAI capability manifest,
+and 221 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -83,10 +84,11 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-213 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+221 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
-run the backend against a scripted offline transport, and the task 010 reconnect-supervisor
-suite that drives recovery against a threaded mock), the end-to-end integration suite that
+run the backend against a scripted offline transport, the task 010 reconnect-supervisor
+suite that drives recovery against a threaded mock, and the task 011 language-registry
+suite that pins the frozen capability manifest and the pair-check rules), the end-to-end integration suite that
 runs the whole pipeline on the deterministic mock, the realtime allocation suite in its own
 binary, the architecture boundary audit plus its self-test, the realtime safety audit plus
 its self-test, and the two device entries that run the ASIO tool's driver-free modes.
@@ -362,6 +364,27 @@ knowledge, not OpenAI knowledge, and cannot reach the audio device.
 * Not in production composition yet: the controller still runs the Null backend; the
   supervisor enters the pipeline at task 012 alongside the real backend.
 
+## Languages and the capability manifest (task 011)
+
+`src/Translation/LanguageRegistry` is the only language list in the product (AGENTS.md 9):
+`TranslationCapabilities` says what a backend can do, `LanguageDefinition` carries a code
+and a human name, `LanguageRegistry` answers the one question the product asks —
+`checkPair(input, output)`. The OpenAI set is the versioned frozen manifest
+(`openAiManifest()`, provenance fields inside): the 13 target codes live-verified against
+the real service plus the 70+ auto-detected sources enumerated by the translation docs;
+the key has no `api.model.read` scope, so this frozen manifest is the **primary** capability
+source, not a fallback (`docs/openai-realtime-protocol.md` sections 13/15). Behaviour, all
+covered by tests:
+
+* the pair gate lives where sessions are opened — `ApplicationController::startSession`
+  and `OpenAIRealtimeBackend::openSession` refuse an unsupported pair before any transport
+  exists, with an operator-readable sentence, and the refusal is offline-testable;
+* Config validates only the *shape* of a stored language tag (module boundary: a config
+  file must not know backend capabilities); supportability is the registry's answer;
+* English <-> Russian, the MVP pair, is pinned in both directions by a test;
+* `OpenAIRealtimeOptions::capabilities` is the seam where a dynamically fetched manifest
+  would be mounted if the key ever gains model-read scope — no wiring change needed.
+
 ## Layout
 
 ```text
@@ -369,7 +392,7 @@ CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
-src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), Null/ backend
+src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool

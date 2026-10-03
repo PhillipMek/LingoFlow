@@ -343,6 +343,21 @@ examples [R1][R2]; the exact accepted code strings for all 13 targets are **not*
 published as a code list. The manifest in 011 should carry codes for `"en"`/`"ru"` (used
 pattern) and each code must be confirmed at the live checkpoint (14.4) before wider use.
 
+**Frozen by task 011 (2026-10-03), as `src/Translation/LanguageRegistry` v1.** The live
+checkpoint 14.4 closed the code question first (section 15): all 13 targets accepted as
+ISO 639-1. The manifest therefore carries: `targets` = the 13 live-verified ISO 639-1
+codes (`es pt fr ja ru zh de ko hi id vi it en`), `sources` = the [R8] enumeration
+re-fetched 2026-10-02 - 74 named languages mapped to ISO 639-1, with ISO 639-2 `fil`/`haw`
+for the two names that have no two-letter code (R8 lists Tagalog AND Filipino; both kept
+because the source lists both). The source codes never cross the wire - the provider
+auto-detects spoken language and `session.update` carries only the target (section 5) -
+so they are the product's own identifiers for declaring and validating what is spoken.
+Consumers of this single list: `ApplicationController::startSession` (operator gate),
+`OpenAIRealtimeBackend::openSession` (offline refusal, with
+`OpenAIRealtimeOptions::capabilities` as the seam a future dynamic manifest would
+replace it through - dynamic discovery is not available with this key, section 15), and
+from task 014 the UI dropdowns. Nothing else may carry a language list (FAIL criterion).
+
 ## 14. Explicitly unverified — needs the live API (HUMAN CHECKPOINT)
 
 This task verified documentation, not traffic; there is no `OPENAI_API_KEY` on this
