@@ -48,9 +48,19 @@ std::string describeStatus(const AppStatus& status)
 
 ApplicationController::ApplicationController()
     : audioBackend_(std::make_unique<audio::NullAudioBackend>())
-    , translationBackend_(std::make_unique<translation::NullTranslationBackend>())
     , ndiOutput_(std::make_unique<ndi::NullNdiOutput>())
+    , translationBackend_(std::make_unique<translation::NullTranslationBackend>())
 {
+    // The one route text takes (task 013): sink -> typed pipeline -> listener.
+    // The listener runs on the ingesting (backend worker) thread while the
+    // pipeline's lock is held; publishing to NDI is non-blocking by its own
+    // contract, and this lambda adds nothing that could block. Audio never
+    // passes through here, so text cannot stall it and vice versa.
+    textPipeline_.setListener(
+        [this](const translation::TranslationTextEvent& event)
+        {
+            publishToNdi(event);
+        });
 }
 
 void ApplicationController::setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend)
@@ -166,8 +176,12 @@ void ApplicationController::stop()
     state_ = ApplicationState::stopping;
     log::info(kComponent, "stopping");
 
-    stopNdi();
+    // Session first, NDI after: closeSession() may flush the trailing translated
+    // line through the sink (task 013), and that text still has an audience only
+    // while the subtitle transport is up. Audio goes last, as before - the
+    // session teardown joins the streaming worker before the device dies.
     stopSession();
+    stopNdi();
     stopAudio();
 
     faultReason_.clear();
@@ -403,7 +417,7 @@ void ApplicationController::stopNdi() noexcept
         ndiOutput_->stop();
 }
 
-void ApplicationController::publishToNdi(std::string_view text, bool isFinal)
+void ApplicationController::publishToNdi(const translation::TranslationTextEvent& event)
 {
     if (ndiOutput_ == nullptr)
         return;
@@ -412,9 +426,10 @@ void ApplicationController::publishToNdi(std::string_view text, bool isFinal)
         return;   // feature is off: dropping subtitles is expected, not an error
 
     ndi::SubtitleFrame frame;
-    frame.text.assign(text);
-    frame.final = isFinal;
-    frame.sequence = static_cast<long long>(ndiSequence_.fetch_add(1, std::memory_order_relaxed) + 1);
+    frame.text = event.text;
+    frame.final = event.kind == translation::TextKind::final;
+    frame.sequence = static_cast<long long>(event.sequence);   // the pipeline's own
+                                                               // monotonic identity
 
     std::string error;
     if (!ndiOutput_->publish(frame, error))
@@ -567,13 +582,13 @@ void ApplicationController::onTranslatedAudio(const float* samples, int frameCou
 void ApplicationController::onPartialText(std::string_view text)
 {
     diagnostics_.countPartialTextEvent();
-    publishToNdi(text, false);
+    textPipeline_.ingestPartial(text);
 }
 
 void ApplicationController::onFinalText(std::string_view text)
 {
     diagnostics_.countFinalTextEvent();
-    publishToNdi(text, true);
+    textPipeline_.ingestFinal(text);
 }
 
 void ApplicationController::onSessionStateChanged(translation::SessionState state)
@@ -587,6 +602,17 @@ void ApplicationController::onSessionStateChanged(translation::SessionState stat
         warnedRateMismatch_.store(false, std::memory_order_relaxed);
         warnedNoBuffer_.store(false, std::memory_order_relaxed);
         warnedBadBlock_.store(false, std::memory_order_relaxed);
+    }
+    else if (state == translation::SessionState::reconnecting
+             || state == translation::SessionState::faulted
+             || state == translation::SessionState::closed)
+    {
+        // Session boundaries close the open subtitle line: the words the
+        // translator got before the line died are history, not a draft that a
+        // reopened session will silently replace. Idempotent, and the pipeline's
+        // duplicate guard lets a backend's own close-flush through without
+        // stamping the same line twice.
+        textPipeline_.closeOpenLine();
     }
 }
 

@@ -3,6 +3,7 @@
 // Null NDI output: transport-shaped no-op for the skeleton and tests. It accepts
 // and counts frames, publishes nothing, and never blocks.
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 
@@ -21,13 +22,16 @@ public:
     void stop() noexcept override;
     bool publish(const SubtitleFrame& frame, std::string& error) override;
 
-    std::uint64_t publishedFrames() const noexcept { return published_; }
+    std::uint64_t publishedFrames() const noexcept { return published_.load(std::memory_order_relaxed); }
     std::string_view streamName() const noexcept { return streamName_; }
 
 private:
     OutputState state_ = OutputState::disabled;
     std::string streamName_;
-    std::uint64_t published_ = 0;
+    /// Publishes run on the caller's worker thread (sink path) while the
+    /// operator/tests read the count from another thread: atomic relaxed, the
+    /// same rule the real NDI output will follow in task 016.
+    std::atomic<std::uint64_t> published_ { 0 };
 };
 
 } // namespace ndi

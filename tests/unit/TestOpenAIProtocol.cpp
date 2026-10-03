@@ -124,6 +124,10 @@ public:
     /// closeSession() returning must end all callbacks (contract rule 5);
     /// tests arm this and any callback afterwards is a hard violation.
     void armAfterCloseExpectation() { closedReturned_.store(true); }
+
+    /// A reopened session legitimately produces callbacks again: disarm before
+    /// the next open so the guard means "after THIS close" only.
+    void disarmAfterClose() { closedReturned_.store(false); }
     int violations() const { return violations_.load(); }
 
     std::vector<SessionState> states() const
@@ -151,6 +155,30 @@ public:
         for (const std::string& p : partials_)
             out += p;
         return out;
+    }
+
+    std::vector<std::string> partials() const
+    {
+        const std::lock_guard<std::mutex> lock (mutex_);
+        return partials_;
+    }
+
+    std::string lastPartial() const
+    {
+        const std::lock_guard<std::mutex> lock (mutex_);
+        return partials_.empty() ? std::string {} : partials_.back();
+    }
+
+    std::vector<std::string> finals() const
+    {
+        const std::lock_guard<std::mutex> lock (mutex_);
+        return finals_;
+    }
+
+    std::string lastFinal() const
+    {
+        const std::lock_guard<std::mutex> lock (mutex_);
+        return finals_.empty() ? std::string {} : finals_.back();
     }
 
     std::size_t partialCount() const
@@ -863,30 +891,111 @@ TEST_CASE("OpenAI backend: delta metadata mismatch drops the block, keeps the se
     s.sink.armAfterCloseExpectation();
 }
 
-TEST_CASE("OpenAI backend: transcript deltas append verbatim; no final events exist",
+TEST_CASE("OpenAI backend: transcript fragments arrive as whole-line snapshots, "
+          "bounded by settle and close (task 013)",
           "[openai][protocol][text]")
 {
     Scenario s;
+    s.options.transcriptSettleMs = 150;   // a test clock, not a product number
+    s.backend = std::make_unique<network::OpenAIRealtimeBackend>(s.secrets, s.options,
+                                                                 s.fakeFactory);
+    s.backend->setSink(s.sink);
     REQUIRE(s.openDefault());
 
-    // Section 8: fragments carry their own spacing; never add a space between
-    // deltas. There are no *.done events in the protocol (section 6), so 009
-    // maps everything to partials - final text is task 013's typed pipeline.
+    // Protocol section 8: fragments are append-only and carry their own
+    // spacing - the backend concatenates verbatim but publishes the WHOLE
+    // current line as the partial snapshot the sink contract means (013).
     s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":"Привет"})");
     s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":" миру"})");
     s.fake->queueMessage(R"({"type":"session.input_transcript.delta","delta":"Hello"})");
 
-    REQUIRE(Scenario::waitFor([&] { return s.sink.joinedPartials().find("Привет") != std::string::npos; }));
-    REQUIRE(Scenario::waitFor([&] { return s.sink.joinedPartials().size() == std::string("Привет миру").size(); }));
-    CHECK(s.sink.joinedPartials() == "Привет миру");
-    CHECK(s.sink.finalCount() == 0);
+    REQUIRE(Scenario::waitFor([&] { return s.sink.partialCount() >= 2; }));
 
-    // The source transcript has no sink channel before 013 and must not be
-    // misdelivered as translated text (the "Hello" above must not appear).
+    const auto partials = s.sink.partials();
+    REQUIRE(partials.size() == 2);
+    CHECK(partials[0] == "Привет");
+    CHECK(partials[1] == "Привет миру");   // snapshot, not fragment
+
+    // The wire has no line-end event (section 6) - until 013 everything was a
+    // partial and lines had no boundary at all. Now the product's settle rule
+    // closes the line: a pause in transcript activity while the stream keeps
+    // running produces exactly one final with the line's words.
+    CHECK(s.sink.finalCount() == 0);
+    REQUIRE(Scenario::waitFor([&] { return s.sink.finalCount() >= 1; }));
+    CHECK(s.sink.lastFinal() == "Привет миру");
+
+    // The settled line is gone from the accumulation: the next fragment
+    // starts a fresh snapshot, it does not resume the closed one.
+    s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":"Дальше"})");
+    REQUIRE(Scenario::waitFor([&] { return s.sink.lastPartial() == "Дальше"; }));
+
+    // closeSession flushes the open line as a final before it returns (rule 5
+    // permits callbacks during the close, and this is the audience's tail of
+    // the translation - it must not evaporate with the session).
+    s.backend->closeSession();
+    const auto finals = s.sink.finals();
+    REQUIRE(finals.size() == 2);
+    CHECK(finals[0] == "Привет миру");
+    CHECK(finals[1] == "Дальше");
+    s.sink.armAfterCloseExpectation();
+
+    // The source transcript stays where it is: no sink text channel carries
+    // it (a source lane would be a contract decision, not an accident).
     CHECK(s.sink.joinedPartials().find("Hello") == std::string::npos);
+    CHECK(s.sink.lastFinal().find("Hello") == std::string::npos);
+    CHECK(s.sink.violations() == 0);
+}
+
+TEST_CASE("OpenAI backend: settle disabled means the line ends only at close",
+          "[openai][protocol][text]")
+{
+    Scenario s;
+    s.options.transcriptSettleMs = 0;     // pause rule off: close is the boundary
+    s.backend = std::make_unique<network::OpenAIRealtimeBackend>(s.secrets, s.options,
+                                                                 s.fakeFactory);
+    s.backend->setSink(s.sink);
+    REQUIRE(s.openDefault());
+
+    s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":"Раз"})");
+    REQUIRE(Scenario::waitFor([&] { return s.sink.partialCount() >= 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds (200));   // well past any settle
+
+    CHECK(s.sink.finalCount() == 0);      // no pause rule, no finals
+    s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":" два"})");
+    REQUIRE(Scenario::waitFor([&] { return s.sink.lastPartial() == "Раз два"; }));
+
+    s.backend->closeSession();
+    CHECK(s.sink.finals().size() == 1);
+    CHECK(s.sink.lastFinal() == "Раз два");
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: a reopened session starts its line from zero (rule 6)",
+          "[openai][protocol][text]")
+{
+    Scenario s;
+    s.options.transcriptSettleMs = 0;
+    s.backend = std::make_unique<network::OpenAIRealtimeBackend>(s.secrets, s.options,
+                                                                 s.fakeFactory);
+    s.backend->setSink(s.sink);
+    REQUIRE(s.openDefault());
+
+    s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":"первая"})");
+    REQUIRE(Scenario::waitFor([&] { return s.sink.partialCount() >= 1; }));
+    s.backend->closeSession();            // flushes "первая" as final
+    s.sink.armAfterCloseExpectation();
+    CHECK(s.sink.lastFinal() == "первая");
+
+    // The next session is unrelated: its first snapshot is only its own words.
+    s.sink.disarmAfterClose();
+    REQUIRE(s.openDefault());
+    s.fake->queueMessage(R"({"type":"session.output_transcript.delta","delta":"вторая"})");
+    REQUIRE(Scenario::waitFor([&] { return s.sink.lastPartial() == "вторая"; }));
 
     s.backend->closeSession();
     s.sink.armAfterCloseExpectation();
+    CHECK(s.sink.lastFinal() == "вторая");
+    CHECK(s.sink.violations() == 0);
 }
 
 // -------------------------------------------------------------------- errors

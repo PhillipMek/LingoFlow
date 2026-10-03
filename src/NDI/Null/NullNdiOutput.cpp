@@ -38,7 +38,7 @@ bool NullNdiOutput::publish(const SubtitleFrame& frame, std::string& error)
     if (frame.text.empty())
         return false;   // nothing to show; not an error
 
-    ++published_;
+    published_.fetch_add(1, std::memory_order_relaxed);
     state_ = OutputState::publishing;
     return true;
 }

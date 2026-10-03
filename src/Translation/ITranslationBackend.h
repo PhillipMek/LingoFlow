@@ -22,14 +22,21 @@
 //     and nothing in this interface can reach a device.
 //
 // Deliberately NOT here yet:
-//   * Typed text events with sequence/timestamp fields - task 013 defines
-//     TranslationTextEvent and the text pipeline that owns them. Until then
-//     partial/final text is the string pair below.
 //   * getCapabilities() (SPEC "Translation Provider Interface") - task 011
 //     creates TranslationCapabilities/LanguageRegistry; a half-defined
 //     capability type here would be re-invented by that task. Backend-specific
 //     pair validation in the meantime is minimal and honest: reject what you
 //     cannot do, with a message.
+//
+// What task 013 added around this seam (typed text, bounded history):
+//   Translation/TextPipeline.h defines TranslationTextEvent (sequence, arrival
+//   stamp, partial/final) and the pipeline that owns them. The sink itself
+//   still carries the string pair below - deliberately: identities belong to
+//   the product side, and a backend that had to stamp sequences would know
+//   more about the application than a seam should. What 013 fixed is the
+//   MEANING of those strings (see onPartialText): whole-line snapshots, never
+//   provider fragments - assembling a provider's pieces into a line is the
+//   provider's backend's job, upstream of this interface.
 
 #include <string>
 #include <string_view>
@@ -159,10 +166,16 @@ public:
     /// wrong speed.
     virtual void onTranslatedAudio(const float* samples, int frameCount, int sampleRate) = 0;
 
-    /// In-progress transcript/translation; may arrive many times per utterance.
+    /// The translated line as it currently reads: a whole-line snapshot, not a
+    /// fragment - the backend assembles whatever its provider streams before
+    /// it crosses this seam (task 013). Every call replaces the previous one
+    /// for the same line; may arrive many times per utterance.
     virtual void onPartialText(std::string_view text) = 0;
 
-    /// Completed text; final events are authoritative for history and NDI.
+    /// Completed text; final events are authoritative for history and NDI. An
+    /// empty final closes the open line with its own last-known words (the
+    /// TextPipeline rule task 013 defined); a final with words replaces the
+    /// draft as the authoritative text of that line.
     virtual void onFinalText(std::string_view text) = 0;
 
     /// Session lifecycle changes (UI status, diagnostics counters). A backend

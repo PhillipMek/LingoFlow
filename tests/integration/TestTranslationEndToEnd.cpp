@@ -307,12 +307,90 @@ TEST_CASE("End to end: mock text reaches NDI and diagnostics through the control
     CHECK(snapshot.partialTextEvents == 2);
     CHECK(snapshot.finalTextEvents == 1);
 
+    // Task 013: those same three events crossed the typed pipeline - the two
+    // partials replaced each other as the open line, the final owned it and
+    // put it in history exactly once. The UI-facing model and NDI agree because
+    // they read the same emitted events, not the provider.
+    const auto text = rig.controller.textPipeline().snapshot();
+    CHECK(text.currentLine.empty());
+    REQUIRE(text.history.size() == 1);
+    CHECK(text.history[0].text == "good evening, welcome");
+    CHECK(text.history[0].kind == translation::TextKind::final);
+    CHECK(text.history[0].sequence == 3);   // one sequence across sink, NDI, UI
+
     // Text events never needed an audio path to be attached: the mock delivered
     // no audio at all in this script.
     CHECK(rig.mock->deliveredBlocks() == 0);
     CHECK(snapshot.translatedAudioFrames == 0);
 
     rig.controller.stop();
+}
+
+TEST_CASE("End to end: a session death closes the open subtitle line, and history survives restarts",
+          "[translation][e2e][text][history]")
+{
+    // The operator's real question at a fault: "what did the translator say
+    // before it died?" The words that reached the wire become history, not a
+    // draft evaporating with the session.
+    Rig rig{ std::make_unique<MockTranslationBackend>() };
+    rig.mock->deliverFrames = 0;
+    rig.mock->textCues = {
+        { 1, "the interrupted sentence", false },
+    };
+
+    auto cfg = rig.controller.config().current();
+    cfg.ndi.enabled = true;
+    cfg.ndi.streamName = "LingoFlow History";
+    std::string error;
+    REQUIRE(rig.controller.config().update(cfg, error));
+
+    auto ndi = std::make_unique<ndi::NullNdiOutput>();
+    auto* ndiRef = ndi.get();
+    rig.controller.setNdiOutput(std::move(ndi));
+
+    REQUIRE(rig.start());
+
+    Pump pump;
+    pump.feedOneSubmit(rig.controller.engine(), *rig.mock, 0.2f);
+
+    auto text = rig.controller.textPipeline().snapshot();
+    REQUIRE(text.currentLine == "the interrupted sentence");
+    CHECK(text.history.empty());
+    REQUIRE(waitsFor([&] { return ndiRef->publishedFrames() >= 1; }));
+
+    rig.controller.stop();   // closeSession -> state closed -> closeOpenLine
+
+    text = rig.controller.textPipeline().snapshot();
+    CHECK(text.currentLine.empty());
+    REQUIRE(text.history.size() == 1);
+    CHECK(text.history[0].text == "the interrupted sentence");
+    CHECK(text.history[0].kind == translation::TextKind::final);
+
+    // The audience of the wire saw that closing too: the final frame left on
+    // a live NDI output (stop order keeps subtitles up until the session's
+    // last words are out).
+    CHECK(ndiRef->publishedFrames() == 2);   // partial, then the closing final
+
+    // A second session adds to the same bounded history; nothing resets -
+    // the operator's subtitles do not forget the first half of the show. The
+    // mock resets its per-session cue positions on reopen by contract rule 6,
+    // so the same script fires again.
+    REQUIRE(rig.start());
+
+    pump.feedOneSubmit(rig.controller.engine(), *rig.mock, 0.2f);
+    REQUIRE(waitsFor([&] { return ndiRef->publishedFrames() >= 3; }));
+
+    text = rig.controller.textPipeline().snapshot();
+    REQUIRE(text.currentLine == "the interrupted sentence");   // new draft, same words
+    REQUIRE(text.history.size() == 1);                          // last session's line kept
+
+    rig.controller.stop();
+
+    text = rig.controller.textPipeline().snapshot();
+    CHECK(text.currentLine.empty());
+    REQUIRE(text.history.size() == 2);
+    CHECK(text.history[1].sequence > text.history[0].sequence); // one timeline, not two
+    CHECK(ndiRef->publishedFrames() == 4);
 }
 
 TEST_CASE("End to end: the session request carries settings, model hint and live rates",

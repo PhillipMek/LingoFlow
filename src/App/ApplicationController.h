@@ -35,6 +35,7 @@
 #include "Diagnostics/DiagnosticsManager.h"
 #include "NDI/INdiOutput.h"
 #include "Translation/ITranslationBackend.h"
+#include "Translation/TextPipeline.h"
 
 namespace liveai {
 
@@ -148,6 +149,12 @@ public:
     // this product yet, and playing 16 kHz audio at 48 kHz would be a lie with
     // chipmunk voice.
     void onTranslatedAudio(const float* samples, int frameCount, int sampleRate) override;
+
+    /// Text events cross the seam as the contract's partial/final string pair and
+    /// become typed the moment they arrive: the pipeline stamps sequence and
+    /// arrival time, owns the bounded history the UI reads, and its listener is
+    /// what publishes subtitles to NDI. The sink methods here do nothing else -
+    /// text never touches the audio path and audio never waits for text.
     void onPartialText(std::string_view text) override;
     void onFinalText(std::string_view text) override;
     void onSessionStateChanged(translation::SessionState state) override;
@@ -156,6 +163,11 @@ public:
     /// error must never stop the audio path (AGENTS.md 12), and deciding to
     /// reconnect or reopen is task 010's, not this callback's.
     void onTranslationError(const translation::TranslationError& error) override;
+
+    /// The UI-facing text model (task 013): bounded history, the open line, and
+    /// the counters that say what the pipeline ignored and why. Read from any
+    /// thread.
+    const translation::TextPipeline& textPipeline() const noexcept { return textPipeline_; }
 
 private:
     bool startAudio(std::string& error);
@@ -171,7 +183,7 @@ private:
     /// the output started; false only on a real start failure.
     bool startNdi(std::string& error);
     void stopNdi() noexcept;
-    void publishToNdi(std::string_view text, bool isFinal);
+    void publishToNdi(const translation::TranslationTextEvent& event);
     void fault(std::string reason);
 
     DiagnosticsManager diagnostics_;
@@ -179,8 +191,19 @@ private:
     AudioEngine engine_{ &diagnostics_ };
 
     std::unique_ptr<audio::IAudioBackend> audioBackend_;
-    std::unique_ptr<translation::ITranslationBackend> translationBackend_;
+
+    /// The typed text model of task 013: fed by the sink, read by the UI,
+    /// listened to by the NDI publisher. Application-level like the counters -
+    /// a session restart does not erase the operator's history.
+    ///
+    /// Declaration order is load-bearing, not stylistic: destruction runs in
+    /// reverse, and ~OpenAIRealtimeBackend() closes its session - which now
+    /// flushes an open subtitle line through this sink (rule 5 allows it
+    /// before the close returns). The pipeline and the NDI output therefore
+    /// must outlive the backend that writes through them.
+    translation::TextPipeline textPipeline_;
     std::unique_ptr<ndi::INdiOutput> ndiOutput_;
+    std::unique_ptr<translation::ITranslationBackend> translationBackend_;
 
     /// Lives exactly as long as an open session (startStreaming/stopStreaming);
     /// it holds pointers into the engine's pipeline, so it must be gone before
@@ -196,7 +219,9 @@ private:
     ApplicationState state_ = ApplicationState::stopped;
     std::string faultReason_;
     std::string lastAudioError_;
-    std::atomic<std::uint64_t> ndiSequence_{ 0 };
+    // (ndiSequence_ retired by task 013: subtitle frames carry the typed event's
+    // own pipeline sequence now - one monotonic identity for text, not a
+    // per-publisher counter.)
 
     /// A wrong-rate delivery repeats per block; the log says it once and the
     /// counters carry the frames. A translation error is never silenced at all.

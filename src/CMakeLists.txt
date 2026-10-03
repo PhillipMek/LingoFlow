@@ -58,6 +58,8 @@ add_library(lingoflow_core STATIC
     Translation/LanguageRegistry.h
     Translation/ReconnectSupervisor.cpp
     Translation/ReconnectSupervisor.h
+    Translation/TextPipeline.cpp
+    Translation/TextPipeline.h
     Translation/Null/NullTranslationBackend.cpp
     Translation/Null/NullTranslationBackend.h
 

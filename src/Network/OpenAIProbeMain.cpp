@@ -226,16 +226,22 @@ public:
         }
     }
 
+    // Sink since task 013: partial is a whole-line SNAPSHOT (replacement), a
+    // final closes a line. text_ accumulates closed lines; openLine_ holds the
+    // line still in progress, so text() never double-counts and never loses an
+    // unfinished tail.
     void onPartialText(std::string_view text) override
     {
         std::lock_guard<std::mutex> lock (mutex_);
-        text_ += text;
+        openLine_.assign(text);
     }
 
     void onFinalText(std::string_view text) override
     {
         std::lock_guard<std::mutex> lock (mutex_);
         text_ += text;
+        text_ += '\n';            // one settled line per final (probe display)
+        openLine_.clear();
     }
 
     void onSessionStateChanged(translation::SessionState state) override
@@ -264,7 +270,10 @@ public:
     std::string text()
     {
         std::lock_guard<std::mutex> lock (mutex_);
-        return text_;
+
+        // Closed lines (one per final) plus whatever line is still open: the
+        // whole truth of what the translator delivered, in delivery order.
+        return text_ + openLine_;
     }
 
     std::string states()
@@ -282,7 +291,8 @@ public:
 private:
     std::mutex mutex_;
     std::vector<std::int16_t> delivered_;
-    std::string text_;
+    std::string text_;      ///< settled lines, newline-separated
+    std::string openLine_;  ///< the line partial snapshots currently describe
     std::string states_;
     translation::SessionState lastState_ = translation::SessionState::closed;
     int deliveredRate_ = 0;

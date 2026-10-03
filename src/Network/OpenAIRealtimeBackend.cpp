@@ -25,6 +25,14 @@ constexpr int kWireChannels = 1;        ///< protocol section 7
 constexpr int kWirePort = 443;
 const char* kLogComponent = "network.openai";
 
+/// Stream clock for the subtitle settle policy (task 013): wall-clock
+/// milliseconds off a monotonic source, never a calendar.
+long long steadyNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 /// Protocol section 9 connection-level table: HTTP status before the upgrade
 /// maps to product categories; nothing provider-named crosses the sink seam.
 translation::TranslationErrorCategory categoryForHttpStatus(int status)
@@ -251,6 +259,13 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     closeSent_ = false;
     drainForced_ = false;
     eventCounter_ = 0;
+    {
+        // A reopened session must behave like a fresh one (contract rule 6):
+        // no words from the old translation survive into the new line.
+        const std::lock_guard<std::mutex> lock (transcriptMutex_);
+        transcriptLine_.clear();
+        lastTranscriptMs_ = steadyNowMs();
+    }
     {
         const std::lock_guard<std::mutex> lock (lifeMutex_);
         handshakeDone_ = false;
@@ -485,6 +500,20 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     }
     senderThread_ = std::thread {};
     receiverThread_ = std::thread {};
+
+    // Task 013: session close is the one text boundary the provider guarantees
+    // (protocol section 6 - nothing else closes a line), so the open subtitle
+    // line is flushed as a final while callbacks are still lawful: before this
+    // function returns (rule 5) and before the session is announced closed,
+    // which keeps the audience's tail of the translation in order in history.
+    // A faulted death may have let the controller close the same words first;
+    // the TextPipeline duplicate guard eats whichever copy arrives second.
+    {
+        const std::string line = takeTranscriptLine();
+
+        if (!line.empty() && sink_ != nullptr)
+            sink_->onFinalText(line);
+    }
 
     reportTransition(SessionState::closed);
 
@@ -774,6 +803,13 @@ void OpenAIRealtimeBackend::senderLoop()
                                                 + " chunks in one pass (scheduling stall)");
         }
 
+        // Subtitle settle policy (task 013): the sender owns the stream clock,
+        // so the line pause is judged here - once per wake-up, a cheap peek at
+        // the assembled line under its own mutex. transcriptSettleMs documents
+        // why the pause rule exists at all: the wire has no line boundary, so
+        // the product must supply one.
+        settleTranscriptLine(steadyNowMs());
+
         // Sleep until the next chunk is due, with a bounded slice so stop/close
         // requests are seen quickly; the cv lets closeSession wake us at once.
         auto wakeAt = nextDue;
@@ -884,27 +920,39 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
     if (type == "session.output_transcript.delta")
     {
         // Append-only fragments, verbatim (section 8: the fragments carry their
-        // own spacing; no unconditional space is ever inserted here).
+        // own spacing; no unconditional space is ever inserted here). Task 013
+        // put the assembly HERE on purpose: the sink's partial channel means
+        // "the whole line as it currently reads" - the snapshot semantics the
+        // TextPipeline and every downstream consumer rely on - and assembling
+        // fragments into that snapshot is provider knowledge, which stops at
+        // this file (AGENTS.md 7).
         if (!parsed.contains("delta") || !parsed["delta"].is_string())
         {
             reportError(TranslationErrorCategory::protocol,
                         "openai: transcript delta without a payload", false);
             return EventResult::keepGoing;
         }
+        {
+            const std::lock_guard<std::mutex> lock(transcriptMutex_);
+            transcriptLine_ += stringField(parsed, "delta");
+            lastTranscriptMs_ = steadyNowMs();
+        }
         if (sink_ != nullptr)
-            sink_->onPartialText(stringField(parsed, "delta"));
+            sink_->onPartialText(transcriptSnapshot());
         return EventResult::keepGoing;
     }
 
     if (type == "session.input_transcript.delta")
     {
-        // Source-language transcript. The contract has a single text channel
-        // until task 013 introduces typed text events, and we never enable
-        // input transcription in session.update (section 12.7: omit = not
-        // sent), so receiving one is unexpected: log it, do not misdeliver it
-        // as translated text, do not pretend it is an error.
+        // Source-language transcript. The typed text pipeline exists now
+        // (task 013), but the sink's contract is one translated-text channel:
+        // a source lane would be a contract decision, not an accident of this
+        // file. We never enable input transcription in session.update (section
+        // 12.7: omit = not sent), so receiving one is unexpected: log it, do
+        // not misdeliver it as translated text, do not pretend it is an error.
         log::debug(kLogComponent,
-                   "source transcript delta ignored (typed text pipeline is task 013)");
+                   "source transcript delta ignored (single text channel by contract; "
+                   "source lane is an explicit extension point)");
         return EventResult::keepGoing;
     }
 
@@ -1071,6 +1119,56 @@ std::string OpenAIRealtimeBackend::buildSessionClose()
 std::string OpenAIRealtimeBackend::nextEventId()
 {
     return "evt_" + std::to_string(++eventCounter_);
+}
+
+// ------------------------------------------------------- subtitle line assembly
+
+void OpenAIRealtimeBackend::settleTranscriptLine(long long nowMs)
+{
+    if (options_.transcriptSettleMs <= 0)
+        return;   // pause rule disabled: the line ends only at session close
+
+    std::string line;
+
+    {
+        const std::lock_guard<std::mutex> lock (transcriptMutex_);
+
+        if (transcriptLine_.empty())
+            return;
+
+        if (nowMs - lastTranscriptMs_ < options_.transcriptSettleMs)
+            return;
+
+        // The pause has elapsed with the stream still running: the translator
+        // stopped talking. The line as delivered is what there is of it -
+        // complete as far as this endpoint's stream tells us - and it goes out
+        // as a final. The next fragment starts a new line.
+        line.swap(transcriptLine_);
+    }
+
+    // Sink callback outside the lock (never chain transcriptMutex_ into the
+    // pipeline's lock or the NDI publish; the receiver uses the same rule).
+    log::debug(kLogComponent,
+               "subtitle line settled after a " + std::to_string(options_.transcriptSettleMs)
+                   + " ms pause: " + std::to_string(line.size()) + " bytes");
+
+    if (sink_ != nullptr)
+        sink_->onFinalText(line);
+}
+
+std::string OpenAIRealtimeBackend::transcriptSnapshot()
+{
+    const std::lock_guard<std::mutex> lock (transcriptMutex_);
+    return transcriptLine_;
+}
+
+std::string OpenAIRealtimeBackend::takeTranscriptLine()
+{
+    const std::lock_guard<std::mutex> lock (transcriptMutex_);
+
+    std::string line;
+    line.swap(transcriptLine_);
+    return line;
 }
 
 bool OpenAIRealtimeBackend::sendTextEvent(const std::string& text)

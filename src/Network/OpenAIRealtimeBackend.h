@@ -91,6 +91,18 @@ struct OpenAIRealtimeOptions
     /// it never drops silently (task 012 decides caller behavior). 10 s absorbs
     /// transient network stalls measured live.
     int maxQueuedInputMs = 10000;
+    /// Subtitle line policy (task 013), a PRODUCT decision, not a protocol
+    /// fact: the wire gives no line boundary (protocol sections 6 and 8 - no
+    /// `*.done` exists and transcript deltas are append-only fragments), so
+    /// the backend assembles fragments into one translated line and calls it
+    /// final when the line has received no new fragment for this long while
+    /// the session kept streaming. A line that ends this way is complete as
+    /// far as the provider is concerned; closeSession flushes the open line
+    /// unconditionally. 0 disables the pause rule (the line then ends only at
+    /// session close); the TextPipeline's draft cap is the last bound either
+    /// way. Tests use small values; 2500 ms is a readable-subtitle guess, to
+    /// be confirmed against the operator's eyes at a rig checkpoint.
+    int transcriptSettleMs = 2500;
     /// Capability source for pair validation (task 011): nullptr = the shipped
     /// frozen manifest (`translation::openAiManifest()`). The seam exists
     /// because AGENTS.md 9 prefers dynamic capabilities when a provider offers
@@ -201,6 +213,31 @@ private:
     std::mutex queueMutex_;
     std::deque<QueuedChunk> queue_;
     int queuedFrames_ = 0;
+
+    // ---- translated subtitle line assembly (task 013) ----
+    // Protocol section 8: transcript deltas are append-only fragments carrying
+    // their own spacing; the sink contract wants whole-line snapshots. The
+    // assembly lives HERE - protocol semantics stop at this file, and the
+    // TextPipeline above never sees a fragment. Owner threads: the receiver
+    // appends, the sender applies the settle policy, closeSession flushes -
+    // all worker threads, never the audio callback; the sink is never called
+    // while transcriptMutex_ is held (no lock chain into pipeline/NDI).
+    std::mutex transcriptMutex_;
+    std::string transcriptLine_;
+    long long lastTranscriptMs_ = 0;  ///< guarded by transcriptMutex_
+
+    /// Finalize the open line if the pause policy says it is complete (header
+    /// of transcriptSettleMs: a product decision, not a protocol fact).
+    /// Cheap no-op when nothing is open or the pause has not elapsed.
+    void settleTranscriptLine(long long nowMs);
+
+    /// The open line as it currently reads - the whole-line snapshot the
+    /// receiver emits after appending a fragment.
+    std::string transcriptSnapshot();
+
+    /// Take whatever line is open, unconditionally (session close). Returns
+    /// empty when there is nothing to flush.
+    std::string takeTranscriptLine();
 };
 
 } // namespace network
