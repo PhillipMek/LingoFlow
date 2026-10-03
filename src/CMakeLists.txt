@@ -67,7 +67,9 @@ add_library(lingoflow_core STATIC
     NDI/Null/NullNdiOutput.h
 
     App/ApplicationController.cpp
-    App/ApplicationController.h)
+    App/ApplicationController.h
+    App/TranslationStreamer.cpp
+    App/TranslationStreamer.h)
 
 add_library(lingoflow::core ALIAS lingoflow_core)
 
@@ -205,6 +207,15 @@ target_link_libraries(LingoFlow
 
 if(MSVC)
     target_compile_options(LingoFlow PRIVATE /utf-8 /MP8)
+endif()
+
+# Task 012: the operator application mounts the production translation chain -
+# OpenAIRealtimeBackend inside the ReconnectSupervisor. The Network target is
+# Windows-only (winhttp), and Main.cpp only references it under this define, so
+# a build without it keeps running on the Null backend instead of failing.
+if(WIN32)
+    target_link_libraries(LingoFlow PRIVATE lingoflow_network advapi32)
+    target_compile_definitions(LingoFlow PRIVATE LINGOFLOW_WITH_OPENAI_BACKEND=1)
 endif()
 
 set_target_properties(LingoFlow PROPERTIES FOLDER "App")

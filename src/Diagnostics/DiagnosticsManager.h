@@ -61,6 +61,19 @@ public:
         translatedAudioDroppedFrames_.fetch_add(frames, std::memory_order_relaxed);
     }
 
+    /// Capture throughput (task 012). Two numbers because they answer two
+    /// different questions: did the translator get fed, and how much live speech
+    /// did the gap policy drop while the session was reconnecting.
+    void countTranslationSubmittedFrames(std::uint64_t frames) noexcept
+    {
+        translationSubmittedFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
+    void countTranslationGapFrames(std::uint64_t frames) noexcept
+    {
+        translationGapFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
     /// Translation failures are counted, never swallowed (AGENTS.md 12); fatal
     /// ones are counted separately because they end a session.
     void countTranslationError(bool fatal) noexcept
@@ -103,6 +116,8 @@ public:
         std::uint64_t translatedAudioFrames = 0;
         std::uint64_t rejectedAudioFrames = 0;
         std::uint64_t translatedAudioDroppedFrames = 0;
+        std::uint64_t translationSubmittedFrames = 0;
+        std::uint64_t translationGapFrames = 0;
         std::uint64_t translationErrors = 0;
         std::uint64_t translationFatalErrors = 0;
         int sampleRate = 0;
@@ -147,6 +162,8 @@ private:
     std::atomic<std::uint64_t> translatedAudioFrames_{ 0 };
     std::atomic<std::uint64_t> rejectedAudioFrames_{ 0 };
     std::atomic<std::uint64_t> translatedAudioDroppedFrames_{ 0 };
+    std::atomic<std::uint64_t> translationSubmittedFrames_{ 0 };
+    std::atomic<std::uint64_t> translationGapFrames_{ 0 };
     std::atomic<std::uint64_t> translationErrors_{ 0 };
     std::atomic<std::uint64_t> translationFatalErrors_{ 0 };
     std::atomic<int> sampleRate_{ 0 };

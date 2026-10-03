@@ -56,7 +56,17 @@ struct TranslationSettings
     /// (AGENTS.md 9, task 008/011).
     std::string modelHint;
 
-    int jitterBufferMs = 120;
+    /// Output pre-roll (SPEC "Output Jitter Buffer"). 250 ms is a provisional
+    /// engineering value derived from the live wire facts of
+    /// docs/openai-realtime-protocol.md section 15: deltas arrive in bursts of up
+    /// to 2x realtime and the post-close drain runs at ~4.7x, and the engine's
+    /// jitter headroom above the pre-roll is about one pre-roll
+    /// (AudioEngine::jitterCapacity) - at the old 120 ms guess a burst longer than
+    /// ~120 ms overflowed and dropped translated audio. This is still not an
+    /// end-to-end measurement: the rig sweep (docs/rig-checklist.md section 7)
+    /// picks the final default against a real device, and the operator can change
+    /// it live.
+    int jitterBufferMs = 250;
 
     // Session recovery policy (task 010). The supervisor retries a dropped
     // session forever while the application runs - a venue network blip must

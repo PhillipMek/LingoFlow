@@ -41,6 +41,7 @@ add_executable(lingoflow_tests
     unit/TestLanguageRegistry.cpp
     unit/TestReconnectSupervisor.cpp
     unit/TestApplicationController.cpp
+    unit/TestTranslationStreamer.cpp
     integration/TestTranslationEndToEnd.cpp)
 
 # Task 009: the OpenAI backend exists only where its transport (winhttp) exists.

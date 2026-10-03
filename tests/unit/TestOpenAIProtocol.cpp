@@ -1107,7 +1107,7 @@ TEST_CASE("OpenAI backend: server-initiated session.closed ends the session with
 
 // ---------------------------------------------------------------- instructions
 
-TEST_CASE("OpenAI backend: instructions are ignored with a warning, never faked",
+TEST_CASE("OpenAI backend: instructions are ignored with a logged warning, never faked",
           "[openai][protocol][honesty]")
 {
     Scenario s;
@@ -1117,10 +1117,11 @@ TEST_CASE("OpenAI backend: instructions are ignored with a warning, never faked"
 
     CHECK(s.backend->state() == SessionState::connected); // accepted...
 
-    REQUIRE(s.sink.errors().size() == 1); // ...and reported as not applied
-    CHECK(s.sink.errors()[0].category == TranslationErrorCategory::rejectedRequest);
-    CHECK_FALSE(s.sink.errors()[0].fatal);
-    CHECK(s.sink.errors()[0].message.find("instructions") != std::string::npos);
+    // ...and ignored with a LOG warning only (owner decision 2026-10-03): the
+    // request was not refused, so no TranslationError crosses the seam -
+    // rejectedRequest is the supervisor's terminal category, and an ordinary
+    // every-start fact must not look like a failure in the operator's status.
+    CHECK(s.sink.errors().empty());
 
     bool sawUpdate = false;
     for (const std::string& frame : s.fake->sent())

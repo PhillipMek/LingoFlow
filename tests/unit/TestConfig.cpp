@@ -76,7 +76,7 @@ TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[confi
     CHECK(cfg.translation.inputLanguage == "en");
     CHECK(cfg.translation.outputLanguage == "ru");
     CHECK(cfg.translation.modelHint.empty());      // backend default, not invented here
-    CHECK(cfg.translation.jitterBufferMs == 120);
+    CHECK(cfg.translation.jitterBufferMs == 250);  // provisional, from the live wire facts; rig sweep confirms
     CHECK(cfg.translation.reconnectEnabled);       // recovery is on unless the operator says otherwise
     CHECK(cfg.translation.reconnectInitialBackoffMs == 1000);
     CHECK(cfg.translation.reconnectMaxBackoffMs == 15000);
@@ -229,7 +229,7 @@ TEST_CASE("ConfigSchema: an invalid value is repaired field by field and reporte
     CHECK(restored.audio.bufferFrames == 480);
     CHECK(restored.audio.inputGainDb == 0.0f);
     CHECK(restored.translation.inputLanguage != restored.translation.outputLanguage);
-    CHECK(restored.translation.jitterBufferMs == 120);
+    CHECK(restored.translation.jitterBufferMs == 250);
     CHECK(restored.diagnostics.logLevel == "info");
 
     // The language clash is repaired consistently: both end up at their defaults.

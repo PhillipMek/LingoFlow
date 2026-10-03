@@ -2,13 +2,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "App/ApplicationController.h"
 #include "NDI/Null/NullNdiOutput.h"
+#include "Translation/ReconnectSupervisor.h"
 #include "Utils/Log.h"
 #include "support/MockTranslationBackend.h"
 
@@ -39,51 +43,62 @@ std::vector<float> filled(int frames, float value)
     return std::vector<float>(static_cast<std::size_t>(frames), value);
 }
 
-/// One simulated device block: constant audio in, capture what the engine puts
-/// on the wire, then hand the consumer's view of the input ring to the mock -
-/// exactly the steps the task 012 streaming worker will take, run from a single
-/// thread so the assertions are deterministic.
+/// Poll the observable until it is true. The point of task 012 is that capture
+/// moves on its own worker thread, so "the frames arrived at the backend" is an
+/// event to wait for, not a step to perform. Timeouts fail the test loudly - a
+/// hang is exactly what these checks exist to catch.
+template <typename Predicate>
+bool waitsFor(Predicate&& ready, int timeoutMs = 4000)
+{
+    for (int waited = 0; waited < timeoutMs; waited += 5)
+    {
+        if (ready())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    return ready();
+}
+
+/// One simulated device callback of constant audio. It does NOT touch the ring
+/// or the backend: from task 012 the streaming worker is the only thing that
+/// drains the input ring, and the tests assert exactly that.
 struct Pump
 {
     std::vector<float> in = filled(kFrames, 0.4f);
     std::vector<float> out = filled(kFrames, -0.125f);
-    std::vector<float> drained;
 
     const float* inPointers[1] = { in.data() };
     float* outPointers[1] = { out.data() };
 
-    /// Runs one callback and forwards whatever the ring accepted. Returns the
-    /// frames the callback played; on failure points the test at the submit.
-    int step(AudioEngine& engine, MockTranslationBackend& backend, float level)
+    /// Run one callback with `level` on the wire in.
+    void feed(AudioEngine& engine, float level)
     {
         std::fill(in.begin(), in.end(), level);
-        std::fill(out.begin(), out.end(), -0.125f);
-
+        std::fill(out.begin(), out.end(), -0.125f);   // poison: only the engine may rewrite it
         engine.processAudio(inPointers, outPointers, kFrames);
-
-        drained.assign(static_cast<std::size_t>(kFrames), 0.0f);
-        const std::size_t got = engine.inputRing(0)->read(drained.data(), drained.size());
-        REQUIRE(got == static_cast<std::size_t>(kFrames));
-
-        std::string error;
-        const bool accepted = backend.submitAudio(drained.data(), static_cast<int>(got), error);
-        REQUIRE(accepted);
-
-        return kFrames;
     }
 
-    /// A callback with silent input and no submit: plays whatever the jitter
-    /// buffer holds.
+    /// A callback with silent input: plays whatever the jitter buffer holds.
     void play(AudioEngine& engine)
     {
-        std::fill(in.begin(), in.end(), 0.0f);
-        std::fill(out.begin(), out.end(), -0.125f);
-        engine.processAudio(inPointers, outPointers, kFrames);
+        feed(engine, 0.0f);
+    }
+
+    /// Feed one block and wait until the streaming worker has handed it to the
+    /// backend as a single submit. The wait between feeds is what keeps the
+    /// mock's per-submit cue counters meaningful: one callback, one submit.
+    void feedOneSubmit(AudioEngine& engine, MockTranslationBackend& backend, float level)
+    {
+        const int before = backend.acceptedSubmits();
+        feed(engine, level);
+        REQUIRE(waitsFor([&] { return backend.acceptedSubmits() >= before + 1; }));
     }
 };
 
 /// A controller running the Null audio device and a mock the test keeps a
-/// handle to, with playback latency removed.
+/// handle to, with playback latency removed. From task 012 the controller also
+/// runs the production streaming worker itself between session open and close.
 struct Rig
 {
     QuietLog quiet;
@@ -101,7 +116,10 @@ struct Rig
         if (!controller.start())
             return false;
 
-        controller.engine().attachInputConsumer();
+        // The streaming worker is created by startSession(); this is task 012's
+        // production shape, not a test scaffold: capture moves on its own thread.
+        REQUIRE(controller.translationStreamer() != nullptr);
+
         controller.engine().setJitterBufferMs(0);   // the tests assert levels and routing,
                                                     // not the pre-roll (proven in task 005)
         return true;
@@ -126,22 +144,24 @@ TEST_CASE("End to end through the mock: what came in, translated, goes out",
     Pump pump;
     AudioEngine& engine = rig.controller.engine();
 
-    // Two blocks in: both are translated synchronously by the mock and land in
-    // the jitter buffer through the controller's sink. The first of them was
-    // already played inside the second step's callback - audio that arrives is
-    // played by the NEXT block, which is precisely the jitter buffer's job.
-    pump.step(engine, *rig.mock, 0.4f);
-    pump.step(engine, *rig.mock, 0.4f);
+    // One block in. The streaming worker takes it out of the ring on its own
+    // thread and the mock translates it synchronously; by the time the delivery
+    // is observable the whole block sits in the jitter buffer.
+    pump.feed(engine, 0.4f);
+    REQUIRE(waitsFor([&] { return rig.mock->deliveredBlocks() >= 1; }));
+    REQUIRE(waitsFor([&] { return rig.controller.diagnostics().snapshot().translatedAudioFrames
+                                        >= static_cast<std::uint64_t>(kFrames); }));
 
     const auto before = rig.controller.diagnostics().snapshot();
-    CHECK(before.translatedAudioFrames == 2 * static_cast<std::uint64_t>(kFrames));
+    CHECK(before.translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
+    CHECK(before.translationSubmittedFrames == static_cast<std::uint64_t>(kFrames));
+    CHECK(before.translationGapFrames == 0);
     CHECK(before.rejectedAudioFrames == 0);
     CHECK(before.translatedAudioDroppedFrames == 0);
 
-    // The next callback plays the block that arrived after it started: 0.4 in,
-    // -0.2 out. No other value could come from this path - loopback is not
-    // attached, and the jitter buffer is the one source of output (task 005's
-    // safety rule).
+    // The next callback plays what arrived: 0.4 in, -0.2 out. No other value
+    // could come from this path - loopback is not attached, and the jitter
+    // buffer is the one source of output (task 005's safety rule).
     pump.play(engine);
 
     for (const float sample : pump.out)
@@ -151,10 +171,11 @@ TEST_CASE("End to end through the mock: what came in, translated, goes out",
     // invention.
     pump.play(engine);
     CHECK(pump.out.front() == 0.0f);
-    CHECK(rig.controller.engine().underrunEvents() > 0);
+    CHECK(engine.underrunEvents() > 0);
 
     rig.controller.stop();
     CHECK(rig.mock->state() == SessionState::closed);
+    CHECK(rig.controller.translationStreamer() == nullptr);
 }
 
 TEST_CASE("End to end: a wrong-rate delivery is refused and counted, text goes on",
@@ -172,8 +193,11 @@ TEST_CASE("End to end: a wrong-rate delivery is refused and counted, text goes o
     Pump pump;
     AudioEngine& engine = rig.controller.engine();
 
-    pump.step(engine, *rig.mock, 0.4f);
-    pump.step(engine, *rig.mock, 0.4f);
+    pump.feedOneSubmit(engine, *rig.mock, 0.4f);
+    pump.feedOneSubmit(engine, *rig.mock, 0.4f);
+
+    REQUIRE(waitsFor([&] { return rig.controller.diagnostics().snapshot().rejectedAudioFrames
+                                        >= 2 * static_cast<std::uint64_t>(kFrames); }));
 
     const auto snapshot = rig.controller.diagnostics().snapshot();
     CHECK(snapshot.rejectedAudioFrames == 2 * static_cast<std::uint64_t>(kFrames));
@@ -210,10 +234,11 @@ TEST_CASE("End to end: a fatal translation error leaves audio running and tells 
     Pump pump;
     AudioEngine& engine = rig.controller.engine();
 
-    pump.step(engine, *rig.mock, 0.4f);
-    pump.step(engine, *rig.mock, 0.4f);   // the fatal cue fires here
+    // One submit per feed: the cue fires on the second accepted submit.
+    pump.feedOneSubmit(engine, *rig.mock, 0.4f);
+    pump.feedOneSubmit(engine, *rig.mock, 0.4f);   // the fatal cue fires here
+    REQUIRE(waitsFor([&] { return rig.mock->state() == SessionState::faulted; }));
 
-    CHECK(rig.mock->state() == SessionState::faulted);
     CHECK(rig.controller.status().session == SessionState::faulted);
 
     // The application is NOT faulted and the device is NOT closed: AGENTS.md 12
@@ -233,15 +258,13 @@ TEST_CASE("End to end: a fatal translation error leaves audio running and tells 
     for (const float sample : pump.out)
         CHECK(sample == -0.2f);
 
-    // The callback keeps running afterwards; submissions fail cleanly and the
-    // output degrades to counted silence.
+    // The callback keeps running afterwards; the streaming worker's submits are
+    // now refused, counted as gap, and the output degrades to counted silence.
     const auto blocksBefore = engine.blockCount();
-    engine.processAudio(pump.inPointers, pump.outPointers, kFrames);
+    pump.feed(engine, 0.3f);
     CHECK(engine.blockCount() == blocksBefore + 1);
-
-    std::string error;
-    CHECK_FALSE(rig.mock->submitAudio(pump.drained.data(), kFrames, error));
-    CHECK_FALSE(error.empty());
+    REQUIRE(waitsFor([&] { return rig.mock->refusedSubmits() >= 1; }));
+    CHECK(rig.controller.translationStreamer()->running());
 
     rig.controller.stop();
     CHECK(rig.mock->state() == SessionState::closed);
@@ -273,8 +296,9 @@ TEST_CASE("End to end: mock text reaches NDI and diagnostics through the control
     Pump pump;
     AudioEngine& engine = rig.controller.engine();
 
-    pump.step(engine, *rig.mock, 0.2f);
-    pump.step(engine, *rig.mock, 0.2f);
+    pump.feedOneSubmit(engine, *rig.mock, 0.2f);
+    pump.feedOneSubmit(engine, *rig.mock, 0.2f);
+    REQUIRE(waitsFor([&] { return ndiRef->publishedFrames() >= 3; }));
 
     CHECK(ndiRef->publishedFrames() == 3);
     CHECK(ndiRef->state() == ndi::OutputState::publishing);
@@ -346,9 +370,11 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
     controller.stop();
 
     // After stop(): the engine has released its buffers, and a late delivery is
-    // rejected again - counted, not swallowed. stop() closed the session first,
-    // so a real backend could not be producing now; the controller's guard is
-    // what keeps a programming error in task 010 from becoming a use-after-free.
+    // rejected again - counted, not swallowed. stop() stopped the streaming
+    // worker, then closed the session, then deactivated the engine, so a real
+    // backend could not be producing now; the controller's guard is what keeps
+    // a programming error in a future task from becoming a use-after-free.
+    CHECK_FALSE(controller.translationStreamer());
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
     CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
     CHECK(controller.diagnostics().snapshot().translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
@@ -370,21 +396,22 @@ TEST_CASE("End to end: restart brings a fresh session with the same wiring",
     REQUIRE(rig.start());
 
     Pump pump;
-    pump.step(rig.controller.engine(), *rig.mock, 0.4f);
+    pump.feedOneSubmit(rig.controller.engine(), *rig.mock, 0.4f);
 
     rig.controller.stop();
     CHECK(rig.mock->state() == SessionState::closed);
+    CHECK(rig.controller.translationStreamer() == nullptr);
 
     REQUIRE(rig.start());
     CHECK(rig.mock->state() == SessionState::connected);
     CHECK(rig.mock->sessionsOpened() == 2);
 
     // Rule 6 of the contract: the new session behaves like a fresh one. The cue
-    // positions are per session, and the first submit of the new session is the
-    // first submit again.
+    // positions are per session, and the streaming worker of the new session
+    // starts from zero submits again.
     CHECK(rig.mock->sessionSubmits() == 0);
 
-    pump.step(rig.controller.engine(), *rig.mock, 0.4f);
+    pump.feedOneSubmit(rig.controller.engine(), *rig.mock, 0.4f);
     CHECK(rig.mock->sessionSubmits() == 1);
 
     // Totals keep accumulating across sessions - the operator's counters do not
@@ -396,4 +423,65 @@ TEST_CASE("End to end: restart brings a fresh session with the same wiring",
         CHECK(sample == -0.2f);
 
     rig.controller.stop();
+}
+
+TEST_CASE("End to end with the supervisor mounted: an outage costs a counted gap, not the show",
+          "[translation][e2e][recovery][supervisor]")
+{
+    // Task 012's production shape: the controller talks to ReconnectSupervisor,
+    // the supervisor owns the backend, and the streaming worker keeps draining
+    // the capture through both. This is the wiring Main.cpp installs.
+    QuietLog quiet;
+    ApplicationController controller;
+
+    auto mock = std::make_unique<MockTranslationBackend>();
+    MockTranslationBackend& backend = *mock;
+    backend.deliverFrames = kFrames;
+    backend.deliverGain = 0.5f;
+    backend.negate = true;
+
+    translation::ReconnectSupervisor::Policy policy;
+    policy.enabled = true;
+    policy.initialBackoffMs = 20;      // a recovery test's clock, not a product number
+    policy.maxBackoffMs = 40;
+
+    controller.setTranslationBackend(
+        std::make_unique<translation::ReconnectSupervisor>(std::move(mock), policy));
+
+    REQUIRE(controller.start());
+    REQUIRE(controller.translationStreamer() != nullptr);
+    controller.engine().setJitterBufferMs(0);
+
+    CHECK(controller.sessionState() == SessionState::connected);
+
+    Pump pump;
+    AudioEngine& engine = controller.engine();
+    pump.feedOneSubmit(engine, backend, 0.4f);
+
+    // Pull the line on the wrapped backend: the supervisor - not the
+    // application - sees the outage first, and connection is the retryable
+    // category (task 010), so it closes, waits and replays the stored request.
+    backend.injectError(TranslationErrorCategory::connection, "outage injected by the test", true);
+
+    REQUIRE(waitsFor([&] { return backend.sessionsOpened() >= 2; }));
+    REQUIRE(waitsFor([&] { return controller.sessionState() == SessionState::connected; }));
+
+    // The application never left running and the device never stopped: the cost
+    // of the outage is counted audio in the gap, not the show.
+    CHECK(controller.state() == ApplicationState::running);
+    CHECK(controller.status().audio == audio::BackendState::running);
+    CHECK(controller.translationStreamer()->running());
+    CHECK(controller.translationStreamer()->submittedFrames() > 0);
+
+    // The new session is fed again exactly like the first one was.
+    pump.feedOneSubmit(engine, backend, 0.4f);
+    REQUIRE(waitsFor([&] { return backend.deliveredBlocks() >= 2; }));
+
+    // And the recovered session plays on: the block delivered above is in the
+    // jitter buffer, the audience gets it.
+    pump.play(engine);
+    CHECK(std::any_of(pump.out.begin(), pump.out.end(), [](float s) { return s == -0.2f; }));
+
+    controller.stop();
+    CHECK(controller.translationStreamer() == nullptr);
 }

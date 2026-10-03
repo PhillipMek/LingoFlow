@@ -366,15 +366,17 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     // Protocol section 12.1: this model has NO custom prompting. The field is
     // accepted (it stays in the contract for other backends) and IGNORED with a
     // warning - faking instruction support is forbidden (AGENTS.md 19).
+    // Owner decision 2026-10-03 (task 012): this notice lives in the LOG only.
+    // It is not a TranslationError: the session request was not refused, a
+    // capability of the model simply does not include prompting - and
+    // rejectedRequest is the supervisor's TERMINAL category (task 010), so
+    // reporting an ordinary every-start fact as that error would mislabel the
+    // operator's status line as a failure. The warning says the whole truth.
     if (!request_.instructions.empty())
     {
         log::warning(kLogComponent,
                      "session instructions ignored: the translation model supports no "
                      "custom prompting (docs/openai-realtime-protocol.md section 12.1)");
-        reportError(TranslationErrorCategory::rejectedRequest,
-                    "openai: translation instructions are not supported by this model and were "
-                    "not applied",
-                    false);
     }
 
     return true;

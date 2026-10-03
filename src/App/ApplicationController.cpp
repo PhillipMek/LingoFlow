@@ -313,13 +313,67 @@ bool ApplicationController::startSession(std::string& error)
         return false;
     }
 
-    return translationBackend_->openSession(request, error);
+    const bool opened = translationBackend_->openSession(request, error);
+
+    if (opened)
+        startStreaming();
+
+    return opened;
 }
 
 void ApplicationController::stopSession() noexcept
 {
+    // Streaming stops first: after closeSession() the backend guarantees no sink
+    // callbacks and must see no further submits either, so the worker is joined
+    // before the session closes - the same ordering the contract's rule 5 was
+    // built for, applied on the capture side.
+    stopStreaming();
+
     if (translationBackend_ != nullptr)
         translationBackend_->closeSession();
+}
+
+void ApplicationController::startStreaming()
+{
+    if (translationBackend_ == nullptr)
+        return;
+
+    streamer_ = std::make_unique<TranslationStreamer>(engine_, *translationBackend_, &diagnostics_);
+
+    std::string error;
+
+    if (streamer_->start(error))
+    {
+        log::info(kComponent,
+                  "translation streaming started: device capture at "
+                      + std::to_string(engine_.sampleRate()) + " Hz feeds the session");
+    }
+    else
+    {
+        // A session without capture is a half-machine: keep it (text plumbing and
+        // recovery still make sense) but say plainly that the translator is not
+        // being fed. This is never swallowed.
+        log::warning(kComponent, "translation session is open but the capture is not streamed: " + error);
+        diagnostics_.noteError("translation", "streaming not started: " + error);
+        streamer_.reset();
+    }
+}
+
+void ApplicationController::stopStreaming() noexcept
+{
+    if (streamer_ == nullptr)
+        return;
+
+    // The run's throughput, printed while it is still true: what the translator
+    // got and what the gap policy dropped. The operator's "did we miss anything"
+    // question is answered by these numbers (task 017 exports them).
+    log::info(kComponent,
+              "translation streaming stopped: " + std::to_string(streamer_->submittedFrames())
+                  + " frames submitted, " + std::to_string(streamer_->gapRefusedFrames())
+                  + " frames gap-refused");
+
+    streamer_->stop();
+    streamer_.reset();
 }
 
 bool ApplicationController::startNdi(std::string& error)

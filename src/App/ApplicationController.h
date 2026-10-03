@@ -11,9 +11,14 @@
 // the UI.
 //
 // The audio path is real since task 005 (device + engine + gain), the translation
-// path is a contract since task 007 whose production implementation (OpenAI)
-// arrives in task 009: until then the session subsystem is the Null backend and
-// no network is used.
+// path is a contract since task 007, implemented against the real service in
+// task 009 and wrapped by the recovery supervisor in task 010. Task 012 mounted
+// the production chain here: the composition root (Main.cpp) injects
+// ReconnectSupervisor(OpenAIRealtimeBackend), and between a session opening and
+// closing this controller runs the TranslationStreamer worker that feeds the
+// backend from the engine's input ring. Which backend object arrives is the
+// composition root's choice: the controller only ever sees the contract, so
+// tests and developer mode (task 019) swap it without touching this file.
 
 #include <atomic>
 #include <cstdint>
@@ -24,6 +29,7 @@
 #include <string>
 #include <string_view>
 
+#include "App/TranslationStreamer.h"
 #include "Audio/AudioEngine.h"
 #include "Config/ConfigManager.h"
 #include "Diagnostics/DiagnosticsManager.h"
@@ -107,6 +113,10 @@ public:
     const DiagnosticsManager& diagnostics() const noexcept { return diagnostics_; }
     translation::SessionState sessionState() const noexcept;
 
+    /// The capture-side streaming worker, non-null while a translation session
+    /// is open (task 012). nullptr before the session opens and after it closes.
+    const TranslationStreamer* translationStreamer() const noexcept { return streamer_.get(); }
+
     // ------------------------------------------------------------------- settings
     /// Points the settings area at `file` and reads it. Returns false only when the
     /// store could not be read at all; `note` always says what happened (defaults,
@@ -152,6 +162,11 @@ private:
     void stopAudio() noexcept;
     bool startSession(std::string& error);
     void stopSession() noexcept;
+    /// Streams the engine's capture into the session. Refusal to start is not a
+    /// session failure: the log and the counters say the translator is not being
+    /// fed, and everything else keeps running.
+    void startStreaming();
+    void stopStreaming() noexcept;
     /// Returns true when NDI is disabled in settings (nothing to start) or when
     /// the output started; false only on a real start failure.
     bool startNdi(std::string& error);
@@ -166,6 +181,11 @@ private:
     std::unique_ptr<audio::IAudioBackend> audioBackend_;
     std::unique_ptr<translation::ITranslationBackend> translationBackend_;
     std::unique_ptr<ndi::INdiOutput> ndiOutput_;
+
+    /// Lives exactly as long as an open session (startStreaming/stopStreaming);
+    /// it holds pointers into the engine's pipeline, so it must be gone before
+    /// the engine deactivates - stop() runs session teardown before audio teardown.
+    std::unique_ptr<TranslationStreamer> streamer_;
 
     AudioBackendFactory audioBackendFactory_;
     /// True once setAudioBackend() was called. Distinguishes "the tests or developer

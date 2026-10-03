@@ -103,7 +103,7 @@ TEST_CASE("ConfigManager: updateWith validates the merged result", "[config][man
     CHECK(listener.calls == 1);
 
     CHECK_FALSE(manager.updateWith(error, [](AppConfig& cfg) { cfg.translation.jitterBufferMs = 100000; }));
-    CHECK(manager.current().translation.jitterBufferMs == 120);   // unchanged
+    CHECK(manager.current().translation.jitterBufferMs == 250);   // unchanged (the default)
     CHECK(listener.calls == 1);
 }
 
