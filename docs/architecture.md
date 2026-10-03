@@ -286,10 +286,18 @@ task 009 is written against behaviour that already has proof, not against commen
   `translatedAudioDroppedFrames` (what our own full buffer dropped). "The translator
   stopped delivering" and "delivery went somewhere wrong" are different operator
   problems and get different numbers.
-* **Deliberately not here yet**: typed text events (`TranslationTextEvent`,
-  sequence numbers, timestamps) belong to task 013, and `getCapabilities()` to task 011
-  - both extension points are named in the header, so neither can be quietly invented
-  by a task that was not its owner.
+* **Typed text is real since task 013, and the seam is still the string pair**:
+  `Translation/TextPipeline.h` turns the sink's partial/final strings into
+  `TranslationTextEvent`s with a product-owned sequence and arrival clock, a
+  bounded history and duplicate-eating close rules. `partial` means whole-line
+  snapshot - the backend assembles provider fragments before the seam (the
+  OpenAI backend does it under its own mutex, with a settle pause and a
+  close-session flush as the two line boundaries; both are documented product
+  policy, not protocol, because the wire has no line-end event).
+* **Deliberately not here yet**: `getCapabilities()` was task 011's (it exists
+  now as the frozen manifest), and a source-language text lane would be a
+  contract decision, not an accident - the provider's source transcript stays
+  ignored in the backend until someone asks for it.
 
 ### Where the mock lives, and why
 

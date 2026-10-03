@@ -492,6 +492,18 @@ service):**
   state transitions exactly `connecting → connected → closed`. Translated duration again
   far exceeded the source (sparse/slow interpretation) - the 012/018 burst-sizing
   conclusions stand.
+- **Transcript accumulation does not reset between sentences (2026-10-03, task 013
+  live re-run, `lingoflow_openai_probe` → ru)**: one 11.4 s English run delivered a
+  single continuous `session.output_transcript.delta` stream of 164 characters that
+  crossed two sentence boundaries without restarting or signalling anything - the
+  provider offers no per-utterance text boundary at all, confirming sections 6/8
+  from the live side. Consequences decided in 013: the product owns subtitle lines
+  (the backend's settle rule `OpenAIRealtimeOptions::transcriptSettleMs` plus the
+  closeSession flush), the sink's `onPartialText` is a whole-line SNAPSHOT
+  (fragment-accumulating consumers double-write under snapshot partials - the 013
+  probe fix shows exactly that before/after), and `elapsed_ms` keys nothing. Whether
+  2500 ms of stream-pause is the right cut point for live speech is a rig
+  observation (docs/rig-checklist.md step 9).
 
 Remaining open items from section 14: 14.5 (silence/ducking behavior needs real speech
 in the target language - 012), and the long-run semantics of `expires_at` (what the

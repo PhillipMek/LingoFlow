@@ -7,9 +7,9 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011 complete; 012 implemented** - its REQUIRED human checkpoint (real
-EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) is open, run sheet
-`docs/rig-checklist.md`. The repository contains a JUCE/CMake
+Status: **tasks 000-011 and 013 complete; 012 implemented** - 012's REQUIRED human
+checkpoint (real EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) is open, run
+sheet `docs/rig-checklist.md`. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -20,8 +20,9 @@ and NDI boundaries, versioned configuration with safe persistence, ASIO device d
 and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor, the
 single language registry with its versioned OpenAI capability manifest, the mounted
 translation pipeline (task 012: capture worker + supervisor + real backend in the
-composition root),
-and 226 tests.
+composition root), the typed text pipeline (task 013: snapshot events, bounded history,
+UI-facing model),
+and 238 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -89,14 +90,16 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-226 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+238 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
-suite that pins the frozen capability manifest and the pair-check rules, and the task 012
-capture-streaming suite that runs the worker against a recording backend), the end-to-end
-integration suite that now drives the whole pipeline through the real streaming worker
-(with a supervisor-mounted outage case), the realtime allocation suite in its own
+suite that pins the frozen capability manifest and the pair-check rules, the task 012
+capture-streaming suite that runs the worker against a recording backend, and the task 013
+text-pipeline suite - snapshot/eviction/duplicate rules and a two-writer race case), the
+end-to-end integration suite that now drives the whole pipeline through the real streaming
+worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
+verified against the typed model), the realtime allocation suite in its own
 binary, the architecture boundary audit plus its self-test, the realtime safety audit plus
 its self-test, and the two device entries that run the ASIO tool's driver-free modes.
 
@@ -423,7 +426,36 @@ covered by tests:
   file must not know backend capabilities); supportability is the registry's answer;
 * English <-> Russian, the MVP pair, is pinned in both directions by a test;
 * `OpenAIRealtimeOptions::capabilities` is the seam where a dynamically fetched manifest
-  would be mounted if the key ever gains model-read scope — no wiring change needed.
+  would be mounted if the key ever gains model-read scope - no wiring change needed.
+
+## The typed text pipeline (task 013)
+
+`src/Translation/TextPipeline` is what the UI and the subtitles read - no provider event
+ever reaches them (SPEC "Text"):
+
+* the sink's contract strings become `TranslationTextEvent`s: kind (`partial`/`final`),
+  text, a pipeline-assigned monotonic sequence and a steady-clock arrival time. The
+  provider's `elapsed_ms` keys nothing - the protocol doc (section 8) says it is
+  alignment metadata that may repeat, so it never crosses the seam as identity;
+* `partial` means the whole line as it currently reads (a replacement, not a fragment).
+  Assembling a provider's append-only fragments into that snapshot is backend work: the
+  OpenAI backend concatenates verbatim under its own lock and is the only file that knows
+  fragments exist;
+* the wire has no line-end event (verified live: the transcript crossed two sentences
+  without any reset), so line boundaries are documented PRODUCT policy - the
+  `transcriptSettleMs` pause (default 2500 ms) closes a line from the sender's stream
+  clock, and `closeSession()` flushes whatever line is open before the `closed` transition.
+  Whether the settle threshold fits live speech is a rig observation (checklist step 9),
+  not a number any test depends on;
+* history is a fixed-capacity ring of final lines with counted eviction, and an
+  overlong open draft is capped at 64 KiB (counted) - the task's FAIL criterion "grows
+  unbounded" is structurally unreachable. A session that dies mid-sentence closes the
+  line instead of losing it: the words that reached the wire go to history (and NDI -
+  the stop order keeps subtitles up until the session's last words are out);
+* text runs on backend worker threads only. It never touches the audio callback: the
+  audio path and this pipeline share no lock, and the realtime audit stays green;
+* task 014's UI reads exactly one type here: `TextPipeline::snapshot()` - the open line,
+  the bounded history and the counters that say what was ignored and why.
 
 ## Layout
 
@@ -432,7 +464,7 @@ CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
 src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
-src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), Null/ backend
+src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), TextPipeline (013 typed events + bounded history), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
