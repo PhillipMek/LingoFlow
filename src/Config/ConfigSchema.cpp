@@ -18,6 +18,7 @@ namespace {
 
 constexpr int kMinBufferFrames = 64;
 constexpr int kMaxBufferFrames = 2048;
+constexpr int kMaxChannels = 128;  ///< one-based, the bound validate() and the UI share
 // SPEC "Input Gain" suggests -24..+24 dB and keeps the range configurable; the
 // validation window is wider so the console-side trim stays possible, but +24 dB
 // must never be rejected (it was -60..+12 before, which blocked a spec value).
@@ -165,6 +166,33 @@ AppConfig defaults() noexcept
     return AppConfig{};
 }
 
+std::vector<int> supportedSampleRates()
+{
+    // std::set iterates ascending; the same object validate() consults, so the
+    // UI can never offer a rate the schema would refuse.
+    return { kSupportedSampleRates.begin(), kSupportedSampleRates.end() };
+}
+
+std::pair<int, int> bufferFramesRange() noexcept
+{
+    return { kMinBufferFrames, kMaxBufferFrames };
+}
+
+std::pair<float, float> gainRange() noexcept
+{
+    return { kMinGainDb, kMaxGainDb };
+}
+
+std::pair<int, int> jitterBufferRange() noexcept
+{
+    return { 0, kMaxJitterBufferMs };
+}
+
+std::pair<int, int> channelRange() noexcept
+{
+    return { 1, kMaxChannels };
+}
+
 ConfigProblems validate(const AppConfig& candidate)
 {
     ConfigProblems problems;
@@ -187,9 +215,11 @@ ConfigProblems validate(const AppConfig& candidate)
                                           "must be between " + std::to_string(kMinBufferFrames) + " and "
                                               + std::to_string(kMaxBufferFrames) + " frames" });
 
-    if (audio.inputChannel < 1 || audio.outputChannel < 1 || audio.inputChannel > 128 || audio.outputChannel > 128)
+    if (audio.inputChannel < 1 || audio.outputChannel < 1 || audio.inputChannel > kMaxChannels
+        || audio.outputChannel > kMaxChannels)
         problems.push_back(ConfigProblem{ "audio.inputChannel",
-                                          "channel numbers are one-based and must be between 1 and 128" });
+                                          "channel numbers are one-based and must be between 1 and "
+                                              + std::to_string(kMaxChannels) });
 
     const auto gainInRange = [](float value)
     { return std::isfinite(value) && value >= kMinGainDb && value <= kMaxGainDb; };

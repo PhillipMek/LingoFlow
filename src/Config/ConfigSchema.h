@@ -13,6 +13,7 @@
 
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "Config/AppConfig.h"
@@ -22,6 +23,26 @@ namespace config {
 
     /// Operator defaults (SPEC: 48 kHz, float32, mono, en<->ru).
     AppConfig defaults() noexcept;
+
+    // ----------------------------------------------------------------- ranges
+    // The UI builds selectors from these, not from lists of its own: validate()
+    // below and the controls on screen then cannot disagree (SPEC "single
+    // Settings area", task 014's "UI does not own audio logic").
+
+    /// The exact Hz values validate() accepts for audio.sampleRate, ascending.
+    std::vector<int> supportedSampleRates();
+
+    /// Inclusive bounds validate() accepts for audio.bufferFrames.
+    std::pair<int, int> bufferFramesRange() noexcept;
+
+    /// Inclusive bounds validate() accepts for the two gain fields, dB.
+    std::pair<float, float> gainRange() noexcept;
+
+    /// Inclusive bounds validate() accepts for translation.jitterBufferMs.
+    std::pair<int, int> jitterBufferRange() noexcept;
+
+    /// One-based channel bounds validate() accepts for input and output.
+    std::pair<int, int> channelRange() noexcept;
 
     /// Validation problems only; empty means the configuration is usable.
     ConfigProblems validate(const AppConfig& candidate);

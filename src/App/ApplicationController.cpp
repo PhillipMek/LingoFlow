@@ -110,6 +110,92 @@ void ApplicationController::setNdiOutput(std::unique_ptr<ndi::INdiOutput> output
     ndiOutput_ = std::move(output);
 }
 
+void ApplicationController::setDeviceLister(DeviceLister lister)
+{
+    deviceLister_ = std::move(lister);
+}
+
+int ApplicationController::refreshDevices()
+{
+    if (deviceLister_ == nullptr)
+    {
+        log::info(kComponent, "device enumeration is not installed: the device list stays as it is");
+        return static_cast<int>(devices_.size());
+    }
+
+    devices_ = deviceLister_();
+    log::info(kComponent, "device scan found " + std::to_string(devices_.size()) + " device(s)");
+    return static_cast<int>(devices_.size());
+}
+
+void ApplicationController::clearFault() noexcept
+{
+    if (state_ != ApplicationState::faulted)
+    {
+        log::debug(kComponent, "clearFault() ignored: state is " + std::string(nameOf(state_)));
+        return;
+    }
+
+    // The fault is history (counters keep it, the log said it when it happened);
+    // clearing is the operator saying "I fixed the cause, let me try again".
+    // What the retry does or does not achieve is the next start()'s truth to tell.
+    log::info(kComponent, "fault cleared by operator: '" + faultReason_ + "' - ready to start again");
+    faultReason_.clear();
+    lastAudioError_.clear();
+    state_ = ApplicationState::stopped;
+}
+
+void ApplicationController::setGainsLive(float inputDb, float outputDb) noexcept
+{
+    engine_.setInputGainDb(inputDb);
+    engine_.setOutputGainDb(outputDb);
+}
+
+void ApplicationController::setMutesLive(bool inputMuted, bool outputMuted) noexcept
+{
+    // Runtime-only by task 006's design: mute is a live hand on the fader, not a
+    // setting the show starts with. Nothing is persisted here on purpose.
+    engine_.setInputMuted(inputMuted);
+    engine_.setOutputMuted(outputMuted);
+}
+
+void ApplicationController::setJitterLive(int jitterMs) noexcept
+{
+    engine_.setJitterBufferMs(jitterMs);
+}
+
+bool ApplicationController::updateSettings(const AppConfig& candidate, std::string& note)
+{
+    std::string error;
+
+    if (!config_.update(candidate, error))
+    {
+        // ConfigManager::update refuses atomically: nothing changed in memory.
+        note = "settings refused: " + error;
+        log::warning(kComponent, note);
+        return false;
+    }
+
+    // The accepted candidate is now current: apply what applies live, so a slider
+    // release and an on-screen readout never disagree with what the callback is
+    // doing. Device/rate/buffer/channel/languages/NDI need the session or the
+    // pipeline to be rebuilt - that is a Stop/Start away, and the note says so.
+    const auto& cfg = config_.current();
+    engine_.setInputGainDb(cfg.audio.inputGainDb);
+    engine_.setOutputGainDb(cfg.audio.outputGainDb);
+    engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
+
+    std::string saveError;
+    if (saveSettings(saveError))
+        note = "settings saved. Device, sample rate, buffer, channel, language and NDI changes "
+               "take effect after Stop + Start; gain and jitter are live.";
+    else
+        note = "settings are active for this run but were NOT saved: " + saveError;
+
+    log::info(kComponent, "operator settings update: " + note);
+    return true;
+}
+
 bool ApplicationController::start()
 {
     if (state_ == ApplicationState::running || state_ == ApplicationState::starting)
@@ -155,6 +241,15 @@ bool ApplicationController::start()
     {
         log::warning(kComponent, "translation session not started: " + error);
         diagnostics_.noteError("translation", error);
+
+        // The operator's "why is the translator off" question gets the same
+        // answer here as a mid-run failure: this is the freshest translation
+        // truth, and detail is where it lives. (A refused session is still not
+        // fatal - audio is running and the state says so.)
+        {
+            const std::lock_guard lock(subsystemMutex_);
+            lastTranslationError_ = "translation session not started: " + error;
+        }
     }
 
     if (!startNdi(error))
@@ -602,6 +697,12 @@ void ApplicationController::onSessionStateChanged(translation::SessionState stat
         warnedRateMismatch_.store(false, std::memory_order_relaxed);
         warnedNoBuffer_.store(false, std::memory_order_relaxed);
         warnedBadBlock_.store(false, std::memory_order_relaxed);
+
+        // A session that came up clean makes earlier translation refusals
+        // history: detail shows the freshest truth, not old grudges. (The log
+        // and the counters keep the full story.)
+        const std::lock_guard lock(subsystemMutex_);
+        lastTranslationError_.clear();
     }
     else if (state == translation::SessionState::reconnecting
              || state == translation::SessionState::faulted

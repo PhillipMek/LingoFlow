@@ -30,6 +30,7 @@
 #include <string_view>
 
 #include "App/TranslationStreamer.h"
+#include "Audio/Asio/AsioDeviceInfo.h"
 #include "Audio/AudioEngine.h"
 #include "Config/ConfigManager.h"
 #include "Diagnostics/DiagnosticsManager.h"
@@ -88,6 +89,46 @@ public:
         std::function<std::unique_ptr<audio::IAudioBackend>(const audio::DeviceRequest&, std::string& error)>;
 
     void setAudioBackendFactory(AudioBackendFactory factory);
+
+    /// Device enumeration seam (task 014). The list of selectable devices is
+    /// platform knowledge, exactly like opening one, so it arrives as a function
+    /// installed by the composition root; the controller only caches its result
+    /// for the UI to read. A UI refresh calls refreshDevices(); nothing in here
+    /// opens or touches a device.
+    using DeviceLister = std::function<std::vector<asio::DeviceEntry>()>;
+    void setDeviceLister(DeviceLister lister);
+    /// The cached enumeration result: empty until the first refreshDevices(), and
+    /// after it the truth as of that scan (the UI labels it with a refresh button).
+    const std::vector<asio::DeviceEntry>& devices() const noexcept { return devices_; }
+
+    /// Runs the lister and replaces the cache. Returns the entry count; without
+    /// an installed lister it logs the fact and returns 0 - an unavailable
+    /// enumeration is said out loud, never presented as "no devices exist".
+    int refreshDevices();
+
+    /// Retry path for the operator (task 014): a fault that has been corrected in
+    /// settings can be started again. Moves faulted back to stopped - the log
+    /// records the clear, the counters keep the history, and starting is the
+    /// operator's decision, not this method's. A no-op (logged) in any other
+    /// state.
+    void clearFault() noexcept;
+
+    // ------------------------------------------------------------- UI commands (014)
+    /// Thin live controls: slider-drag values into the engine, no config write
+    /// (the release event persists through updateSettings). Mutes are runtime
+    /// state per task 006's SPEC and never persisted; gains converge with the
+    /// settings file at the next updateSettings.
+    void setGainsLive(float inputDb, float outputDb) noexcept;
+    void setMutesLive(bool inputMuted, bool outputMuted) noexcept;
+    void setJitterLive(int jitterMs) noexcept;
+
+    /// Validates the candidate, and only when it passes: stores it, applies what
+    /// can be applied without a restart (gains, jitter pre-roll) and persists it.
+    /// `note` says what happened, including which changes take effect on the
+    /// next Start (device, sample rate, buffer, channels, languages, NDI). An
+    /// invalid candidate changes nothing in memory and nothing on disk - the
+    /// 003 contract, not re-decided here.
+    bool updateSettings(const AppConfig& candidate, std::string& note);
 
     // ------------------------------------------------------------------ lifecycle
     /// Brings audio, translation session and NDI up. Returns false and enters the
@@ -211,6 +252,10 @@ private:
     std::unique_ptr<TranslationStreamer> streamer_;
 
     AudioBackendFactory audioBackendFactory_;
+    /// Device enumeration seam (014): installed by the composition root, cached
+    /// result read by the UI through devices().
+    DeviceLister deviceLister_;
+    std::vector<asio::DeviceEntry> devices_;
     /// True once setAudioBackend() was called. Distinguishes "the tests or developer
     /// mode chose this backend" from "this is the default null device", so a device
     /// configured in settings is never quietly served by the null backend.

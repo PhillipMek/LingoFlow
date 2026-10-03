@@ -20,6 +20,13 @@
 //             sockets or provider sessions (deterministic, cost-free, offline-
 //             capable), the windowed run is what mounts the real chain.
 //
+// The windowed run (task 014) opens the operator screen: status chips, device /
+// language / format selectors, live meters and gain, jitter pre-roll, counters
+// and the subtitle model. It starts the subsystems exactly like --smoke does; a
+// start that fails exits with code 2 as documented below, and everything the
+// operator changes afterwards goes through the controller - the UI itself owns
+// no logic (App/UiModel is the tested half).
+//
 // Exit codes:
 //   0   started (and, with --smoke, shut down) normally
 //   2   a subsystem refused to start (e.g. the selected ASIO device is unavailable).
@@ -33,7 +40,9 @@
 #include <string>
 
 #include "App/ApplicationController.h"
+#include "App/OperatorWindow.h"
 #include "Config/ConfigStore.h"
+#include "Platform/Asio/AsioDiscovery.h"
 #include "Platform/Asio/JuceAsioBackend.h"
 #include "Utils/Log.h"
 
@@ -144,7 +153,9 @@ liveai::LogConfig makeLogConfig(const liveai::AppConfig& settings, bool writeCon
 }
 
 /// Header line plus the controller-formatted status. Main.cpp uses no subsystem
-/// types at all - only AppStatus and describeStatus().
+/// types at all - only AppStatus and describeStatus() - except for the two seams
+/// it exists to install: the audio backend factory and the device lister (both
+/// platform adapters, both handed to the controller as functions).
 juce::String statusText(const liveai::AppStatus& status)
 {
     return juce::String(std::format("{} {}\n{}",
@@ -152,58 +163,6 @@ juce::String statusText(const liveai::AppStatus& status)
                                     JUCE_APPLICATION_VERSION_STRING,
                                     liveai::describeStatus(status)));
 }
-
-//==============================================================================
-class StatusComponent final : public juce::Component, public juce::Timer
-{
-public:
-    explicit StatusComponent(const liveai::ApplicationController& controller) : controller_(controller)
-    {
-        label_.setJustificationType(juce::Justification::centredLeft);
-        label_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
-        addAndMakeVisible(label_);
-        refresh();
-        startTimer(500);
-    }
-
-    void timerCallback() override { refresh(); }
-
-    void resized() override { label_.setBounds(getLocalBounds().reduced(18)); }
-
-private:
-    void refresh() { label_.setText(statusText(controller_.status()), juce::NotificationType::dontSendNotification); }
-
-    const liveai::ApplicationController& controller_;
-    juce::Label label_;
-
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(StatusComponent)
-};
-
-class MainWindow final : public juce::DocumentWindow
-{
-public:
-    explicit MainWindow(const liveai::ApplicationController& controller)
-        : juce::DocumentWindow("LingoFlow",
-                               juce::Colour(0xff232629u),
-                               juce::DocumentWindow::closeButton)
-    {
-        setUsingNativeTitleBar(true);
-        setContentOwned(new StatusComponent(controller), true);
-        setResizable(true, true);
-        setSize(520, 260);
-        centreWithSize(getWidth(), getHeight());
-        setVisible(true);
-    }
-
-    void closeButtonPressed() override
-    {
-        if (auto* app = juce::JUCEApplication::getInstance())
-            app->systemRequestedQuit();
-    }
-
-private:
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MainWindow)
-};
 
 } // namespace
 
@@ -266,6 +225,12 @@ public:
                 return std::make_unique<liveai::platform::JuceAsioBackend>(request.deviceId);
             });
 
+        // Task 014: the operator picks devices in the UI, so the enumeration seam
+        // gets its platform adapter here - the same "the core knows a name can
+        // become a backend, not how" logic as the factory above. The scan reads
+        // the ASIO registry only; it never loads a driver.
+        controller_.setDeviceLister([] { return liveai::platform::scanAsioDevices().devices; });
+
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
         if (smoke)
             liveai::log::info(kLogComponent,
@@ -296,7 +261,7 @@ public:
             return;
         }
 
-        window_ = std::make_unique<MainWindow>(controller_);
+        window_ = std::make_unique<liveai::OperatorWindow>(controller_);
     }
 
     void shutdown() override
@@ -359,7 +324,7 @@ private:
 #endif
 
     liveai::ApplicationController controller_;
-    std::unique_ptr<MainWindow> window_;
+    std::unique_ptr<liveai::OperatorWindow> window_;
 };
 
 START_JUCE_APPLICATION(LingoFlowApplication)

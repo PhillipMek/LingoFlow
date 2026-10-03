@@ -71,7 +71,9 @@ add_library(lingoflow_core STATIC
     App/ApplicationController.cpp
     App/ApplicationController.h
     App/TranslationStreamer.cpp
-    App/TranslationStreamer.h)
+    App/TranslationStreamer.h
+    App/UiModel.cpp
+    App/UiModel.h)
 
 add_library(lingoflow::core ALIAS lingoflow_core)
 
@@ -188,7 +190,9 @@ juce_generate_juce_header(LingoFlow)
 
 target_sources(LingoFlow
     PRIVATE
-        App/Main.cpp)
+        App/Main.cpp
+        App/OperatorWindow.cpp
+        App/OperatorWindow.h)
 
 target_compile_definitions(LingoFlow
     PRIVATE
