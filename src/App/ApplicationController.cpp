@@ -5,6 +5,7 @@
 #include "Audio/Null/NullAudioBackend.h"
 #include "NDI/Null/NullNdiOutput.h"
 #include "Translation/Null/NullTranslationBackend.h"
+#include "Translation/LanguageRegistry.h"
 #include "Utils/Log.h"
 
 namespace liveai {
@@ -298,6 +299,19 @@ bool ApplicationController::startSession(std::string& error)
     request.model = cfg.translation.modelHint;
     request.inputSampleRate = engine_.sampleRate();
     request.outputSampleRate = engine_.sampleRate();
+
+    // Capability-driven start (task 011, AGENTS.md 9): the configured pair must
+    // be one the product can actually deliver, checked against the versioned
+    // manifest - the controller holds no list of its own. The backend re-checks
+    // the same registry on its side; this gate is what stops a Null or mock
+    // backend from being started with a pair the event cannot honor.
+    const translation::PairCheck pair =
+        translation::openAiManifest().checkPair(request.pair.input, request.pair.output);
+    if (!pair)
+    {
+        error = "language pair not supported: " + pair.detail;
+        return false;
+    }
 
     return translationBackend_->openSession(request, error);
 }

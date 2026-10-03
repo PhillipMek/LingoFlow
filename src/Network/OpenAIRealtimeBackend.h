@@ -65,6 +65,10 @@ namespace security {
 class ISecretStore;
 }
 
+namespace translation {
+class LanguageRegistry;
+}
+
 namespace network {
 
 /// Tunables with protocol-derived defaults. Tests drive them; the product uses
@@ -87,6 +91,12 @@ struct OpenAIRealtimeOptions
     /// it never drops silently (task 012 decides caller behavior). 10 s absorbs
     /// transient network stalls measured live.
     int maxQueuedInputMs = 10000;
+    /// Capability source for pair validation (task 011): nullptr = the shipped
+    /// frozen manifest (`translation::openAiManifest()`). The seam exists
+    /// because AGENTS.md 9 prefers dynamic capabilities when a provider offers
+    /// them - this key does not (protocol section 15), so the manifest is the
+    /// default, not a fallback; a future dynamic manifest plugs in here.
+    const translation::LanguageRegistry* capabilities = nullptr;
 };
 
 using TransportFactory = std::function<std::unique_ptr<IWebSocketTransport>()>;

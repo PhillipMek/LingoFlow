@@ -36,6 +36,7 @@
 #include "Network/OpenAIRealtimeBackend.h"
 #include "Security/ISecretStore.h"
 #include "Translation/ITranslationBackend.h"
+#include "Translation/LanguageRegistry.h"
 #include "support/FakeWebSocketTransport.h"
 
 using namespace liveai;
@@ -457,6 +458,79 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
         CHECK(errors[0].retryAfterMs == 0); // no hint -> the policy's own backoff
         s.sink.armAfterCloseExpectation();
         s.backend->closeSession();
+    }
+}
+
+TEST_CASE("OpenAI backend: unsupported language pairs are refused offline before any network",
+          "[openai][contract][faults]")
+{
+    // Task 011: the versioned capability manifest gates SessionRequest pairs
+    // like the model and rate gates do - a refusal that changes nothing reports
+    // nothing (contract rule 3), and no transport object is even created.
+    //
+    // Dutch is a documented SOURCE but not one of the 13 targets; Amharic is in
+    // no list at all (docs sections 13/15).
+    {
+        Scenario s;
+        auto req = s.Request();
+        req.pair.output = "nl";
+        const std::string error = s.open(req);
+        CHECK_FALSE(s.opened);
+        CHECK(error.find("target language") != std::string::npos);
+        CHECK(s.fake == nullptr); // the factory was never invoked
+        CHECK(s.sink.states().empty());
+        CHECK(s.sink.errors().empty());
+        CHECK(s.backend->state() == SessionState::closed);
+    }
+    {
+        Scenario s;
+        auto req = s.Request();
+        req.pair.input = "am";
+        const std::string error = s.open(req);
+        CHECK_FALSE(s.opened);
+        CHECK(error.find("source language") != std::string::npos);
+        CHECK(s.fake == nullptr);
+        CHECK(s.sink.states().empty());
+        CHECK(s.backend->state() == SessionState::closed);
+    }
+
+    // The seam itself: with an injected registry the SAME request routes by the
+    // injected capabilities, not by the shipped manifest - "en" is a source in
+    // the product manifest but not in this tiny one, and the refusal proves
+    // whose list was consulted. (A future dynamic manifest plugs in exactly
+    // here - AGENTS.md 9.)
+    {
+        translation::TranslationCapabilities tiny;
+        tiny.manifestVersion = 99;
+        tiny.manifestSource = "test fixture";
+        tiny.sources = { { "xx", "Testish" } };
+        tiny.targets = { { "qq", "Quaintish" } };
+        const translation::LanguageRegistry tinyRegistry(std::move(tiny));
+
+        FakeSecrets secrets;
+        network::OpenAIRealtimeOptions options;
+        options.capabilities = &tinyRegistry;
+        test::FakeWebSocketTransport* fake = nullptr;
+        network::TransportFactory factory = [&fake] {
+            auto t = std::make_unique<test::FakeWebSocketTransport>();
+            fake = t.get();
+            return t;
+        };
+
+        RecordingSink sink;
+        network::OpenAIRealtimeBackend backend(secrets, options, factory);
+        backend.setSink(sink);
+
+        SessionRequest req;
+        req.pair.input = "en";   // the product pair: valid by the shipped
+        req.pair.output = "ru";  // manifest, not by this fixture's tiny one
+        req.inputSampleRate = 24000;
+        req.outputSampleRate = 24000;
+        std::string error;
+        CHECK_FALSE(backend.openSession(req, error));
+        CHECK(error.find("source language") != std::string::npos);
+        CHECK(fake == nullptr);
+        CHECK(sink.errors().empty());
     }
 }
 

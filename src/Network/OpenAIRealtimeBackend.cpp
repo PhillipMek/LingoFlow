@@ -10,6 +10,7 @@
 
 #include "Network/Base64.h"
 #include "Security/ISecretStore.h"
+#include "Translation/LanguageRegistry.h"
 #include "Utils/Log.h"
 
 namespace liveai {
@@ -177,6 +178,24 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     if (request.pair.output.empty())
     {
         error = "openai: a target language is required (pair.output is empty)";
+        return false;
+    }
+
+    // Capabilities (task 011): a pair outside the versioned manifest is refused
+    // offline, before a single byte goes to the network - the provider would
+    // reject the target anyway (and the source is auto-detected, so a wrong
+    // input declaration is a product error, not a retryable one). The manifest
+    // is the product's capability source (docs section 15: no dynamic discovery
+    // scope for this key); options_.capabilities is the seam a future dynamic
+    // manifest replaces it through, unchanged logic.
+    const translation::LanguageRegistry& capabilities =
+        options_.capabilities != nullptr ? *options_.capabilities
+                                         : translation::openAiManifest();
+    const translation::PairCheck pair = capabilities.checkPair(request.pair.input,
+                                                               request.pair.output);
+    if (!pair)
+    {
+        error = "openai: unsupported language pair: " + pair.detail;
         return false;
     }
 

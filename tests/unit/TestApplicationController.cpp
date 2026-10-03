@@ -382,6 +382,40 @@ TEST_CASE("ApplicationController: session uses the configured languages and inst
     controller.stop();
 }
 
+TEST_CASE("ApplicationController: a pair outside the capability manifest is refused before the backend",
+          "[app][languages]")
+{
+    // Task 011 (AGENTS.md 9): the operator cannot start what the product cannot
+    // deliver. The gate reads the versioned manifest - the controller holds no
+    // list of its own - and the backend is never opened. Audio keeps running:
+    // a translation-side refusal is recorded, not fatal (AGENTS.md 12).
+    QuietLog quiet;
+    ApplicationController controller;
+
+    auto cfg = controller.config().current();
+    cfg.translation.inputLanguage = "en";
+    cfg.translation.outputLanguage = "nl"; // a documented source, never a target
+    std::string error;
+    REQUIRE(controller.config().update(cfg, error));
+
+    auto backend = std::make_unique<translation::NullTranslationBackend>();
+    auto* backendRef = backend.get();
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start()); // the app runs - translation failure is recoverable
+    CHECK(backendRef->lastRequest().pair.output.empty()); // openSession was never reached
+    CHECK(controller.sessionState() == translation::SessionState::closed);
+
+    // And the reason is visible to the operator, not swallowed (AGENTS.md 19):
+    // the recorded diagnostics error carries the manifest's own sentence.
+    const auto snap = controller.diagnostics().snapshot();
+    CHECK(snap.lastErrorSubsystem == "translation");
+    CHECK(snap.lastErrorMessage.find("target language") != std::string::npos);
+    CHECK(snap.lastErrorMessage.find("nl") != std::string::npos);
+
+    controller.stop();
+}
+
 TEST_CASE("ApplicationController: audio engine counts blocks driven by the backend", "[app][audio]")
 {
     QuietLog quiet;

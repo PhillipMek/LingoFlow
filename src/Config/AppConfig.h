@@ -38,7 +38,10 @@ struct AudioSettings
 
 struct TranslationSettings
 {
-    /// Language tags; validated against the LanguageRegistry in task 011. MVP en<->ru.
+    /// Language tags. Config validates their SHAPE only (module boundary: it
+    /// may not include the registry); supportability of the pair is checked at
+    /// session start against the versioned capability manifest - task 011,
+    /// Translation/LanguageRegistry.h. MVP en<->ru (AGENTS.md 9).
     std::string inputLanguage = "en";
     std::string outputLanguage = "ru";
 
