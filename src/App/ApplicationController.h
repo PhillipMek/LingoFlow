@@ -35,6 +35,7 @@
 #include "Config/ConfigManager.h"
 #include "Diagnostics/DiagnosticsManager.h"
 #include "NDI/INdiOutput.h"
+#include "Security/ISecretStore.h"
 #include "Translation/ITranslationBackend.h"
 #include "Translation/TextPipeline.h"
 
@@ -123,12 +124,36 @@ public:
     void setJitterLive(int jitterMs) noexcept;
 
     /// Validates the candidate, and only when it passes: stores it, applies what
-    /// can be applied without a restart (gains, jitter pre-roll) and persists it.
-    /// `note` says what happened, including which changes take effect on the
-    /// next Start (device, sample rate, buffer, channels, languages, NDI). An
-    /// invalid candidate changes nothing in memory and nothing on disk - the
-    /// 003 contract, not re-decided here.
+    /// can be applied without a restart (gains, jitter pre-roll, log level) and
+    /// persists it. `note` says what happened, including which changes take
+    /// effect on the next Start (device, sample rate, buffer, channels,
+    /// languages, NDI) or on the next application launch (log file on/off - the
+    /// sinks are the composition root's startup act, recovery policy - mounted
+    /// by Main.cpp at startup). An invalid candidate changes nothing in memory
+    /// and nothing on disk - the 003 contract, not re-decided here.
     bool updateSettings(const AppConfig& candidate, std::string& note);
+
+    // ---------------------------------------------------------- credentials (015)
+    /// The credential store seam (task 015), same pattern as the device lister:
+    /// the composition root installs the production store (Windows secure
+    /// storage with the development-environment fallback), and this controller
+    /// exposes the operator's actions on it. The secret value travels only
+    /// UI-field -> store: it never enters settings, notes, statuses or logs
+    /// (AGENTS.md 10, the task's FAIL criterion). Without an installed store the
+    /// Null store answers honestly: nothing is ever "stored" here.
+    void setSecretStore(security::ISecretStore& store) noexcept;
+
+    /// True when an API-key identifier exists in the store. Presence only -
+    /// names are read, values never are (identifiers(), not load()).
+    bool hasApiSecret() const;
+
+    /// Store label for the UI ("Windows Credential Manager / fallback: ...").
+    std::string secretStoreName() const;
+
+    /// Operator actions. `note` reports the outcome in operator words and is
+    /// guaranteed to contain no trace of the secret itself.
+    bool storeApiSecret(std::string_view secret, std::string& note);
+    void removeApiSecret(std::string& note);
 
     // ------------------------------------------------------------------ lifecycle
     /// Brings audio, translation session and NDI up. Returns false and enters the
@@ -256,6 +281,13 @@ private:
     /// result read by the UI through devices().
     DeviceLister deviceLister_;
     std::vector<asio::DeviceEntry> devices_;
+
+    /// Credentials seam (task 015): the default Null store makes "no
+    /// credentials" an explicit, testable state instead of a missing feature;
+    /// the composition root installs the production chain. The store outlives
+    /// the controller by declaration order in Main.cpp.
+    security::NullSecretStore nullSecrets_;
+    security::ISecretStore* secrets_ = &nullSecrets_;
     /// True once setAudioBackend() was called. Distinguishes "the tests or developer
     /// mode chose this backend" from "this is the default null device", so a device
     /// configured in settings is never quietly served by the null backend.

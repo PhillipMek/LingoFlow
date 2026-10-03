@@ -11,6 +11,7 @@
 // written. isSecretFieldName() is the single place that decides what "looks like
 // a credential" means.
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -43,6 +44,20 @@ namespace config {
 
     /// One-based channel bounds validate() accepts for input and output.
     std::pair<int, int> channelRange() noexcept;
+
+    /// Inclusive bounds validate() accepts for both reconnect backoff fields, ms.
+    std::pair<int, int> reconnectBackoffRange() noexcept;
+
+    /// Inclusive bounds validate() accepts for translation.sessionMaxAgeSeconds
+    /// (0 disables the proactive reopen).
+    std::pair<int, int> sessionMaxAgeRange() noexcept;
+
+    /// The longest instructions string validate() accepts, characters.
+    std::size_t maxInstructionsLength() noexcept;
+
+    /// The longest identifier-shaped field validate() accepts (model hint, NDI
+    /// stream name), characters.
+    std::size_t maxIdentifierLength() noexcept;
 
     /// Validation problems only; empty means the configuration is usable.
     ConfigProblems validate(const AppConfig& candidate);

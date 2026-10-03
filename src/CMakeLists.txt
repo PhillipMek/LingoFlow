@@ -28,6 +28,10 @@ add_library(lingoflow_core STATIC
 
     Security/ISecretStore.cpp
     Security/ISecretStore.h
+    Security/ChainedSecretStore.cpp
+    Security/ChainedSecretStore.h
+    Security/WindowsCredentialStore.cpp
+    Security/WindowsCredentialStore.h
 
     Diagnostics/DiagnosticsManager.cpp
     Diagnostics/DiagnosticsManager.h
@@ -83,6 +87,14 @@ target_compile_features(lingoflow_core PUBLIC cxx_std_20)
 # nlohmann/json is a PRIVATE dependency: it stays inside Config/*.cpp, so no other
 # module (and no UI code) can start parsing JSON.
 target_link_libraries(lingoflow_core PRIVATE nlohmann_json::nlohmann_json)
+
+# Task 015: the production credential store speaks to the Windows Credential
+# Manager, whose Cred* APIs live in advapi32. A PRIVATE link on a static library
+# still reaches the final executables through CMake's link interface, and the
+# class compiles everywhere (it just reports "unavailable" off Windows).
+if(WIN32)
+    target_link_libraries(lingoflow_core PRIVATE advapi32)
+endif()
 
 if(MSVC)
     target_compile_options(lingoflow_core PRIVATE /W4 /utf-8 /MP8)
@@ -192,7 +204,9 @@ target_sources(LingoFlow
     PRIVATE
         App/Main.cpp
         App/OperatorWindow.cpp
-        App/OperatorWindow.h)
+        App/OperatorWindow.h
+        App/SettingsWindow.cpp
+        App/SettingsWindow.h)
 
 target_compile_definitions(LingoFlow
     PRIVATE

@@ -5,6 +5,7 @@
 #include <format>
 #include <utility>
 
+#include "App/SettingsWindow.h"
 #include "Config/ConfigSchema.h"
 
 namespace liveai {
@@ -115,8 +116,10 @@ OperatorContent::OperatorContent(ApplicationController& controller)
 
     startButton_.onClick = [this] { startPressed(); };
     stopButton_.onClick = [this] { stopPressed(); };
+    settingsButton_.onClick = [this] { settingsPressed(); };
     addAndMakeVisible(startButton_);
     addAndMakeVisible(stopButton_);
+    addAndMakeVisible(settingsButton_);
 
     for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
     {
@@ -127,6 +130,10 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     detailLabel_.setFont(uiFont(13.0f));
     detailLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd29922u));
     addAndMakeVisible(detailLabel_);
+
+    credentialLabel_.setFont(uiFont(12.0f));
+    credentialLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    addAndMakeVisible(credentialLabel_);
 
     // ------------------------------------------------------------- settings
     caption(deviceCaption_, "Audio device (single ASIO in/out)", *this);
@@ -282,6 +289,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     startTimer(100);
 }
 
+OperatorContent::~OperatorContent() = default;   // SettingsWindow is complete here
+
 // --------------------------------------------------------------------------- commands
 
 void OperatorContent::startPressed()
@@ -302,6 +311,17 @@ void OperatorContent::stopPressed()
     controller_.stop();
     actionNote_ = "Stopped. Device, rate, channel, language and NDI changes apply on Start.";
     rebuild();
+}
+
+void OperatorContent::settingsPressed()
+{
+    // One dialog object for the lifetime of the window; close hides it, and a
+    // reopen always re-reads the settings first - a second stale copy of the
+    // configuration is exactly the thing this product refuses to have.
+    if (settingsWindow_ == nullptr)
+        settingsWindow_ = std::make_unique<SettingsWindow>(controller_);
+    else
+        settingsWindow_->reopen();
 }
 
 void OperatorContent::refreshDevicesPressed()
@@ -522,6 +542,16 @@ void OperatorContent::rebuild()
     detailLabel_.setText(panel.detail == "ok" ? juce::String() : juce::String(panel.detail),
                          juce::NotificationType::dontSendNotification);
 
+    // Task 015: the credential state belongs to the main screen too - an
+    // operator must be able to see "no key" before pressing Start, not only
+    // inside a dialog they have not opened.
+    credentialLabel_.setText(juce::String(panel.credentialLine),
+                             juce::NotificationType::dontSendNotification);
+    credentialLabel_.setColour(juce::Label::textColourId,
+                               panel.credentialLine.rfind("API key: stored", 0) == 0
+                                   ? juce::Colour(0xff8b949eu)
+                                   : juce::Colour(0xffd29922u));
+
     startButton_.setEnabled(panel.canStart || panel.faulted);
     startButton_.setButtonText(panel.faulted ? "Retry" : "Start");
     stopButton_.setEnabled(panel.canStop);
@@ -605,6 +635,7 @@ void OperatorContent::resized()
     auto header = bounds.removeFromTop(32);
     stopButton_.setBounds(header.removeFromRight(96));
     startButton_.setBounds(header.removeFromRight(96).withTrimmedRight(6));
+    settingsButton_.setBounds(header.removeFromRight(110).withTrimmedRight(6));
     titleLabel_.setBounds(header);
 
     auto chips = bounds.removeFromTop(26);
@@ -614,6 +645,7 @@ void OperatorContent::resized()
     ndiValue_.setBounds(chips.removeFromLeft(220));
 
     detailLabel_.setBounds(bounds.removeFromTop(20));
+    credentialLabel_.setBounds(bounds.removeFromTop(18));
     bounds.removeFromTop(6);
 
     auto content = bounds;

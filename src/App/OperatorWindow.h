@@ -31,6 +31,8 @@
 
 namespace liveai {
 
+class SettingsWindow;   // the task 015 dialog, owned while hidden and shown
+
 /// A horizontal peak/RMS meter with a clipping lamp. Pure paint: it receives a
 /// UiMeterView and draws it; it owns no audio state.
 class MeterBar final : public juce::Component
@@ -51,6 +53,7 @@ class OperatorContent final : public juce::Component, private juce::Timer
 {
 public:
     explicit OperatorContent(ApplicationController& controller);
+    ~OperatorContent() override;   ///< defined where SettingsWindow is complete
 
     void resized() override;
 
@@ -68,6 +71,7 @@ private:
     // ------------------------------------------------------------- commands
     void startPressed();
     void stopPressed();
+    void settingsPressed();
     void refreshDevicesPressed();
     void deviceSelected();
     void sourceSelected();
@@ -95,8 +99,10 @@ private:
     juce::Label titleLabel_;
     juce::TextButton startButton_ { "Start" };
     juce::TextButton stopButton_ { "Stop" };
+    juce::TextButton settingsButton_ { "Settings..." };
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
     juce::Label detailLabel_;
+    juce::Label credentialLabel_;
 
     // ---------------------------------------------------------- settings column
     juce::Label deviceCaption_, deviceNoteLabel_;
@@ -128,6 +134,10 @@ private:
 
     // Option caches: the window's only lists, mirrored from the panel.
     std::vector<UiOption> deviceCache_, sourceCache_, targetCache_, rateCache_;
+
+    /// The task 015 dialog: created on first open, hidden on close, always
+    /// re-read before it is shown again - the settings funnel stays singular.
+    std::unique_ptr<SettingsWindow> settingsWindow_;
 
     bool updatingWidgets_ = false;
     bool gainDragging_ = false;

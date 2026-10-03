@@ -51,6 +51,42 @@ void feedBlock(AudioEngine& engine, float level)
     engine.processAudio(inPointers, outPointers, kFrames);
 }
 
+/// An in-memory UI-side stand-in for the credential store: presence is the only
+/// fact the panel may display, so this store keeps exactly that.
+class PresenceStore final : public security::ISecretStore
+{
+public:
+    std::string_view name() const noexcept override { return "Presence test store"; }
+
+    security::SecretStatus store(std::string_view, std::string_view) override
+    {
+        present = true;
+        return security::SecretStatus::stored;
+    }
+
+    std::optional<std::string> load(std::string_view identifier) override
+    {
+        if (present && identifier == security::kOpenAiApiKey)
+            return std::string("the-value");
+        return std::nullopt;
+    }
+
+    security::SecretStatus remove(std::string_view) override
+    {
+        present = false;
+        return security::SecretStatus::found;
+    }
+
+    std::vector<std::string> identifiers() const override
+    {
+        if (!present)
+            return {};
+        return { std::string(security::kOpenAiApiKey) };
+    }
+
+    bool present = false;
+};
+
 } // namespace
 
 TEST_CASE("UiModel: the stopped panel states facts, not promises", "[app][ui][model]")
@@ -291,6 +327,51 @@ TEST_CASE("UiModel: a refused update leaves memory, config and panel untouched",
     CHECK(panel.sampleRates[static_cast<std::size_t> (panel.selectedSampleRate)].value
           == std::to_string(before.audio.sampleRate));
     CHECK(panel.actionNote == note);
+}
+
+TEST_CASE("UiModel: the credential line states the store, the absence and the remedy - never a value",
+          "[app][ui][model][credentials]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+
+    auto panel = buildOperatorPanel(controller, {});
+    CHECK(panel.credentialLine.rfind("API key: NOT stored", 0) == 0);
+    CHECK(panel.credentialLine.find("Settings") != std::string::npos);   // the remedy is in the sentence
+    CHECK(panel.credentialLine.find("Null") != std::string::npos);       // and so is the honest store name
+
+    PresenceStore store;
+    store.present = true;
+    controller.setSecretStore(store);
+
+    panel = buildOperatorPanel(controller, {});
+    CHECK(panel.credentialLine.rfind("API key: stored", 0) == 0);
+    CHECK(panel.credentialLine.find("Presence test store") != std::string::npos);
+}
+
+TEST_CASE("UiModel: the log-level list round-trips with its owner and the schema accepts every name",
+          "[app][ui][model][logging]")
+{
+    // Single-source assertion (task 015): the dialog's combo and validate()
+    // read the same lists - a selector can never offer what the schema refuses,
+    // the same rule the language dropdowns have since task 011.
+    const auto choices = logLevelChoices();
+    REQUIRE_FALSE(choices.empty());
+
+    for (const auto& choice : choices)
+    {
+        CHECK(log::nameOf(log::levelFromName(choice.value)) == choice.value);
+
+        AppConfig cfg = config::defaults();
+        cfg.diagnostics.logLevel = choice.value;
+        std::string error;
+        CHECK(config::validate(cfg, error));
+    }
+
+    // And the list is exactly the module's own, in its own order.
+    REQUIRE(choices.size() == log::allLevels().size());
+    for (std::size_t i = 0; i < choices.size(); ++i)
+        CHECK(choices[i].value == log::nameOf(log::allLevels()[i]));
 }
 
 TEST_CASE("UiModel: faulted is visible and the retry path is the operator's, not automatic",

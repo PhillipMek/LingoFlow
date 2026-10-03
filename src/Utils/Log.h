@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace liveai {
 
@@ -51,6 +52,12 @@ namespace log
 
     /// Parses "trace".."off", case-insensitively; returns off on unknown input.
     LogLevel levelFromName(std::string_view name);
+
+    /// Every level a configuration can name, ascending, "off" last. The UI
+    /// builds its selector from this list, so the names on the settings screen
+    /// and the names validate() round-trips through nameOf/levelFromName can
+    /// never drift apart (task 015's single-source rule).
+    const std::vector<LogLevel>& allLevels();
 
     /// True if messages of the given level would be emitted.
     bool enabled(LogLevel level);

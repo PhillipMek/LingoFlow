@@ -50,6 +50,7 @@ struct OperatorPanel
     std::string ndiState;
     std::string audioBackendName;
     std::string detail;                ///< the freshest problem, or "ok"
+    std::string credentialLine;        ///< task 015: where the API key stands, in one sentence
     bool faulted = false;              ///< the Start button must offer Retry (clearFault)
     bool canStart = false;
     bool canStop = false;
@@ -104,6 +105,12 @@ struct OperatorPanel
 /// How many history lines the panel carries to the window. A display depth,
 /// not a product rule - the pipeline's own bound is the real one.
 inline constexpr std::size_t kSubtitleHistoryTail = 8;
+
+/// Log level names in the order Utils/Log defines them. The settings dialog's
+/// selector is built from here and from nowhere else, so the names on screen
+/// and the names validate() round-trips can never drift (task 015, same rule
+/// as every other list on this screen).
+std::vector<UiOption> logLevelChoices();
 
 /// Builds the panel from public reads. Non-realtime by construction (called on
 /// the GUI thread); it allocates strings, which is exactly what a UI thread may

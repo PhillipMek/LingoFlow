@@ -1,5 +1,6 @@
 #include "App/ApplicationController.h"
 
+#include <algorithm>
 #include <format>
 
 #include "Audio/Null/NullAudioBackend.h"
@@ -185,15 +186,106 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
 
+    // Task 015: the log level is a mid-show control - the venue run-sheet asks
+    // for debug lines while everything is already running - and reconfiguring
+    // sinks is a documented non-realtime act (Utils/Log). Only the level is
+    // taken from settings here; which sinks exist at all is the composition
+    // root's startup decision, and the note below names what waits for a
+    // restart instead of pretending this applies more than it does.
+    {
+        auto logging = log::config();
+        logging.level = log::levelFromName(cfg.diagnostics.logLevel);
+        log::configure(logging);
+    }
+
     std::string saveError;
     if (saveSettings(saveError))
-        note = "settings saved. Device, sample rate, buffer, channel, language and NDI changes "
-               "take effect after Stop + Start; gain and jitter are live.";
+        note = "settings saved. Gain, jitter and the log level are live. Device, sample rate, "
+               "buffer, channels, languages, instructions and NDI take effect on Stop + Start. "
+               "Recovery policy (backoff, session age) and the log-file sink take effect when "
+               "the application restarts.";
     else
         note = "settings are active for this run but were NOT saved: " + saveError;
 
     log::info(kComponent, "operator settings update: " + note);
     return true;
+}
+
+void ApplicationController::setSecretStore(security::ISecretStore& store) noexcept
+{
+    // No stop-guard needed: this pointer only serves the operator's credential
+    // actions. The backend holds its own reference from the composition root,
+    // installed before start() - swapping what the UI writes to cannot yank
+    // the ground from a running session, and if a root ever did this mid-run,
+    // the log line below is the visible fact.
+    secrets_ = &store;
+    log::info(kComponent, "credential store installed: " + std::string(store.name()));
+}
+
+bool ApplicationController::hasApiSecret() const
+{
+    // Identifiers only: a presence check must not copy a secret across a thread.
+    const auto ids = secrets_->identifiers();
+    const std::string apiKey(security::kOpenAiApiKey);
+    return std::find(ids.begin(), ids.end(), apiKey) != ids.end();
+}
+
+std::string ApplicationController::secretStoreName() const
+{
+    return std::string(secrets_->name());
+}
+
+bool ApplicationController::storeApiSecret(std::string_view secret, std::string& note)
+{
+    if (secret.empty())
+    {
+        // "Save" of an empty field is almost certainly not what was meant;
+        // deleting has its own button and its own honest wording.
+        note = "an empty key was not stored - use Remove if the intent is to delete it";
+        log::warning(kComponent, note);
+        return false;
+    }
+
+    if (const auto status = secrets_->store(security::kOpenAiApiKey, secret);
+        status == security::SecretStatus::stored)
+    {
+        note = "API key stored in " + secretStoreName() + ". The value is not in the settings "
+               "file, not in the log, and not kept on screen; sessions read it at Start.";
+        log::info(kComponent, "translation: the operator stored the API key in " + secretStoreName()
+                                  + " (value never logged)");
+        return true;
+    }
+    else
+    {
+        note = "the credential store refused the key: " + std::string(security::nameOf(status))
+               + " (" + secretStoreName() + ")";
+        log::warning(kComponent, note);
+        return false;
+    }
+}
+
+void ApplicationController::removeApiSecret(std::string& note)
+{
+    switch (const auto status = secrets_->remove(security::kOpenAiApiKey); status)
+    {
+        case security::SecretStatus::found:
+            note = "API key removed from " + secretStoreName() + ".";
+            log::info(kComponent, "translation: the operator removed the stored API key");
+            break;
+
+        case security::SecretStatus::notFound:
+            // Said, not swallowed: clicking Remove with nothing stored is a
+            // fact the operator is entitled to hear back.
+            note = "there was no stored API key to remove (" + secretStoreName() + ").";
+            log::info(kComponent, "translation: removal requested, nothing was stored");
+            break;
+
+        default:
+            note = "the credential store refused the removal: "
+                   + std::string(security::nameOf(status)) + " (" + secretStoreName() + ")";
+            log::warning(kComponent, note);
+            break;
+    }
 }
 
 bool ApplicationController::start()

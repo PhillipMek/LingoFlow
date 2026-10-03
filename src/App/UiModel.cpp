@@ -9,6 +9,7 @@
 #include "Audio/LevelMeter.h"
 #include "Config/ConfigSchema.h"
 #include "Translation/LanguageRegistry.h"
+#include "Utils/Log.h"
 
 namespace liveai {
 namespace {
@@ -71,6 +72,14 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     panel.canStart = status.application == ApplicationState::stopped;
     panel.canStop = status.application == ApplicationState::running
                     || status.application == ApplicationState::faulted;
+
+    // Task 015. Presence is read from the store's identifier list (names, never
+    // values), and the sentence points the operator at the exact remedy before
+    // a session ever refuses for a missing key.
+    panel.credentialLine = controller.hasApiSecret()
+        ? "API key: stored - " + controller.secretStoreName()
+        : "API key: NOT stored - sessions will refuse until it is entered in Settings (store: "
+              + controller.secretStoreName() + ")";
 
     // --------------------------------------------------------------- devices
     for (const auto& device : controller.devices())
@@ -224,6 +233,17 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
 
     panel.actionNote = actionNote;
     return panel;
+}
+
+std::vector<UiOption> logLevelChoices()
+{
+    std::vector<UiOption> choices;
+    choices.reserve(log::allLevels().size());
+
+    for (const auto level : log::allLevels())
+        choices.push_back({ std::string(log::nameOf(level)), std::string(log::nameOf(level)) });
+
+    return choices;
 }
 
 } // namespace liveai

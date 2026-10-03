@@ -22,10 +22,14 @@
 //
 // The windowed run (task 014) opens the operator screen: status chips, device /
 // language / format selectors, live meters and gain, jitter pre-roll, counters
-// and the subtitle model. It starts the subsystems exactly like --smoke does; a
-// start that fails exits with code 2 as documented below, and everything the
-// operator changes afterwards goes through the controller - the UI itself owns
-// no logic (App/UiModel is the tested half).
+// and the subtitle model. Task 015 adds the Settings dialog: the translation
+// instructions, recovery policy, NDI and diagnostics fields, and the masked
+// API-key entry that is stored in the Windows Credential Manager (the value
+// never touches settings, logs or the screen after a successful store). It
+// starts the subsystems exactly like --smoke does; a start that fails exits
+// with code 2 as documented below, and everything the operator changes
+// afterwards goes through the controller - the UI itself owns no logic
+// (App/UiModel is the tested half).
 //
 // Exit codes:
 //   0   started (and, with --smoke, shut down) normally
@@ -54,7 +58,9 @@
 #include <vector>
 
 #include "Network/OpenAIRealtimeBackend.h"
+#include "Security/ChainedSecretStore.h"
 #include "Security/ISecretStore.h"
+#include "Security/WindowsCredentialStore.h"
 #include "Translation/ReconnectSupervisor.h"
 #endif
 
@@ -98,8 +104,9 @@ std::optional<std::string> readEnvironmentApiKey()
 
 /// Development credential store (AGENTS.md 10 allows an environment variable for
 /// development). The value is never logged and never written anywhere - the app
-/// reports only its presence. Task 015 replaces this with Windows secure storage;
-/// until then this is the documented development path, not a production store.
+/// reports only its presence. Since task 015 this is the documented FALLBACK:
+/// production keys live in the Windows Credential Manager and are read first;
+/// the environment stays a convenience for development, not a storage story.
 class EnvironmentSecretStore final : public liveai::security::ISecretStore
 {
 public:
@@ -287,18 +294,36 @@ private:
     {
         const auto& cfg = controller_.config().current().translation;
 
-        secretStore_ = std::make_unique<EnvironmentSecretStore>();
+        // Task 015: the key now has a production home. The Windows Credential
+        // Manager is the primary store - a key the operator enters in Settings
+        // is written there by the OS, encrypted and restart-proof - and the
+        // environment variable keeps the exact role AGENTS.md 10 gave it: a
+        // development path. The chain reads the store first (a stored key wins)
+        // and writes only to the store (the environment is not the product's
+        // to rewrite).
+        windowsStore_ = std::make_unique<liveai::security::WindowsCredentialStore>();
+        devStore_ = std::make_unique<EnvironmentSecretStore>();
+        secretStore_ = std::make_unique<liveai::security::ChainedSecretStore>(*windowsStore_,
+                                                                              *devStore_);
+
+        // The UI's credential actions and the backend's session-start read use
+        // this same object: one store, two users, and not one copy of the value
+        // anywhere else in the process.
+        controller_.setSecretStore(*secretStore_);
 
         // Presence only, never the value (AGENTS.md 10). Without a key the session
         // open will refuse - the controller already treats that as a recorded,
         // recoverable failure that leaves the audio path running (AGENTS.md 12).
         if (secretStore_->identifiers().empty())
             liveai::log::warning(kLogComponent,
-                                 "translation: no OPENAI_API_KEY in the environment - sessions will refuse "
-                                 "until a credential exists (development store; task 015 owns storage). "
+                                 "translation: no API key found - enter it in Settings (it will be "
+                                 "stored in the Windows Credential Manager) or set OPENAI_API_KEY for "
+                                 "development; sessions will refuse until one exists. "
                                  "Audio keeps running regardless.");
         else
-            liveai::log::info(kLogComponent, "translation: OpenAI credential found (development store)");
+            liveai::log::info(kLogComponent,
+                              "translation: OpenAI credential found ("
+                                  + std::string(secretStore_->name()) + ")");
 
         liveai::network::OpenAIRealtimeOptions options; // documented defaults, no invented overrides
 
@@ -318,8 +343,12 @@ private:
                               + (cfg.reconnectEnabled ? "on" : "pass-through") + ")");
     }
 
-    /// Declared before the controller so it outlives the backend holding a
-    /// reference to it.
+    /// Declared before the controller so they outlive the backend holding a
+    /// reference to the chain. Order matters twice: the chain refers to both
+    /// stores (declared first, destroyed last after it), and all three must
+    /// outlive the controller's backends.
+    std::unique_ptr<liveai::security::WindowsCredentialStore> windowsStore_;
+    std::unique_ptr<EnvironmentSecretStore> devStore_;
     std::unique_ptr<liveai::security::ISecretStore> secretStore_;
 #endif
 

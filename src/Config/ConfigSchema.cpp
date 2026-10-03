@@ -193,6 +193,26 @@ std::pair<int, int> channelRange() noexcept
     return { 1, kMaxChannels };
 }
 
+std::pair<int, int> reconnectBackoffRange() noexcept
+{
+    return { kMinReconnectBackoffMs, kMaxReconnectBackoffMs };
+}
+
+std::pair<int, int> sessionMaxAgeRange() noexcept
+{
+    return { 0, kMaxSessionAgeSeconds };
+}
+
+std::size_t maxInstructionsLength() noexcept
+{
+    return kMaxInstructionsLength;
+}
+
+std::size_t maxIdentifierLength() noexcept
+{
+    return kMaxIdentifierLength;
+}
+
 ConfigProblems validate(const AppConfig& candidate)
 {
     ConfigProblems problems;

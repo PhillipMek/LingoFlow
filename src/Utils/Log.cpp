@@ -123,6 +123,15 @@ LogLevel levelFromName(std::string_view name)
     return LogLevel::off;
 }
 
+const std::vector<LogLevel>& allLevels()
+{
+    static const std::vector<LogLevel> levels {
+        LogLevel::trace, LogLevel::debug, LogLevel::info, LogLevel::warning,
+        LogLevel::error, LogLevel::critical, LogLevel::off
+    };
+    return levels;
+}
+
 bool enabled(LogLevel level)
 {
     auto& s = state();
