@@ -346,6 +346,16 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   the live knob forwards, `start`/`stop`/`clearFault`/`refreshDevices`). The only
   persistence path is `updateSettings` - validate, then apply live, then save, and the
   returned note says what waits for a Stop/Start. A refused candidate changes nothing.
+* Task 015 adds the third operator channel, deliberately the shortest: the credential.
+  `storeApiSecret`/`removeApiSecret`/`hasApiSecret`/`secretStoreName` on the controller
+  put `ISecretStore` behind the same one-call rule as everything else, and the value's
+  path never crosses the settings area, the log or the status: UI field -> store ->
+  backend's session-start read. The presence line reads `identifiers()` (names only);
+  the Settings dialog's field masks its echo and is cleared on a successful store, so
+  the screen itself does not hold the key either. The production store is the Windows
+  Credential Manager behind a `ChainedSecretStore` (store first, environment fallback -
+  AGENTS.md 10's development path); writes go only to the primary, because the
+  application must not rewrite the developer's environment.
 * The 100 ms timer is a repaint clock over atomics: reads cannot block, so the UI
   freezing is limited to JUCE itself, and the FAIL criterion "UI owns backend/audio
   logic" is kept out by design rather than by the include audit (App may legitimately

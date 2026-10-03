@@ -7,9 +7,10 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011, 013 and 014 complete; 012 implemented** - 012's REQUIRED human
-checkpoint (real EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) is open, run
-sheet `docs/rig-checklist.md`. The repository contains a JUCE/CMake
+Status: **tasks 000-011, 013 and 014 complete; 012 and 015 implemented** - 012's REQUIRED
+human checkpoint (real EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) and
+015's (operator entering the key through the Settings dialog on the target venue machine)
+are open, run sheet `docs/rig-checklist.md`. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -22,7 +23,7 @@ single language registry with its versioned OpenAI capability manifest, the moun
 translation pipeline (task 012: capture worker + supervisor + real backend in the
 composition root), the typed text pipeline (task 013: snapshot events, bounded history,
 UI-facing model), the operator window (task 014: a JUCE shell over the tested UiModel),
-and 247 tests.
+the Settings dialog with Windows-secure API-key storage (task 015), and 258 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -90,7 +91,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-247 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+258 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -98,7 +99,10 @@ suite that pins the frozen capability manifest and the pair-check rules, the tas
 capture-streaming suite that runs the worker against a recording backend, the task 013
 text-pipeline suite - snapshot/eviction/duplicate rules and a two-writer race case -
 and the task 014 UiModel suite that runs the whole operator screen headless through the
-real controller), the
+real controller; the task 015 credential suites - chain-store routing rules, a live
+Windows Credential Manager round-trip including a child-process case proving the store
+is not process memory, and the controller funnel that keeps the secret out of settings,
+notes and logs), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -139,7 +143,14 @@ slider, a counted-underruns/throughput diagnostics grid, a bounded subtitle pane
 the task 013 model, and the outcome note of every settings action. The window contains no
 audio, device or protocol logic: it paints `UiModel` values and calls controller methods,
 and `UiModel` is tested headless against the real controller (which is how the PASS
-criteria are verified without a human).
+criteria are verified without a human). A **Settings...** button opens the task 015
+dialog: the masked API-key field (stored to the Windows Credential Manager, cleared from
+the screen on success, never written to settings or logs), the translation instructions
+and model hint, the recovery policy, NDI settings and the diagnostics block - committed
+as one atomic draft through the same `updateSettings` funnel, with the log level taking
+effect live and the log-file on/off waiting for an application restart. The main screen
+also carries a permanent credential line ("stored" / "NOT stored - ... until it is
+entered in Settings"), so an operator can see the key's state before pressing Start.
 
 The application writes a log file to
 `%APPDATA%\LingoFlow\logs\lingoflow.log` (JUCE's
@@ -227,9 +238,11 @@ still match that table.
 
 **Credentials are never in this file.** `api_key`, `token`, `secret`, `password`,
 `credential`, `authorization`, `bearer` (and their spellings) are detected while
-parsing, reported and dropped. They belong to `security::ISecretStore` (task 015
-implements it on Windows secure storage). The application must keep running when
-no credential exists: only the translation backend becomes unavailable.
+parsing, reported and dropped. They belong to `security::ISecretStore` - since task 015
+that means the Windows Credential Manager first (`WindowsCredentialStore`), with the
+environment variable as the documented development fallback (`ChainedSecretStore`), and
+the operator enters the key through the masked Settings field. The application must keep
+running when no credential exists: only the translation backend becomes unavailable.
 
 ## Device defaults and hardware status
 
@@ -409,8 +422,9 @@ ASIO in -> engine input ring -> TranslationStreamer (worker thread) -> Reconnect
   `openSession()` succeeds and joins it before `closeSession()` returns - the same
   shutdown ordering the task 007 contract rules were built for.
 * The composition root (`Main.cpp`) mounts `ReconnectSupervisor(OpenAIRealtimeBackend)`
-  from the settings; the credential comes from the environment (dev store of AGENTS.md
-  10, replaced by Windows secure storage in task 015), its value never logged. Without a
+  from the settings; the credential is read through the task 015 chain - Windows
+  Credential Manager first, the environment variable as AGENTS.md 10's development
+  fallback - and its value is never logged. Without a
   credential or a network the session refuses, is recorded, and the audio path keeps
   running (AGENTS.md 12). `--smoke` never mounts the real backend.
 * The default `translation.jitterBufferMs` moved 120 -> 250: with the live wire facts
@@ -501,19 +515,50 @@ output, asserted headless against the real controller, and each control is one c
 method. "Freezes" is guarded by the same rule the meters were designed for: reads are
 atomics and snapshots, and the poll cannot block on anything.
 
+## Credentials and the Settings dialog (task 015)
+
+The key's whole life story, in one paragraph: it is typed into a masked field, handed
+straight from the UI to `security::WindowsCredentialStore` (one call:
+`ApplicationController::storeApiSecret`), persisted by the OS encrypted at rest as the
+generic credential `LingoFlow/openai_api_key`, read only by the translation backend at
+session start, and named nowhere else - not in `config.json` (the struct has no such
+field and the parser drops secret-shaped ones), not in the log (only operations and OS
+error codes are written; notes quote the store's *name*, never a value), not on screen
+(a successful store clears the field; the presence line reads `identifiers()`, names
+only).
+
+Storage choices worth saying out loud: the Windows Credential Manager is what AGENTS.md
+10's "Windows secure storage" means concretely - per-user, OS-encrypted, restart-proof,
+and inspectable by the operator in the Control Panel. `ChainedSecretStore` layers it
+over the development environment variable: reads try the store first (a key entered in
+Settings wins over any environment value), writes go only to the store (the application
+never rewrites the developer's environment), removal never touches the fallback, and
+nothing is faked - a refused or empty store answers refusal, and the Settings dialog's
+presence line says so. Offline evidence for "survives restart" is the child-process
+test: one process writes a marker credential, a second process reads it back - the
+store is the OS's, not the process's memory. The actual reboot on the venue machine is
+the task's REQUIRED human checkpoint.
+
+The Settings dialog itself keeps task 014's rule: widgets only, every commit through
+`updateSettings` as one atomic draft. The schema's own exported ranges back the controls
+(the same single-source rule as every other selector), and the note names honestly what
+applies now (gains, jitter, log level) versus what waits for Stop + Start (device,
+languages, NDI) versus what waits for a full application restart (recovery policy is
+mounted by the composition root at startup, and the log-file sink is chosen there too).
+
 ## Layout
 
 ```text
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
-src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), UiModel (headless-tested operator model), OperatorWindow (JUCE shell), JUCE entry point
+src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), UiModel (headless-tested operator model), OperatorWindow + SettingsWindow (JUCE shells), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), TextPipeline (013 typed events + bounded history), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
 src/NDI/                INdiOutput contract, Null/ output
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
-src/Security/           ISecretStore boundary + NullSecretStore (credentials never live in config)
+src/Security/           ISecretStore boundary + NullSecretStore + WindowsCredentialStore (015 production storage) + ChainedSecretStore (store-first, environment-fallback)
 src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
 src/Utils/              logging skeleton
 tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend + scripted WebSocket fake, realtime allocation suite, architecture audit, realtime safety audit, self-tests
