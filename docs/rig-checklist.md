@@ -118,14 +118,17 @@ foreach ($j in 40,80,120,200,300) { .\lingoflow_asio_probe.exe --loopback "Waves
 ```
 
 Записать для каждой точки: underruns / overruns. **Минимальный preroll без dropouts = ____ мс.**
-Это вход для пересмотра дефолта `translation.jitterBufferMs` (120 мс сейчас — инженерная
-догадка, а live-факты OpenAI дают всплески дельт ~2x и дренаж ~4.7x realtime).
+Это вход для подтверждения дефолта `translation.jitterBufferMs`: с 012 в коде стоит 250 мс —
+инженерное число из живых фактов OpenAI (всплески дельт до ~2x realtime, дренаж после close
+~4.7x realtime), на реальном железе оно ещё не проверялось; свип ниже решает, оставить его или
+двигать — по цифрам, не по ощущениям.
 Субъективно замерить «рот → слышно в мониторе» на 0 дБ gain — ориентир для бюджета 018.
 
-## 8. Приложение: конфигурация и старт (перевод ещё Null — это НЕ баг)
+## 8. Приложение: конфигурация и старт
 
-012 ещё не смонтирован: приложение не переводит и на выходе молчит — норма. Проверяем
-связку settings → реальное устройство:
+С 012 приложение монтирует настоящую цепочку: OpenAI-бэкенд за reconnect-supervisor, а
+`--smoke` остаётся офлайн (Null-бэкенд, сеть не трогает). Проверяем связку
+settings → реальное устройство → живой перевод:
 
 1. В `%APPDATA%\LingoFlow\config.json` задать: `audio.inputDeviceId` и
    `audio.outputDeviceId` = `Waves SoundGrid ASIO`, `audio.inputChannel`/`audio.outputChannel`
@@ -137,15 +140,26 @@ foreach ($j in 40,80,120,200,300) { .\lingoflow_asio_probe.exe --loopback "Waves
    `opening the audio device selected in settings`, реальная частота/блок
    (если запрошенного 480 нет — залогированный fallback; записать, что предложили),
    `audio gains in effect`.
-3. Подержать GUI (`.\LingoFlow.exe` без `--smoke`) 1–2 минуты: окно живо, краха нет.
+3. Основной чек 012 (он и есть REQUIRED checkpoint этого задачника): GUI без `--smoke`,
+   подать живую речь на выбранный вход и держать 1–2 минуты. Ожидание:
+   - лог: `translation: OpenAI backend mounted behind the reconnect supervisor`,
+     `translation session: connected`, `session open: model=gpt-realtime-translate ...`,
+     `translation streaming started`;
+   - на выбранном выходе через ~секунд слышен перевод вместо/поверх речи (пока без NDI —
+     только аудио; текст придёт в 013);
+   - окно живёт, краха нет; закрыть окно — в логе `translation streaming stopped: N frames
+     submitted...` (N > 0) и `translation session: closed` (после реального дренажа).
+   Записать: время `connecting`→`connected`, когда перевод стал слышен относительно речи,
+   были ли провалы/артефакты. Если сеть площадки не пускает WebSocket — это тоже ответ
+   чина (в логе будет `translation session: reconnecting` и категории ошибок).
 
 Отрицательная проверка на месте: выбрать в settings несуществующее ASIO-устройство →
 приложение должно отказать по имени и выйти с кодом 2, не подменив устройство молча.
 
-## 9. Если на площадке есть интернет (ценно для 012)
+## 9. Если на площадке есть интернет (дополняет шаг 8 фактами прова)
 
-Сетевой факт «глазами площадки»: WPB socket к `api.openai.com` может блокироваться
-корпоративной/ивент-сетью. Ключ — в `HKCU\Environment\OPENAI_API_KEY` или переменном
+Сетевой факт «глазами площадки»: WebSocket-соединение к `api.openai.com` может блокироваться
+корпоративной/ивент-сетью. Ключ — в `HKCU\Environment\OPENAI_API_KEY` или переменной
 `OPENAI_API_KEY` этого процесса; в файлы на ноуте ключ не класть.
 
 ```powershell
@@ -179,7 +193,9 @@ foreach ($j in 40,80,120,200,300) { .\lingoflow_asio_probe.exe --loopback "Waves
 ## Файлы на ноут площадки
 
 - `D:\work\LingoFlow\build\src\Release\lingoflow_asio_probe.exe` (шаги 1–7, 10);
-- `D:\work\LingoFlow\build\src\LingoFlow_artefacts\Release\LingoFlow.exe` (шаг 8);
+- `D:\work\LingoFlow\build\src\LingoFlow_artefacts\Release\LingoFlow.exe` (шаг 8; с 012 это
+  уже приложение с реальным OpenAI-бэкендом за supervisor'ом — при выбранном устройстве и
+  наличии API-ключа оно переводит, окно и `--smoke` различаются: smoke не трогает сеть);
 - `D:\work\LingoFlow\build\src\Release\lingoflow_openai_probe.exe` + `test_en_24k.wav` (шаг 9, опция);
 - установщик **VC++ 2015-2022 x64 redistributable** — бинари линкуют динамический CRT;
 - этот файл;

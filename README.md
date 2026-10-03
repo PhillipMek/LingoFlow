@@ -7,7 +7,9 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011 complete**. The repository contains a JUCE/CMake
+Status: **tasks 000-011 complete; 012 implemented** - its REQUIRED human checkpoint (real
+EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) is open, run sheet
+`docs/rig-checklist.md`. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -16,8 +18,10 @@ a real OpenAI realtime translation backend (`src/Network`, on the OS winhttp Web
 stack with the 24<->48 kHz resampler inside it), Null implementations of the translation
 and NDI boundaries, versioned configuration with safe persistence, ASIO device discovery
 and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor, the
-single language registry with its versioned OpenAI capability manifest,
-and 221 tests.
+single language registry with its versioned OpenAI capability manifest, the mounted
+translation pipeline (task 012: capture worker + supervisor + real backend in the
+composition root),
+and 226 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -26,10 +30,11 @@ citation and probe dated). The backend has completed one real end-to-end round-t
 through the shipped probe binary (English speech in, Russian translated audio + transcript
 out, graceful close drained); the operator ear-check of translation quality and the
 long-run/expiry and rig-routing behavior are the remaining human checkpoints (tasks
-012/018/010). On a real device the integration that routes the delivered audio to the
-audience is task 012; until then the backend is exercised through its contract and the
-probe, and the only thing that can leave on the output is loopback audio, which has to be
-started explicitly.
+012/018/010). Since task 012 the windowed application itself carries the chain: capture
+streams from the engine's input ring to the backend on a worker thread, and delivered
+audio is the only source of the output jitter buffer - what a rig still has to confirm is
+sound through a real SoundGrid path (run sheet `docs/rig-checklist.md`). Startup checks
+(`--smoke`) deliberately stay offline on the Null backend.
 
 Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
 which makes this product AGPLv3 and puts NDI behind runtime loading
@@ -84,12 +89,14 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-221 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+226 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
-suite that drives recovery against a threaded mock, and the task 011 language-registry
-suite that pins the frozen capability manifest and the pair-check rules), the end-to-end integration suite that
-runs the whole pipeline on the deterministic mock, the realtime allocation suite in its own
+suite that drives recovery against a threaded mock, the task 011 language-registry
+suite that pins the frozen capability manifest and the pair-check rules, and the task 012
+capture-streaming suite that runs the worker against a recording backend), the end-to-end
+integration suite that now drives the whole pipeline through the real streaming worker
+(with a supervisor-mounted outage case), the realtime allocation suite in its own
 binary, the architecture boundary audit plus its self-test, the realtime safety audit plus
 its self-test, and the two device entries that run the ASIO tool's driver-free modes.
 
@@ -361,8 +368,41 @@ knowledge, not OpenAI knowledge, and cannot reach the audio device.
 * The 009 backend completed the hint chain for it: `WinHttpTransport` captures
   `Retry-After` and a capped refusal body, and the documented billing code now maps to
   the terminal category instead of a retryable `connection`.
-* Not in production composition yet: the controller still runs the Null backend; the
-  supervisor enters the pipeline at task 012 alongside the real backend.
+* In production composition since task 012: the windowed application wraps the OpenAI
+  backend in the supervisor at the composition root; `--smoke` stays on the Null backend
+  so startup checks never open sockets.
+
+## The mounted translation pipeline (task 012)
+
+The windowed application now carries the whole chain the earlier tasks built:
+
+```text
+ASIO in -> engine input ring -> TranslationStreamer (worker thread) -> ReconnectSupervisor
+        -> OpenAIRealtimeBackend -> ... -> controller sink -> output jitter -> ASIO out
+```
+
+* `src/App/TranslationStreamer` is the capture-side transport: it drains the engine's
+  input ring and calls `submitAudio()` in bounded chunks on its own thread - the shape
+  task 005's loopback proved, with the translation seam in place of the loopback worker.
+  It is the executor of the gap policy on the input side: frames that arrive while the
+  session is reconnecting are consumed and counted, never replayed late, so the
+  translation stays aligned with the room. A backend that throws costs a worker and a
+  critical log line, not the engine or the application.
+* The streamer lives exactly as long as an open session: the controller creates it when
+  `openSession()` succeeds and joins it before `closeSession()` returns - the same
+  shutdown ordering the task 007 contract rules were built for.
+* The composition root (`Main.cpp`) mounts `ReconnectSupervisor(OpenAIRealtimeBackend)`
+  from the settings; the credential comes from the environment (dev store of AGENTS.md
+  10, replaced by Windows secure storage in task 015), its value never logged. Without a
+  credential or a network the session refuses, is recorded, and the audio path keeps
+  running (AGENTS.md 12). `--smoke` never mounts the real backend.
+* The default `translation.jitterBufferMs` moved 120 -> 250: with the live wire facts
+  (delta bursts to ~2x realtime, post-close drain ~4.7x - protocol doc section 15) the
+  old pre-roll overflowed its own headroom on a long burst. This is arithmetic with a
+  named source, not a measured latency: the rig sweep in `docs/rig-checklist.md` (its
+  step 7) confirms or moves it.
+* Real EN<->RU audio through a real SoundGrid path is the task's REQUIRED human
+  checkpoint and stays open - `docs/rig-checklist.md` is the run sheet for it.
 
 ## Languages and the capability manifest (task 011)
 
@@ -390,7 +430,7 @@ covered by tests:
 ```text
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
-src/App/                ApplicationController (composition root), JUCE entry point
+src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool

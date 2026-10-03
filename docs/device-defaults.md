@@ -71,7 +71,7 @@ after real hardware becomes available is a settings change, not a code change.
 | `audio.bufferFrames` | 480 | 10 ms at 48 kHz, our choice inside the validated 64..2048 range; the SPEC leaves the block size to the implementation, and the installed driver offers 256 (measured), so a fallback is expected and logged |
 | `audio.inputChannel`, `audio.outputChannel` | 1, 1 | SPEC wants mono for translation; SPEC "Input Channel Selection" makes the number an operator choice (its example is 17), 1 is only the neutral first channel. One-based indexing is our convention, documented in `audio::DeviceRequest` |
 | `audio.inputGainDb`, `audio.outputGainDb` | 0.0 | neutral; task 006 adds gain DSP |
-| `translation.jitterBufferMs` | 120 | engineering starting point for the latency target 0.7-1.5 s, **not a measurement** |
+| `translation.jitterBufferMs` | 250 | provisional engineering value derived from the live wire facts (protocol doc section 15: bursts up to 2x realtime, post-close drain ~4.7x; jitter headroom above pre-roll ≈ one pre-roll), replacing the 120 ms guess whose bursts overflowed. The rig sweep (`docs/rig-checklist.md` section 7) confirms it on a real device; still **not an end-to-end measurement** |
 | `ndi.enabled` | false | subtitles are opt-in (SPEC) |
 | `diagnostics.logLevel` | "info" | operator-safe default |
 

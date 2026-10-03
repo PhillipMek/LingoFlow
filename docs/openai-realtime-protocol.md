@@ -297,8 +297,12 @@ but stays aligned with "now") - the docs do not choose it for us.
    voice selection parameters" [R8]. ⚠️ **Conflict flag**: task 012's wording
    ("translation instructions") and `SessionRequest.instructions` cannot be honored by
    this endpoint. The 009 backend must not fake instruction support: accept the field,
-   ignore with a warning (and count/report it as not applied). Owner decision needed at
-   012; the field itself stays in the contract because other backends may support it.
+   ignore with a warning (and count/report it as not applied). **Resolved by the owner
+   2026-10-03 (task 012)**: the notice is a LOG warning only - no `TranslationError`
+   crosses the seam for it. The request itself is not refused, and `rejectedRequest` is
+   the supervisor's terminal category (section 10), so an ordinary every-start capability
+   fact must not appear as a failure in the operator's status. The field itself stays in
+   the contract because other backends may support it.
 2. **No glossaries or pronunciation guides**; the model "can sometimes substitute
    incorrect names or entities"; golden-set testing before launch is documented advice
    [R8]. Relevant to any "terminology" feature in SPEC.
