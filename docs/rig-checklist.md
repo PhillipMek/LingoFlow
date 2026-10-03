@@ -124,34 +124,43 @@ foreach ($j in 40,80,120,200,300) { .\lingoflow_asio_probe.exe --loopback "Waves
 двигать — по цифрам, не по ощущениям.
 Субъективно замерить «рот → слышно в мониторе» на 0 дБ gain — ориентир для бюджета 018.
 
-## 8. Приложение: конфигурация и старт
+## 8. Приложение: конфигурация, старт и живой перевод
 
 С 012 приложение монтирует настоящую цепочку: OpenAI-бэкенд за reconnect-supervisor, а
-`--smoke` остаётся офлайн (Null-бэкенд, сеть не трогает). Проверяем связку
-settings → реальное устройство → живой перевод:
+`--smoke` остаётся офлайн (Null-бэкенд, сеть не трогает). С 014 это ещё и операторский
+экран: запуск окна стартует так же, как smoke (неудачный старт аудио = выход с кодом 2,
+отрицательная проверка снизу не изменилась); старт/стоп/повтор — кнопками Start/Stop/Retry.
+`config.json` по-прежнему читается (путь через файл валиден), но на площадке удобнее UI.
+Проверяем связку UI → реальное устройство → живой перевод:
 
-1. В `%APPDATA%\LingoFlow\config.json` задать: `audio.inputDeviceId` и
-   `audio.outputDeviceId` = `Waves SoundGrid ASIO`, `audio.inputChannel`/`audio.outputChannel`
-   = найденные номера, `diagnostics.writeLogFile: true`.
-2. ```powershell
+1. ```powershell
    .\LingoFlow.exe --smoke
    ```
    Ожидание: **exit 0**; в `%APPDATA%\LingoFlow\logs\lingoflow.log`:
-   `opening the audio device selected in settings`, реальная частота/блок
-   (если запрошенного 480 нет — залогированный fallback; записать, что предложили),
-   `audio gains in effect`.
-3. Основной чек 012 (он и есть REQUIRED checkpoint этого задачника): GUI без `--smoke`,
-   подать живую речь на выбранный вход и держать 1–2 минуты. Ожидание:
-   - лог: `translation: OpenAI backend mounted behind the reconnect supervisor`,
-     `translation session: connected`, `session open: model=gpt-realtime-translate ...`,
-     `translation streaming started`;
-   - на выбранном выходе через ~секунд слышен перевод вместо/поверх речи (пока без NDI —
-     только аудио; текст придёт в 013);
-   - окно живёт, краха нет; закрыть окно — в логе `translation streaming stopped: N frames
-     submitted...` (N > 0) и `translation session: closed` (после реального дренажа).
-   Записать: время `connecting`→`connected`, когда перевод стал слышен относительно речи,
-   были ли провалы/артефакты. Если сеть площадки не пускает WebSocket — это тоже ответ
-   чина (в логе будет `translation session: reconnecting` и категории ошибок).
+   `opening the audio device selected in settings` (если устройство уже в профиле),
+   реальная частота/блок (если запрошенного 480 нет — залогированный fallback; записать,
+   что предложили), `audio gains in effect`. Smoke не трогает сеть — это чистая проверка
+   аудио-пути и настроек.
+2. Если устройство ещё не в профиле: `config.json` (inputDeviceId/outputDeviceId =
+   `Waves SoundGrid ASIO`, каналы из шагов 2-4) **или** следующий шаг — выбор прямо в UI.
+3. Основной чек 012 (он и есть REQUIRED checkpoint этого задачника): открыть окно без
+   `--smoke`. Если в профиле устройства нет, приложение поднимется на Null (чип
+   `audio: running (Null)`, warning в логе) — тогда в UI: Refresh devices → выбрать
+   `Waves SoundGrid ASIO`, каналы ввода/вывода, пару языков (EN→RU или RU→EN) → **Stop**
+   → **Start** (эти поля применяются со старта, note под счётчиками говорит то же).
+   Подать живую речь, держать 1–2 минуты. Ожидание на экране:
+   - чип `translation: connected` (загорится зелёным), `audio: running (Waves SoundGrid ASIO)`;
+   - meter INPUT двигается от речи, meter OUTPUT — через ~секунд показывает перевод;
+   - панель SUBTITLES печатает живые подписи (task 013): открытая строка + хвост истории;
+   - счётчики `capture submitted` и `translated audio frames` растут; `underruns` читаем
+     (всплески на старте нормальны, непрерывный рост — плохой знак).
+   Записать: время `connecting`→`connected` видно по чипу; когда перевод стал слышен
+   относительно речи; были ли провалы/артефакты; как вёл себя settle подписей (в логе при
+   `diagnostics.logLevel: debug` — линии `subtitle line settled`). Если сеть площадки не
+   пускает WebSocket — это ответ чек-листа: чип уйдёт в `reconnecting` (жёлтый) с
+   категориями ошибок в detail, аудио продолжит играть считанную тишину.
+4. Закрыть окно → в логе `translation streaming stopped: N frames submitted, M frames
+   gap-refused` (N > 0) и `translation session: closed` (после реального дренажа).
 
 Отрицательная проверка на месте: выбрать в settings несуществующее ASIO-устройство →
 приложение должно отказать по имени и выйти с кодом 2, не подменив устройство молча.

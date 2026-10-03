@@ -327,8 +327,28 @@ opens a fresh session whose first submit behaves like a first submit again.
 
 ## Status path to the UI
 
-The UI reads exactly one type, `AppStatus`, produced by
-`ApplicationController::status()`, and formats nothing but the header line
-(`describeStatus()` lives in the App module). New subsystem state reaches the
-operator only by extending `AppStatus` - there is no path from a backend to the
-UI.
+The UI reads controller public API and nothing else. Since task 002 the rule has been
+"one object, one status type"; tasks 013/014 made that the whole shape of the screen:
+
+```text
+subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, engine
+             readouts, textPipeline) -> buildOperatorPanel() [App/UiModel, portable]
+             -> OperatorWindow [JUCE shell]
+```
+
+* `AppStatus` (and `describeStatus()` for the one-line smoke view) is unchanged: raw
+  state enums as words. The panel formats them; the window paints the panel.
+* `UiModel` is the tested half: selector lists come from the modules that own the data
+  (`LanguageRegistry` languages, `ConfigSchema` ranges and rates, the device-lister cache
+  on the controller), never from UI-side constants - the same single-source rule that
+  made the language list one list (task 011), now for every dropdown on the screen.
+* The window owns no logic: each control is one controller call (`updateSettings`,
+  the live knob forwards, `start`/`stop`/`clearFault`/`refreshDevices`). The only
+  persistence path is `updateSettings` - validate, then apply live, then save, and the
+  returned note says what waits for a Stop/Start. A refused candidate changes nothing.
+* The 100 ms timer is a repaint clock over atomics: reads cannot block, so the UI
+  freezing is limited to JUCE itself, and the FAIL criterion "UI owns backend/audio
+  logic" is kept out by design rather than by the include audit (App may legitimately
+  read all modules): the window contains no decision the tests do not cover - every
+  value it paints and every branch it shows is `UiModel` output, asserted headless
+  against the real controller.

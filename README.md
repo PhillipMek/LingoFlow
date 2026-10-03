@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011 and 013 complete; 012 implemented** - 012's REQUIRED human
+Status: **tasks 000-011, 013 and 014 complete; 012 implemented** - 012's REQUIRED human
 checkpoint (real EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) is open, run
 sheet `docs/rig-checklist.md`. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
@@ -21,8 +21,8 @@ and device lifecycle on top of JUCE, a reconnect/session-recovery supervisor, th
 single language registry with its versioned OpenAI capability manifest, the mounted
 translation pipeline (task 012: capture worker + supervisor + real backend in the
 composition root), the typed text pipeline (task 013: snapshot events, bounded history,
-UI-facing model),
-and 238 tests.
+UI-facing model), the operator window (task 014: a JUCE shell over the tested UiModel),
+and 247 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -90,13 +90,15 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-238 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+247 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
 suite that pins the frozen capability manifest and the pair-check rules, the task 012
-capture-streaming suite that runs the worker against a recording backend, and the task 013
-text-pipeline suite - snapshot/eviction/duplicate rules and a two-writer race case), the
+capture-streaming suite that runs the worker against a recording backend, the task 013
+text-pipeline suite - snapshot/eviction/duplicate rules and a two-writer race case -
+and the task 014 UiModel suite that runs the whole operator screen headless through the
+real controller), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -126,6 +128,18 @@ $exe = "$dbg\src\LingoFlow_artefacts\Debug\LingoFlow.exe"
 `--smoke` starts the application lifecycle, stops it and exits without creating
 a window. It is a startup/logging check only — it does not verify audio,
 translation quality or the operator-visible UI.
+
+The windowed run opens the operator screen (task 014): state chips with a plain-words
+detail line, Start/Stop (Retry after a fault the operator has corrected), the device
+selector fed by the ASIO registry scan, input/output language selectors from the single
+capability registry (an unsupported pair warns before the session is even attempted),
+sample-rate/buffer/channel selectors from the config schema's own ranges, live input and
+output faders with mute and clip lamps over the engine's meters, the jitter pre-roll
+slider, a counted-underruns/throughput diagnostics grid, a bounded subtitle panel reading
+the task 013 model, and the outcome note of every settings action. The window contains no
+audio, device or protocol logic: it paints `UiModel` values and calls controller methods,
+and `UiModel` is tested headless against the real controller (which is how the PASS
+criteria are verified without a human).
 
 The application writes a log file to
 `%APPDATA%\LingoFlow\logs\lingoflow.log` (JUCE's
@@ -457,12 +471,42 @@ ever reaches them (SPEC "Text"):
 * task 014's UI reads exactly one type here: `TextPipeline::snapshot()` - the open line,
   the bounded history and the counters that say what was ignored and why.
 
+## The operator UI (task 014)
+
+The window is thin by construction - three parts, each in the place that owns it:
+
+* `src/App/UiModel.{h,cpp}` (portable core): `buildOperatorPanel(controller, note)` turns
+  the controller's public reads into everything the screen shows - state words, selector
+  lists (registry languages, schema rates and ranges, cached device scan), meter views,
+  counter rows, the subtitle model, and a latency line that names itself as buffer
+  arithmetic with translation explicitly NOT included. Tested headless (9 cases) against
+  the real controller, including the refused device, refused pair, clamped gain and the
+  "configured device not in the scan stays visible, labelled" honesty rule.
+* `src/App/OperatorWindow.{h,cpp}` (JUCE app target): widgets, layout and a 100 ms repaint
+  timer over that panel. It owns no logic: every control either calls one controller
+  method (`updateSettings`, `setGainsLive`, `clearFault`, `refreshDevices`, `start`,
+  `stop`...) or paints a panel value. Programmatic refresh is guarded so a tick can never
+  echo back as an operator action, sliders commit at the end of a drag (no disk writes
+  mid-glide), and ComboBoxes are rebuilt only when the list actually changed.
+* controller seams added for the UI, all of them orchestrations of existing subsystems:
+  the device-lister seam (the same pattern as the backend factory - platform knowledge
+  arrives as a function, the core caches only its result), `clearFault` (retry is the
+  operator's decision, the log keeps the original failure), live knob forwards, and
+  `updateSettings` as the single funnel: validate → apply what applies live → persist,
+  with the note naming what needs a Stop/Start.
+
+The PASS criterion "UI does not do network/audio work" holds by construction: the window
+contains no decisions - every value it paints and every branch it shows is `UiModel`
+output, asserted headless against the real controller, and each control is one controller
+method. "Freezes" is guarded by the same rule the meters were designed for: reads are
+atomics and snapshots, and the poll cannot block on anything.
+
 ## Layout
 
 ```text
 CMakeLists.txt          root project, JUCE discovery
 src/CMakeLists.txt      lingoflow_core + LingoFlow targets
-src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), JUCE entry point
+src/App/                ApplicationController (composition root), TranslationStreamer (capture worker), UiModel (headless-tested operator model), OperatorWindow (JUCE shell), JUCE entry point
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), TextPipeline (013 typed events + bounded history), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
