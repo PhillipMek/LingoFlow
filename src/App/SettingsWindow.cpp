@@ -100,7 +100,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     slider(sessionAgeSlider_, ageMin, ageMax, 60, *this);
 
     // --------------------------------------------------------------------- NDI
-    caption(ndiCaption_, "NDI - the transport arrives in task 016; this only saves the settings",
+    caption(ndiCaption_, "NDI - timed text (TTML) metadata; receiver check is the venue run-sheet",
             *this);
     ndiToggle_.setClickingTogglesState(true);
     addAndMakeVisible(ndiToggle_);

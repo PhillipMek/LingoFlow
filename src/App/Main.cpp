@@ -64,6 +64,13 @@
 #include "Translation/ReconnectSupervisor.h"
 #endif
 
+#ifdef LINGOFLOW_WITH_NDI
+// Task 016: the production subtitle transport. App may include NDI (the module
+// boundary forbids SDK types only inside the INdiOutput contract, and this
+// header keeps them on its .cpp side).
+#include "NDI/Real/NdiTimedTextOutput.h"
+#endif
+
 namespace {
 
 constexpr std::string_view kLogComponent = "app";
@@ -247,6 +254,15 @@ public:
             installProductionTranslation();
 #endif
 
+#ifdef LINGOFLOW_WITH_NDI
+        if (smoke)
+            liveai::log::info(kLogComponent,
+                              "smoke mode: the NDI output stays Null - a startup check must not touch "
+                              "the LAN discovery stack either");
+        else
+            installProductionNdi();
+#endif
+
         if (!controller_.start())
         {
             liveai::log::error(kLogComponent, "application failed to start: " + controller_.status().detail);
@@ -350,6 +366,21 @@ private:
     std::unique_ptr<liveai::security::WindowsCredentialStore> windowsStore_;
     std::unique_ptr<EnvironmentSecretStore> devStore_;
     std::unique_ptr<liveai::security::ISecretStore> secretStore_;
+#endif
+
+#ifdef LINGOFLOW_WITH_NDI
+    /// Mounts the production subtitle transport (task 016, SPEC 38 Mode A):
+    /// caption snapshots as TTML1 metadata over NDI, through the runtime the
+    /// machine provides - loaded dynamically per docs/licensing.md, the SDK's
+    /// import library never linked. When the runtime is absent the controller's
+    /// honest NDI-failure path takes over: the log and the operator chip say
+    /// what is wrong, and audio and translation keep running (AGENTS.md 12).
+    void installProductionNdi()
+    {
+        controller_.setNdiOutput(std::make_unique<liveai::ndi::real::NdiTimedTextOutput>());
+        liveai::log::info(kLogComponent,
+                          "NDI: timed-text output mounted (runtime-loaded, never linked)");
+    }
 #endif
 
     liveai::ApplicationController controller_;

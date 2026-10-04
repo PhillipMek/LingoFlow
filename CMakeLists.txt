@@ -78,6 +78,17 @@ endif()
 # ---------------------------------------------------------------------------
 # Project
 # ---------------------------------------------------------------------------
+
+# NDI SDK headers (task 016) are resolved once here so both src/ (targets) and
+# tests/ (the live-output test) see the same path. License rule reminder: these
+# headers are for COMPILING only; the import library is never linked
+# (docs/licensing.md) - the runtime DLL is loaded at run time.
+set(LINGOFLOW_NDI_SDK_INCLUDE "" CACHE PATH "NDI SDK Include directory (default: %NDI_SDK_DIR%/Include)")
+
+if(LINGOFLOW_NDI_SDK_INCLUDE STREQUAL "" AND DEFINED ENV{NDI_SDK_DIR})
+    set(LINGOFLOW_NDI_SDK_INCLUDE "$ENV{NDI_SDK_DIR}/Include")
+endif()
+
 add_subdirectory(src)
 
 if(LIVEAI_BUILD_TESTS)

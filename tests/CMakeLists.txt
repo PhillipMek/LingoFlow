@@ -41,6 +41,7 @@ add_executable(lingoflow_tests
     unit/TestLanguageRegistry.cpp
     unit/TestReconnectSupervisor.cpp
     unit/TestApplicationController.cpp
+    unit/TestNdiOutput.cpp
     unit/TestSecretStores.cpp
     unit/TestTextPipeline.cpp
     unit/TestTranslationStreamer.cpp
@@ -70,6 +71,16 @@ target_link_libraries(lingoflow_tests
 
 if(WIN32)
     target_link_libraries(lingoflow_tests PRIVATE lingoflow_network)
+endif()
+
+# Task 016: the real NDI output is tested against whatever runtime the build
+# machine provides - the same dynamic-load path the product takes. With no NDI
+# runtime installed the test asserts the clear "unavailable" answer instead of
+# quietly skipping: a missing check is a known state, not a hidden one.
+if(TARGET lingoflow_ndi_real)
+    target_link_libraries(lingoflow_tests PRIVATE lingoflow_ndi_real)
+    target_compile_definitions(lingoflow_tests PRIVATE LINGOFLOW_TESTS_WITH_NDI=1)
+    target_include_directories(lingoflow_tests PRIVATE "${LINGOFLOW_NDI_SDK_INCLUDE}")
 endif()
 
 if(MSVC)

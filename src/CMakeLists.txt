@@ -69,6 +69,8 @@ add_library(lingoflow_core STATIC
 
     NDI/INdiOutput.cpp
     NDI/INdiOutput.h
+    NDI/NdiTimedText.cpp
+    NDI/NdiTimedText.h
     NDI/Null/NullNdiOutput.cpp
     NDI/Null/NullNdiOutput.h
 
@@ -188,6 +190,57 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# lingoflow_ndi_real - the production NDI output (task 016) and its probe tool.
+#
+# License rule (docs/licensing.md, owner decision): the SDK import library
+# Processing.NDI.Lib.x64.lib is NEVER linked. We compile against the SDK's
+# headers and load the runtime DLL at run time through the SDK's own
+# dynamic-load entry point (NDIlib_v6_load), exactly like the SDK's
+# NDIlib_DynamicLoad example. No consumer of lingoflow_ndi_real needs the SDK
+# include path: the public headers keep SDK types out (checked by the boundary
+# audit, which also sees no NDI type cross the INdiOutput interface).
+#
+# Without the SDK headers on the build machine everything still builds, the
+# application keeps the Null NDI output, and the operator chip says "disabled"
+# - the same graceful degradation as the OpenAI backend.
+# ---------------------------------------------------------------------------
+# LINGOFLOW_NDI_SDK_INCLUDE is resolved in the root CMakeLists (shared with
+# tests/); without it, or without the headers, everything still builds with the
+# Null NDI output.
+if(WIN32 AND EXISTS "${LINGOFLOW_NDI_SDK_INCLUDE}/Processing.NDI.Lib.h")
+    add_library(lingoflow_ndi_real STATIC
+        NDI/Real/NdiRuntime.cpp
+        NDI/Real/NdiRuntime.h
+        NDI/Real/NdiTimedTextOutput.cpp
+        NDI/Real/NdiTimedTextOutput.h)
+
+    target_include_directories(lingoflow_ndi_real PRIVATE "${LINGOFLOW_NDI_SDK_INCLUDE}")
+    target_link_libraries(lingoflow_ndi_real PUBLIC lingoflow::core)
+
+    if(MSVC)
+        target_compile_options(lingoflow_ndi_real PRIVATE /W4 /utf-8 /MP8)
+    endif()
+
+    set_target_properties(lingoflow_ndi_real PROPERTIES FOLDER "Core")
+
+    add_executable(lingoflow_ndi_probe NDI/Real/NdiProbeMain.cpp)
+    target_include_directories(lingoflow_ndi_probe PRIVATE "${LINGOFLOW_NDI_SDK_INCLUDE}")
+    target_link_libraries(lingoflow_ndi_probe PRIVATE lingoflow_ndi_real)
+
+    if(MSVC)
+        target_compile_options(lingoflow_ndi_probe PRIVATE /W4 /utf-8 /MP8)
+    endif()
+
+    set_target_properties(lingoflow_ndi_probe PROPERTIES FOLDER "Tools")
+
+    set(LINGOFLOW_WITH_NDI ON)
+    message(STATUS "LingoFlow: NDI output ENABLED (headers ${LINGOFLOW_NDI_SDK_INCLUDE}; runtime loaded at run time, never linked)")
+else()
+    set(LINGOFLOW_WITH_NDI OFF)
+    message(STATUS "LingoFlow: NDI output stays Null (no SDK headers at '${LINGOFLOW_NDI_SDK_INCLUDE}')")
+endif()
+
+# ---------------------------------------------------------------------------
 # Operator application (JUCE GUI shell only at this stage)
 # ---------------------------------------------------------------------------
 juce_add_gui_app(LingoFlow
@@ -236,6 +289,12 @@ endif()
 if(WIN32)
     target_link_libraries(LingoFlow PRIVATE lingoflow_network advapi32)
     target_compile_definitions(LingoFlow PRIVATE LINGOFLOW_WITH_OPENAI_BACKEND=1)
+endif()
+
+# Task 016: mount the real NDI output when (and only when) it was built above.
+if(LINGOFLOW_WITH_NDI)
+    target_link_libraries(LingoFlow PRIVATE lingoflow_ndi_real)
+    target_compile_definitions(LingoFlow PRIVATE LINGOFLOW_WITH_NDI=1)
 endif()
 
 set_target_properties(LingoFlow PROPERTIES FOLDER "App")
