@@ -174,6 +174,14 @@ public:
     // -------------------------------------------------------------------- access
     AudioEngine& engine() noexcept { return engine_; }
     const AudioEngine& engine() const noexcept { return engine_; }
+
+    /// The device side as the read-only contract, for task 018's accounting only
+    /// (driver-reported latencies live in capabilities()). Null before any
+    /// backend exists - the accounting handles the null honestly. This is a
+    /// display read, never an operation: the UI may not open, start or stop
+    /// anything through it.
+    const audio::IAudioBackend* audioBackend() const noexcept { return audioBackend_.get(); }
+
     ConfigManager& config() noexcept { return config_; }
     const ConfigManager& config() const noexcept { return config_; }
     DiagnosticsManager& diagnostics() noexcept { return diagnostics_; }

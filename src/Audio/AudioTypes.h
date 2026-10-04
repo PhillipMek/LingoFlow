@@ -42,6 +42,15 @@ struct DeviceCapabilities
     int preferredBufferFrames = 480;
     int inputChannels = 1;
     int outputChannels = 1;
+
+    /// What the driver itself reports as its input/output latency, in samples
+    /// (task 018's accounting). 0 means "no usable answer": the backend did not
+    /// ask, or the driver's query answered zero - ASIO's zero conflates "no
+    /// latency" with "I do not report", and the accounting labels it "not
+    /// reported" rather than choosing a story. Only a positive value is taken
+    /// as a reported fact (JuceAsioBackend copies getInputLatencyInSamples()).
+    int inputLatencySamples = 0;
+    int outputLatencySamples = 0;
 };
 
 /// Mono block handed to the engine from the backend callback. Pointers are only

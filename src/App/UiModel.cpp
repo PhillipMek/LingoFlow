@@ -193,6 +193,10 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
 
     const auto diag = controller.diagnostics().snapshot();
 
+    // The 018 accounting rides the same panel as everything else - the screen and
+    // the export render one function's rows, so they cannot tell two stories.
+    panel.latencyRows = latencyAccounting(engine, controller.audioBackend(), diag, cfg);
+
     panel.counters = {
         { "audio blocks", formatCount(diag.audioBlocks) },
         { "underruns", formatCount(diag.underruns) },
@@ -274,6 +278,167 @@ LatencyEstimate estimateBufferDelay(const AudioEngine& engine, const AppConfig& 
     }
 
     return estimate;
+}
+
+std::vector<LatencyRow> latencyAccounting(const AudioEngine& engine,
+                                          const audio::IAudioBackend* backend,
+                                          const DiagnosticsManager::Snapshot& diag,
+                                          const AppConfig& settings)
+{
+    std::vector<LatencyRow> rows;
+
+    const int rate = engine.sampleRate() > 0 ? engine.sampleRate() : settings.audio.sampleRate;
+    const LatencyEstimate buffers = estimateBufferDelay(engine, settings);
+
+    const auto msOf = [rate](std::uint64_t frames)
+    { return rate > 0 ? static_cast<double>(frames) * 1000.0 / rate : 0.0; };
+
+    // 1) What the driver itself says, both directions. A device that answered
+    // nothing (or with the ASIO query's inherent "0 = unknown") is stated as not
+    // measured - it contributes 0.0 to the total below and says so in its row.
+    const audio::DeviceCapabilities caps =
+        backend != nullptr ? backend->capabilities() : audio::DeviceCapabilities{};
+
+    double driverInMs = 0.0;
+    double driverOutMs = 0.0;
+
+    if (backend == nullptr)
+    {
+        rows.push_back({ "asio input latency", "no device open - nothing reported", "not measured" });
+        rows.push_back({ "asio output latency", "no device open - nothing reported", "not measured" });
+    }
+    else if (caps.inputLatencySamples > 0 || caps.outputLatencySamples > 0)
+    {
+        if (rate > 0 && caps.inputLatencySamples > 0)
+        {
+            driverInMs = msOf(static_cast<std::uint64_t>(caps.inputLatencySamples));
+            rows.push_back({ "asio input latency",
+                             std::format("{:.1f} ms ({} frames, reported by the driver)",
+                                         driverInMs, caps.inputLatencySamples),
+                             "driver-reported" });
+        }
+        else if (caps.inputLatencySamples > 0)
+        {
+            rows.push_back({ "asio input latency",
+                             std::to_string(caps.inputLatencySamples) + " frames (no sample rate yet)",
+                             "driver-reported" });
+        }
+        else
+        {
+            rows.push_back({ "asio input latency", "not reported by this driver", "not measured" });
+        }
+
+        if (rate > 0 && caps.outputLatencySamples > 0)
+        {
+            driverOutMs = msOf(static_cast<std::uint64_t>(caps.outputLatencySamples));
+            rows.push_back({ "asio output latency",
+                             std::format("{:.1f} ms ({} frames, reported by the driver)",
+                                         driverOutMs, caps.outputLatencySamples),
+                             "driver-reported" });
+        }
+        else if (caps.outputLatencySamples > 0)
+        {
+            rows.push_back({ "asio output latency",
+                             std::to_string(caps.outputLatencySamples) + " frames (no sample rate yet)",
+                             "driver-reported" });
+        }
+        else
+        {
+            rows.push_back({ "asio output latency", "not reported by this driver", "not measured" });
+        }
+    }
+    else
+    {
+        rows.push_back({ "asio input latency", "not reported by this driver", "not measured" });
+        rows.push_back({ "asio output latency", "not reported by this driver", "not measured" });
+    }
+
+    // 2) The block arithmetic (the callback's granularity, in both directions).
+    const std::string blockKind = buffers.fromEngine ? "arithmetic (live geometry)"
+                                                     : "arithmetic (settings, not running)";
+    if (buffers.blockMs > 0)
+    {
+        rows.push_back({ "capture block in", std::to_string(buffers.blockMs) + " ms", blockKind });
+    }
+    else
+    {
+        rows.push_back({ "capture block in", "no geometry yet", "not measured" });
+    }
+
+    // 3) Network + model, ONE combined row: the audio the translator has not
+    // returned. gap-refused frames never entered the wire (012 counts them
+    // separately, not here); everything that came back - accepted, rejected or
+    // dropped - has left the path. This is a computed backlog, not a split of
+    // wire time from server time: that split would need a provider-side
+    // timestamp this API does not offer, and inventing one is AGENTS.md 19.
+    const std::uint64_t returned = diag.translatedAudioFrames + diag.rejectedAudioFrames
+                                   + diag.translatedAudioDroppedFrames;
+
+    double inFlightMs = 0.0;
+
+    if (diag.translationSubmittedFrames == 0 && returned == 0)
+    {
+        rows.push_back({ "network + model (audio in flight)", "nothing submitted yet", "not measured" });
+    }
+    else if (rate <= 0)
+    {
+        rows.push_back({ "network + model (audio in flight)", "no sample rate yet", "not measured" });
+    }
+    else
+    {
+        const auto signedInFlight = static_cast<long long>(diag.translationSubmittedFrames)
+                                    - static_cast<long long>(returned);
+        const long long inFlight = signedInFlight > 0 ? signedInFlight : 0;
+        inFlightMs = msOf(static_cast<std::uint64_t>(inFlight));
+
+        rows.push_back({ "network + model (audio in flight)",
+                         std::format("{:.1f} ms ({} frames waiting to come back)", inFlightMs, inFlight),
+                         "live-computed; network and model are NOT separated (no provider-side "
+                         "timestamp exists); clamped at 0 across threads" });
+    }
+
+    // 4) The output queue, live and configured.
+    const std::uint64_t fill = engine.jitterFillFrames();
+
+    if (rate > 0 && fill > 0)
+    {
+        rows.push_back({ "jitter queue (live fill)",
+                         std::format("{:.1f} ms ({} frames)", msOf(fill), fill),
+                         "live-computed (atomic)" });
+    }
+    else
+    {
+        rows.push_back({ "jitter queue (live fill)", "empty", "live-computed (atomic)" });
+    }
+
+    rows.push_back({ "jitter pre-roll target", std::to_string(engine.jitterBufferMs()) + " ms",
+                     "configuration" });
+
+    if (buffers.blockMs > 0)
+    {
+        rows.push_back({ "playback block out", std::to_string(buffers.blockMs) + " ms", blockKind });
+    }
+    else
+    {
+        rows.push_back({ "playback block out", "no geometry yet", "not measured" });
+    }
+
+    // 5) The total of exactly the labeled rows. Driver latencies contribute when
+    // reported and contribute 0.0 when not - visibly in this sentence, never as
+    // an invisible zero. The jitter TARGET (not the live fill) is what the
+    // audience waits on during steady playback. Mouth-to-ear stays the venue's
+    // blank in docs/latency-budget.md; this sum is an accounting, not a
+    // measurement, and its kind says so.
+    const double totalMs = driverInMs + static_cast<double>(buffers.blockMs) + inFlightMs
+                           + engine.jitterBufferMs() + static_cast<double>(buffers.blockMs)
+                           + driverOutMs;
+
+    rows.push_back({ "estimated total (labeled rows)",
+                     std::format("{:.1f} ms", totalMs),
+                     "sum of the rows above; unreported driver latencies count as 0.0; NOT "
+                     "mouth-to-ear (see docs/latency-budget.md)" });
+
+    return rows;
 }
 
 } // namespace liveai

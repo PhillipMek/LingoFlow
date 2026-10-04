@@ -617,8 +617,12 @@ void OperatorContent::rebuild()
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);
 
-    latencyLabel_.setText(juce::String(panel.latencySummary),
-                          juce::NotificationType::dontSendNotification);
+    // The headline summary plus the full accounting lines beneath it (018): every
+    // component with its value AND its kind, so no line can read as a promise.
+    std::string latencyText = panel.latencySummary;
+    for (const auto& row : panel.latencyRows)
+        latencyText += std::format("\n  {} = {} [{}]", row.component, row.value, row.kind);
+    latencyLabel_.setText(juce::String(latencyText), juce::NotificationType::dontSendNotification);
 
     std::string counters;
     for (const auto& [label, value] : panel.counters)
@@ -725,7 +729,7 @@ void OperatorContent::resized()
 
     jitterCaption_.setBounds(middle.removeFromTop(16));
     jitterSlider_.setBounds(middle.removeFromTop(30));
-    latencyLabel_.setBounds(middle.removeFromTop(40));
+    latencyLabel_.setBounds(middle.removeFromTop(130));
 
     // --- readout column
     countersLabel_.setBounds(right.removeFromTop(360));

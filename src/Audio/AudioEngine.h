@@ -89,9 +89,10 @@ public:
     /// used by the UI line and the diagnostics export alike): one input block +
     /// one output block + the jitter pre-roll, in ms, from exactly the numbers
     /// the running pipeline reports (zeros before activation). This is NOT a
-    /// latency measurement and says nothing about the translation - end-to-end
-    /// (mouth-to-ear) latency is task 018's measurement job, and every user of
-    /// these numbers must carry that sentence with it (AGENTS.md 19).
+    /// latency measurement and says nothing about the translation - the honest
+    /// component model and the mouth-to-ear blanks live in task 018's
+    /// docs/latency-budget.md, and every user of these numbers must carry that
+    /// sentence with it (AGENTS.md 19).
     int bufferBlockMs() const noexcept;
     int pipelineBufferDelayMs() const noexcept;
 

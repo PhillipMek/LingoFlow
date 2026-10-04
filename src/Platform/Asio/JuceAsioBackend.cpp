@@ -210,6 +210,14 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
     inputLatency_ = device_->getInputLatencyInSamples();
     outputLatency_ = device_->getOutputLatencyInSamples();
 
+    // Task 018: the driver's own latency figures travel through the contract, not
+    // only through the log line. Note what 0 cannot mean: ASIO's query answers
+    // 0 both for "this driver has no latency" and "I do not report latency", and
+    // no API here distinguishes them - so the accounting labels a zero "not
+    // reported" and never claims silence as speed.
+    capabilities_.inputLatencySamples = inputLatency_;
+    capabilities_.outputLatencySamples = outputLatency_;
+
     // Callback is a private nested type, so it is constructed here rather than
     // through std::make_unique outside the class.
     callback_.reset(new Callback(*processor_, callbackBlocks_));

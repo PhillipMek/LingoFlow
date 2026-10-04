@@ -247,6 +247,11 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     CHECK(report.find("sample_rate=48000") != std::string::npos);
     CHECK(report.find("pipeline_buffer_delay_ms=") != std::string::npos);
     CHECK(report.find("measured in task 018") != std::string::npos);   // honesty kept in the file
+    // The 018 accounting: rows with kinds, the in-flight disclaimer, the limitation line.
+    CHECK(report.find("[latency]") != std::string::npos);
+    CHECK(report.find("estimated_total_(labeled_rows)=") != std::string::npos);
+    CHECK(report.find("NOT mouth-to-ear") != std::string::npos);
+    CHECK(report.find("limitations=network and model are one combined") != std::string::npos);
     CHECK(report.find("key_present=yes") != std::string::npos);
     CHECK(report.find("Test Credential Store") != std::string::npos);
     CHECK(report.find("session: connected") != std::string::npos);     // the ring is in

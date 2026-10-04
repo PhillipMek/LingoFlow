@@ -41,6 +41,21 @@ struct UiMeterView
     bool clipping = false;       ///< the engine's latched clip indicator, consumed by this build
 };
 
+/// One component row of the task 018 honest latency accounting (full contract at
+/// `latencyAccounting` below the panel). The KIND is the point: a number's origin
+/// (what the driver answered, what the config says, what the arithmetic derives,
+/// what the live backlog computes, or nothing at all) is printed beside it and
+/// can never be inferred away.
+struct LatencyRow
+{
+    std::string component;   ///< "capture block in", "audio in the translator path", ...
+    std::string value;       ///< formatted with its evidence, or the honest absence
+    std::string kind;        ///< "driver-reported" | "configuration" | "arithmetic"
+                             ///< | "live-computed" | "not measured"
+
+    friend constexpr bool operator==(const LatencyRow&, const LatencyRow&) = default;
+};
+
 struct OperatorPanel
 {
     // ------------------------------------------------------------- status
@@ -93,6 +108,7 @@ struct OperatorPanel
 
     // ----------------------------------------------------------- readouts
     std::string latencySummary;
+    std::vector<LatencyRow> latencyRows;   ///< the full 018 accounting, input -> audience
     std::vector<std::pair<std::string, std::string>> counters;
 
     std::string currentSubtitle;               ///< the open line from task 013
@@ -130,6 +146,27 @@ struct LatencyEstimate
 /// Computes the estimate above. Non-realtime (reads atomics and config strings;
 /// safe from the UI thread, pointless from anywhere else).
 LatencyEstimate estimateBufferDelay(const AudioEngine& engine, const AppConfig& settings);
+
+/// The whole accounting, in show order (input to audience), per task 018's
+/// instruction: ASIO, network/server (one column honestly combined - this
+/// product cannot split them without a provider-side timestamp, which would be
+/// an invented field), output queue/jitter, and a total that adds up exactly the
+/// labeled numbers and names what it excludes.
+///
+/// No number here is fabricated: driver latencies pass through as reported (or
+/// "not reported by this driver"), buffers and pre-roll are configuration or
+/// live atoms, the translator-path row is a COMPUTED backlog (submitted minus
+/// everything that came back or was refused - the frames still in flight, at the
+/// device rate). A nonzero backlog is the only defensible statement the sender
+/// side can make about network+model time without a measurement rig; it is
+/// labeled so and never summed into anything called measured. Mouth-to-ear
+/// remains the venue's blank in docs/latency-budget.md.
+///
+/// `backend` may be null (no device story yet). Pure reads, non-realtime.
+std::vector<LatencyRow> latencyAccounting(const AudioEngine& engine,
+                                          const audio::IAudioBackend* backend,
+                                          const DiagnosticsManager::Snapshot& diag,
+                                          const AppConfig& settings);
 
 /// Builds the panel from public reads. Non-realtime by construction (called on
 /// the GUI thread); it allocates strings, which is exactly what a UI thread may

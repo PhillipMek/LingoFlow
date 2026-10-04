@@ -40,6 +40,7 @@ add_executable(lingoflow_tests
     unit/TestNullBackends.cpp
     unit/TestTranslationContract.cpp
     unit/TestLanguageRegistry.cpp
+    unit/TestLatencyAccounting.cpp
     unit/TestReconnectSupervisor.cpp
     unit/TestApplicationController.cpp
     unit/TestNdiOutput.cpp

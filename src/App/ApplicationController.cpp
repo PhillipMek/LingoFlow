@@ -393,6 +393,22 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                            "measured in task 018 - this number is not a measurement");
     sections.push_back({ "audio", std::move(audioRows) });
 
+    // [latency]: the 018 accounting, row by row, with its kinds and limitations -
+    // the same function the screen draws, so the file and the UI cannot disagree.
+    std::vector<std::pair<std::string, std::string>> latencyRows;
+    for (const auto& row : latencyAccounting(engine, audioBackend_.get(), diag, cfg))
+    {
+        std::string key = row.component;
+        std::replace(key.begin(), key.end(), ' ', '_');
+        latencyRows.emplace_back(std::move(key), row.value + " | kind: " + row.kind);
+    }
+    latencyRows.emplace_back("limitations",
+                             "network and model are one combined live-computed backlog (no "
+                             "provider-side timestamp to split them); unreported driver latencies "
+                             "count as 0.0 in the total; the total is an accounting sum, NOT a "
+                             "mouth-to-ear measurement - see docs/latency-budget.md");
+    sections.push_back({ "latency", std::move(latencyRows) });
+
     std::vector<std::pair<std::string, std::string>> translationRows;
     translationRows.emplace_back("languages", cfg.translation.inputLanguage + "->"
                                              + cfg.translation.outputLanguage);
