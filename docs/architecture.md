@@ -33,7 +33,8 @@ anything not listed is forbidden and is rejected by
 Utils          -> (nothing)                       logging, no JUCE
 Config         -> Utils                           settings: schema, validation, atomic file I/O
 Security       -> Utils                           credential store boundary, no config access
-Diagnostics    -> Utils                           atomic counters + snapshot
+Diagnostics    -> Utils                           atomic counters + snapshot + bounded event
+                                                   ring (017) + key=value export renderer/writer
 Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, gain stages,
                                                   meters, loopback, IAudioBackend,
                                                   ASIO model/policy, Null backend
@@ -373,3 +374,11 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   read all modules): the window contains no decision the tests do not cover - every
   value it paints and every branch it shows is `UiModel` output, asserted headless
   against the real controller.
+* Task 017 extends the same one-funnel idea downward into diagnostics: the audio
+  callback's only voice remains the relaxed-atomic counters, transitions are
+  *narrated* into the bounded event ring from worker/UI threads (`noteEvent`, and
+  `noteError` as a single write site for both last-error and ring), and the export
+  is one controller call that gathers public reads, renders them with Config's own
+  secret-shape predicate injected (Diagnostics must not include Config), and writes
+  atomically. No `src/Audio` path calls the ring at all - the narration can never
+  become a callback dependency.

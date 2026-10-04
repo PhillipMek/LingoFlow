@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011, 013 and 014 complete; 012, 015 and 016 implemented** - their
+Status: **tasks 000-011, 013-015 and 017 complete; 012 and 016 implemented** - their
 open REQUIRED human checkpoints (012 live EN<->RU through ASIO+OpenAI; 015 key entry on
 the target machine; 016 real NDI receiver on the venue network) are run from
 `docs/rig-checklist.md`. The repository contains a JUCE/CMake
@@ -24,7 +24,8 @@ translation pipeline (task 012: capture worker + supervisor + real backend in th
 composition root), the typed text pipeline (task 013: snapshot events, bounded history,
 UI-facing model), the operator window (task 014: a JUCE shell over the tested UiModel),
 the Settings dialog with Windows-secure API-key storage (task 015), the real NDI
-timed-text subtitle output behind the contract (task 016), and 262 tests.
+timed-text subtitle output behind the contract (task 016), the bounded event ring and
+the structured diagnostics export (task 017), and 270 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -92,7 +93,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-262 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+270 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -105,7 +106,10 @@ Windows Credential Manager round-trip including a child-process case proving the
 is not process memory, and the controller funnel that keeps the secret out of settings,
 notes and logs; the task 016 NDI suites - the TTML document shape and escaping rules, and
 the real output's lifecycle against the machine's loaded NDI runtime (sender created,
-captions handed over, state polled, destroyed)), the
+captions handed over, state polled, destroyed)), the task 017 diagnostics suites - the
+event ring's order, bounds and announced eviction; the renderer's redaction pass with
+Config's own secret-shape predicate injected; atomic file landing; and the controller's
+full export with a canary credential proven absent), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -153,7 +157,9 @@ and model hint, the recovery policy, NDI settings and the diagnostics block - co
 as one atomic draft through the same `updateSettings` funnel, with the log level taking
 effect live and the log-file on/off waiting for an application restart. The main screen
 also carries a permanent credential line ("stored" / "NOT stored - ... until it is
-entered in Settings"), so an operator can see the key's state before pressing Start.
+entered in Settings"), so an operator can see the key's state before pressing Start,
+and an **Export diagnostics** button that writes the run's full report (counters,
+geometry, states, settings, event ring) and names the written file in the note below it.
 
 The application writes a log file to
 `%APPDATA%\LingoFlow\logs\lingoflow.log` (JUCE's
@@ -578,6 +584,54 @@ is quoted from memory. The pieces:
   NDI runtime installed `start()` says so in one sentence while audio and translation
   keep running (AGENTS.md 12, the task's FAIL criterion kept out by construction).
 
+## Structured diagnostics and the export (task 017)
+
+Two layers, each with one job:
+
+* **Counters** stay the callback's voice: the audio thread only increments relaxed
+  atomics (the realtime gates prove the callback allocates and locks nothing, and
+  the new `noteEvent`/ring calls are nowhere in `src/Audio` - narration comes from
+  worker/UI threads). Levels, buffers, underruns/overruns, capture and delivery
+  throughput, text and NDI counts - all already tracked by 012-016, now also
+  **narrated**: `DiagnosticsManager` keeps a bounded event ring (256 entries,
+  sequence + the log's own timestamp format via `log::timestampNow()`, oldest-first
+  readout). `noteError` records into the ring at its existing call sites, so errors
+  and narration cannot drift apart; overflow evicts the oldest and the eviction
+  count is exported - a window is labelled as a window, never sold as history.
+  Engine counters that previously lived only in the UI grid (ring drops, jitter
+  fill, clip splits, malformed/oversized callbacks, non-finite input, gain
+  clamps/rejects) now ship in the export too.
+* **The export** (`Diagnostics/DiagnosticsExport` + `ApplicationController::exportDiagnostics`):
+  key=value text sections (`[app] [audio] [translation] [ndi] [security] [settings]`)
+  plus the event ring, written atomically (unique tmp + rename, parents created,
+  failures said with reasons - no silent second path), with collision-suffixed
+  filenames so two excited clicks produce two receipts. The renderer takes Config's
+  *own* "looks like a secret" predicate as an injected function pointer - Diagnostics
+  may not include Config (boundary audit), so the rule is passed in, never copied,
+  and no second list of secret words exists. Any secret-shaped key ships
+  `[redacted]` and the count rides in the operator's note. The security section
+  carries the store's name and `key_present=yes/no`; the values never leave the
+  store. (A test caught this design being *too* good at first: the obvious key name
+  `api_key_present` is itself secret-shaped and got redacted - so presence fields
+  are named `key_present`, a choice recorded here because a design lesson learned
+  from one's own guard is worth keeping visible.)
+* **Latency**: the buffer-delay arithmetic moved to the engine (`bufferBlockMs`,
+  `pipelineBufferDelayMs`) with `estimateBufferDelay` falling back to settings when
+  nothing runs - the UI line and the export read out of ONE arithmetic, and both
+  label their source. Still explicitly not a measurement: mouth-to-ear is task 018's
+  job, and the disclaimer travels inside the file itself.
+* **UI**: one "Export diagnostics" button on the operator screen - one controller
+  call, and the receipt note carries the written path. Default location:
+  `%APPDATA%\LingoFlow\diagnostics\`, next to the settings, so an operator takes one
+  folder home.
+
+The PASS trio - metrics work (counters asserted through the e2e suites and in the
+export contents), export contains no secrets (canary credential: absent from the
+file, from the note, and impossible by structure; redaction pass separately tested
+including its honest counting), callback unaffected (the allocation gates plus the
+fact that no `src/Audio` path can even reach the ring) - is closed entirely
+headless; the task declares no human checkpoint.
+
 ## Layout
 
 ```text
@@ -591,7 +645,7 @@ src/NDI/                INdiOutput contract, NdiTimedText (TTML1, portable), Nul
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore + WindowsCredentialStore (015 production storage) + ChainedSecretStore (store-first, environment-fallback)
-src/Diagnostics/        DiagnosticsManager (atomic counters + snapshot)
+src/Diagnostics/        DiagnosticsManager (callback-safe counters + bounded event ring, 017), DiagnosticsExport (sections renderer + atomic writer, secret-shape predicate injected)
 src/Utils/              logging skeleton
 tests/                  Catch2 unit + contract tests, integration (mock end-to-end), tests/support/ deterministic mock backend + scripted WebSocket fake, realtime allocation suite, architecture audit, realtime safety audit, self-tests
 docs/                   licensing, device defaults, architecture, environment report, verified OpenAI realtime protocol reference

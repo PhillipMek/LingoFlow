@@ -161,7 +161,10 @@ foreach ($j in 40,80,120,200,300) { .\lingoflow_asio_probe.exe --loopback "Waves
    пускает WebSocket — это ответ чек-листа: чип уйдёт в `reconnecting` (жёлтый) с
    категориями ошибок в detail, аудио продолжит играть считанную тишину.
 4. Закрыть окно → в логе `translation streaming stopped: N frames submitted, M frames
-   gap-refused` (N > 0) и `translation session: closed` (после реального дренажа).
+   gap-refused` (N > 0) и `translation session: closed` (после реального дренажа). Перед
+   закрытием полезно нажать **Export diagnostics** — один файл с состоянием, счётчиками,
+   геометрией, настройками и кольцом событий прогона (017); секретов в нём нет по
+   конструкции, путь файла появится в note под кнопками.
 
 5. REQUIRED-проверка 015 (credentials на целевой машине). На машине площадки, где
    `OPENAI_API_KEY` нет в окружении: в окне нажать **Settings...**, в поле API-ключа
@@ -244,6 +247,9 @@ settled` — по ним видно, как часто и с какими пау
 
 - все `.txt`-захваты прогонов;
 - `%APPDATA%\LingoFlow\logs\lingoflow.log`;
+- `%APPDATA%\LingoFlow\diagnostics\*.txt` — экспорт(ы) из кнопки «Export diagnostics»
+  (017: счётчики, геометрия, состояния, настройки, события прогона; секрета там нет
+  по конструкции, но везём как есть, глазами);
 - `venue_out_ru*.wav`, если делали 9;
 - заполненные таблицы из §2 и §7;
 - выводы `lingoflow_ndi_probe selfcheck/list` и название приёмника (шаг 11).
