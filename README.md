@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011, 013-015 and 017 complete; 012 and 016 implemented** - their
+Status: **tasks 000-011 and 013-015, 017 and 018 complete; 012 and 016 implemented** - their
 open REQUIRED human checkpoints (012 live EN<->RU through ASIO+OpenAI; 015 key entry on
 the target machine; 016 real NDI receiver on the venue network) are run from
 `docs/rig-checklist.md`. The repository contains a JUCE/CMake
@@ -25,7 +25,9 @@ composition root), the typed text pipeline (task 013: snapshot events, bounded h
 UI-facing model), the operator window (task 014: a JUCE shell over the tested UiModel),
 the Settings dialog with Windows-secure API-key storage (task 015), the real NDI
 timed-text subtitle output behind the contract (task 016), the bounded event ring and
-the structured diagnostics export (task 017), and 270 tests.
+the structured diagnostics export (task 017), the honest
+latency accounting with per-row kinds and no measured numbers in code (task 018),
+and 274 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -93,7 +95,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-270 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+274 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -109,7 +111,10 @@ the real output's lifecycle against the machine's loaded NDI runtime (sender cre
 captions handed over, state polled, destroyed)), the task 017 diagnostics suites - the
 event ring's order, bounds and announced eviction; the renderer's redaction pass with
 Config's own secret-shape predicate injected; atomic file landing; and the controller's
-full export with a canary credential proven absent), the
+full export with a canary credential proven absent; the task 018 latency accounting rows -
+kinds per row, the in-flight backlog arithmetic with its clamp and gap rules, a reporting
+driver quoted with its frames versus a silent one rendered "not reported", and the export
+shipping the same rows the screen shows), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -631,6 +636,33 @@ file, from the note, and impossible by structure; redaction pass separately test
 including its honest counting), callback unaffected (the allocation gates plus the
 fact that no `src/Audio` path can even reach the ring) - is closed entirely
 headless; the task declares no human checkpoint.
+
+## Honest latency accounting (task 018)
+
+The deliverable is an accounting, not a number: **no measured latency value exists in
+code** (AGENTS.md 19), and the ones that will exist after a venue visit live only in
+`docs/latency-budget.md`, dated and attributed. What 018 built:
+
+* `DeviceCapabilities` now carries the driver's own reported input/output latency in
+  samples (`getInputLatencyInSamples`/`...Output...` via `JuceAsioBackend`), and the
+  accounting names ASIO's honest ambiguity: a zero cannot be distinguished from "not
+  reported", so it is rendered **not reported** and contributes a visible 0.0 - silence
+  is never sold as speed.
+* `latencyAccounting(engine, backend, diag, settings)` in `App/UiModel` is the single
+  function rendering the component list - driver rows, capture block, **the translator
+  path as ONE combined live-computed row** ("audio in flight" = frames submitted minus
+  frames returned in any form, clamped at 0): the product has no provider-side
+  timestamp, so network and model are not separated and the row says so in its own
+  kind string; jitter fill and pre-roll target; playback block; and an "estimated
+  total (labeled rows)" whose kind field spells out what it excludes.
+* Every row = component + value + **kind** ("driver-reported", "arithmetic
+  (live geometry)" / "(settings, not running)", "configuration", "live-computed",
+  "not measured"). The operator screen shows the whole table under the headline;
+  the diagnostics export ships the same rows plus a `limitations` line - the file
+  cannot disagree with the screen because both call the one function (tested).
+* Mouth-to-ear, per-sentence timing, session-open latency: the venue table in
+  `docs/latency-budget.md` - blanks, with the rule that numbers enter that file and
+  never the binary.
 
 ## Layout
 

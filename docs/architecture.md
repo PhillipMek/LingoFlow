@@ -374,6 +374,11 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   read all modules): the window contains no decision the tests do not cover - every
   value it paints and every branch it shows is `UiModel` output, asserted headless
   against the real controller.
+* Task 018's latency accounting continues the one-function rule: `latencyAccounting`
+  (App/UiModel) renders rows with their KINDS, the screen and the export both consume
+  it, driver answers pass through `DeviceCapabilities`, and the network+model row is
+  one computed backlog because the provider API offers no timestamp to split it with
+  - an honest combination, not an invented separation.
 * Task 017 extends the same one-funnel idea downward into diagnostics: the audio
   callback's only voice remains the relaxed-atomic counters, transitions are
   *narrated* into the bounded event ring from worker/UI threads (`noteEvent`, and
