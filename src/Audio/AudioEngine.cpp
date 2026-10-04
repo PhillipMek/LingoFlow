@@ -235,6 +235,22 @@ void AudioEngine::setJitterBufferMs(int jitterBufferMs) noexcept
     }
 }
 
+int AudioEngine::bufferBlockMs() const noexcept
+{
+    const int rate = sampleRate_.load(std::memory_order_relaxed);
+    const int frames = bufferFrames_.load(std::memory_order_relaxed);
+
+    if (rate <= 0 || frames <= 0)
+        return 0;   // no geometry yet: zero is the honest answer, not a guessed default
+
+    return static_cast<int>(std::llround(static_cast<double>(frames) * 1000.0 / rate));
+}
+
+int AudioEngine::pipelineBufferDelayMs() const noexcept
+{
+    return bufferBlockMs() * 2 + jitterBufferMs();
+}
+
 // ---------------------------------------------------------------------------- gain (006)
 
 namespace {

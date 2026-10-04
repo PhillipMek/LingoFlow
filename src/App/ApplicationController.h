@@ -202,6 +202,33 @@ public:
     /// Writes the current settings atomically through the attached store.
     bool saveSettings(std::string& error);
 
+    /// The version string printed into the diagnostics export header. Main.cpp
+    /// (the JUCE shell that owns the build metadata) sets it; the honest default
+    /// is "unknown" - the core does not invent build numbers (AGENTS.md 19).
+    void setApplicationVersion(std::string version);
+
+    /// Default export location: <settings folder>/diagnostics.
+    std::filesystem::path diagnosticsDirectory() const;
+
+    // ------------------------------------------------------------- diagnostics (017)
+    /// Assembles the structured report ("what is this system doing" - counters,
+    /// live geometry, meter views, session/NDI/security states, the settings
+    /// (non-secret by 003's construction) and the event ring) and writes it
+    /// atomically as a timestamped file in `directory` (empty = the default
+    /// location). Assembled and written on the calling thread (UI/export), never
+    /// from audio.
+    ///
+    /// Secrets: the report carries credential PRESENCE and the store's name, not
+    /// values; as defense in depth the renderer re-checks every key against the
+    /// Config module's own "looks like a secret" predicate, redacts matches and
+    /// counts them into the note. Returns false with the reason - no silent
+    /// second path. The export event itself is recorded after the file is
+    /// written: the next export will contain it, this one cannot contain its own
+    /// completion.
+    bool exportDiagnostics(const std::filesystem::path& directory,
+                           std::filesystem::path& written,
+                           std::string& note);
+
     const config::LoadResult& settingsLoad() const noexcept { return config_.lastLoad(); }
 
     // -------------------------------------------------- translation::ITranslationSink
@@ -296,6 +323,8 @@ private:
     ApplicationState state_ = ApplicationState::stopped;
     std::string faultReason_;
     std::string lastAudioError_;
+    /// Build metadata for the export header; only the composition root knows it.
+    std::string appVersion_ = "unknown";
     // (ndiSequence_ retired by task 013: subtitle frames carry the typed event's
     // own pipeline sequence now - one monotonic identity for text, not a
     // per-publisher counter.)

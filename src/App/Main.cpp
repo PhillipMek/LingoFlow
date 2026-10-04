@@ -197,6 +197,11 @@ public:
         // defaults so the settings load itself gets logged.
         liveai::log::configure(makeLogConfig(liveai::config::defaults(), /*writeConsole = */ false));
 
+        // The build metadata belongs to the JUCE shell; the diagnostics export
+        // header asks the controller for it (task 017) - the core does not
+        // invent version numbers.
+        controller_.setApplicationVersion(juce::String(JUCE_APPLICATION_VERSION_STRING).toStdString());
+
         liveai::log::info(kLogComponent,
                           std::format("application {} initialised (juce {} on {})",
                                       getApplicationVersion().toStdString(),

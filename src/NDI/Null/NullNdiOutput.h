@@ -22,7 +22,7 @@ public:
     void stop() noexcept override;
     bool publish(const SubtitleFrame& frame, std::string& error) override;
 
-    std::uint64_t publishedFrames() const noexcept { return published_.load(std::memory_order_relaxed); }
+    std::uint64_t publishedFrames() const noexcept override { return published_.load(std::memory_order_relaxed); }
     std::string_view streamName() const noexcept { return streamName_; }
 
 private:

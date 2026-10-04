@@ -171,26 +171,23 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
 
     // ------------------------------------------------------------- readouts
     {
-        // The pipeline's own delay from live geometry, and explicitly only that:
-        // translation latency is a measured property of the rig (task 018), and
-        // inventing a number for it here would be the AGENTS.md 19 kind of lie.
-        const int rate = engine.sampleRate() > 0 ? engine.sampleRate() : cfg.audio.sampleRate;
-        const int frames = engine.bufferFrames() > 0 ? engine.bufferFrames() : cfg.audio.bufferFrames;
-        const int jitter = engine.jitterBufferMs();
+        // The pipeline's own delay, from the product's one arithmetic (task 017),
+        // and explicitly only that: translation latency is a measured property of
+        // the rig (task 018), and inventing a number for it here would be the
+        // AGENTS.md 19 kind of lie.
+        const LatencyEstimate latency = estimateBufferDelay(engine, cfg);
 
-        if (rate <= 0)
+        if (latency.blockMs == 0)
         {
             panel.latencySummary = "Buffer delay: unknown until a device or settings give a sample rate.";
         }
         else
         {
-            const int blockMs = static_cast<int>(std::llround(frames * 1000.0 / rate));
-            const int total = blockMs * 2 + jitter;
-
             panel.latencySummary = std::format(
-                "Pipeline buffer ~{} ms ({} in + {} out + {} pre-roll); translation latency is "
-                "NOT included (measured in task 018)",
-                total, blockMs, blockMs, jitter);
+                "Pipeline buffer ~{} ms ({} in + {} out + {} pre-roll, {}); translation latency "
+                "is NOT included (measured in task 018)",
+                latency.totalMs, latency.blockMs, latency.blockMs,
+                latency.totalMs - latency.blockMs * 2, latency.source);
         }
     }
 
@@ -244,6 +241,39 @@ std::vector<UiOption> logLevelChoices()
         choices.push_back({ std::string(log::nameOf(level)), std::string(log::nameOf(level)) });
 
     return choices;
+}
+
+LatencyEstimate estimateBufferDelay(const AudioEngine& engine, const AppConfig& settings)
+{
+    LatencyEstimate estimate;
+
+    const int liveBlock = engine.bufferBlockMs();
+
+    if (liveBlock > 0)
+    {
+        estimate.blockMs = liveBlock;
+        estimate.totalMs = engine.pipelineBufferDelayMs();
+        estimate.fromEngine = true;
+        estimate.source = "live pipeline";
+        return estimate;
+    }
+
+    // Nothing running: the same arithmetic on the settings, labelled as such.
+    const auto& audio = settings.audio;
+
+    if (audio.sampleRate > 0 && audio.bufferFrames > 0)
+    {
+        estimate.blockMs = static_cast<int>(
+            std::llround(static_cast<double>(audio.bufferFrames) * 1000.0 / audio.sampleRate));
+        estimate.totalMs = estimate.blockMs * 2 + settings.translation.jitterBufferMs;
+        estimate.source = "settings (not running)";
+    }
+    else
+    {
+        estimate.source = "unknown";
+    }
+
+    return estimate;
 }
 
 } // namespace liveai

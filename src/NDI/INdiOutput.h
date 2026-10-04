@@ -9,6 +9,7 @@
 //     the oldest frame instead of blocking the producer.
 //   * No NDI SDK type appears in this interface.
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -49,6 +50,13 @@ public:
     /// Non-blocking publish. Returns false when the frame was dropped or the
     /// output is not started; the caller records it in diagnostics and continues.
     virtual bool publish(const SubtitleFrame& frame, std::string& error) = 0;
+
+    /// Captions handed over since the current start (task 017: the diagnostics
+    /// export and the SPEC 55 "Caption events" row need it through the contract,
+    /// not through a cast to a concrete output). The default zero is honest for
+    /// implementations that count nothing; the Null output overrides it with its
+    /// real counter.
+    virtual std::uint64_t publishedFrames() const noexcept { return 0; }
 };
 
 } // namespace ndi

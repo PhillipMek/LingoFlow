@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <utility>
 
@@ -117,9 +118,11 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     startButton_.onClick = [this] { startPressed(); };
     stopButton_.onClick = [this] { stopPressed(); };
     settingsButton_.onClick = [this] { settingsPressed(); };
+    exportButton_.onClick = [this] { exportPressed(); };
     addAndMakeVisible(startButton_);
     addAndMakeVisible(stopButton_);
     addAndMakeVisible(settingsButton_);
+    addAndMakeVisible(exportButton_);
 
     for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
     {
@@ -322,6 +325,22 @@ void OperatorContent::settingsPressed()
         settingsWindow_ = std::make_unique<SettingsWindow>(controller_);
     else
         settingsWindow_->reopen();
+}
+
+void OperatorContent::exportPressed()
+{
+    // Task 017: one controller call, and the note IS the receipt - the file the
+    // operator can carry to a venue. No path invention here: the controller
+    // decides where exports live.
+    std::filesystem::path written;
+    std::string note;
+
+    if (controller_.exportDiagnostics({}, written, note))
+        actionNote_ = note;
+    else
+        actionNote_ = note;   // the failure is as talkable as the success
+
+    rebuild();
 }
 
 void OperatorContent::refreshDevicesPressed()
@@ -636,6 +655,7 @@ void OperatorContent::resized()
     stopButton_.setBounds(header.removeFromRight(96));
     startButton_.setBounds(header.removeFromRight(96).withTrimmedRight(6));
     settingsButton_.setBounds(header.removeFromRight(110).withTrimmedRight(6));
+    exportButton_.setBounds(header.removeFromRight(150).withTrimmedRight(6));
     titleLabel_.setBounds(header);
 
     auto chips = bounds.removeFromTop(26);

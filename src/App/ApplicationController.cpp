@@ -1,9 +1,15 @@
 #include "App/ApplicationController.h"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
+#include <sstream>
 
+#include "App/UiModel.h"
+#include "Audio/LevelMeter.h"
 #include "Audio/Null/NullAudioBackend.h"
+#include "Config/ConfigStore.h"
+#include "Diagnostics/DiagnosticsExport.h"
 #include "NDI/Null/NullNdiOutput.h"
 #include "Translation/Null/NullTranslationBackend.h"
 #include "Translation/LanguageRegistry.h"
@@ -13,6 +19,32 @@ namespace liveai {
 namespace {
 
 constexpr std::string_view kComponent = "app";
+
+/// The meter view as one export line: the product reads levels, not raw
+/// fractions (the same conversion the UI bar uses).
+std::string meterText(const audio::LevelMeter* meter)
+{
+    if (meter == nullptr)
+        return "no pipeline";
+
+    return std::format("peak {:.1f} dBFS, rms {:.1f} dBFS, {}",
+                       audio::linearToDb(meter->peakLinear()),
+                       audio::linearToDb(meter->rmsLinear()),
+                       meter->signalPresent() ? "signal" : "no signal");
+}
+
+/// log::timestampNow() shaped into a filename-safe stamp: the export file and
+/// the log lines sort together and name the same minute.
+std::string fileStamp()
+{
+    std::string stamp = log::timestampNow();
+    for (auto& c : stamp)
+    {
+        if (c == ':' || c == ' ')
+            c = '-';
+    }
+    return stamp;
+}
 
 } // namespace
 
@@ -141,6 +173,7 @@ void ApplicationController::clearFault() noexcept
     // clearing is the operator saying "I fixed the cause, let me try again".
     // What the retry does or does not achieve is the next start()'s truth to tell.
     log::info(kComponent, "fault cleared by operator: '" + faultReason_ + "' - ready to start again");
+    diagnostics_.noteEvent("app", "fault cleared by operator: '" + faultReason_ + "'");
     faultReason_.clear();
     lastAudioError_.clear();
     state_ = ApplicationState::stopped;
@@ -208,6 +241,7 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
         note = "settings are active for this run but were NOT saved: " + saveError;
 
     log::info(kComponent, "operator settings update: " + note);
+    diagnostics_.noteEvent("settings", note);
     return true;
 }
 
@@ -253,6 +287,7 @@ bool ApplicationController::storeApiSecret(std::string_view secret, std::string&
                "file, not in the log, and not kept on screen; sessions read it at Start.";
         log::info(kComponent, "translation: the operator stored the API key in " + secretStoreName()
                                   + " (value never logged)");
+        diagnostics_.noteEvent("security", "operator stored the API key (value not logged)");
         return true;
     }
     else
@@ -260,6 +295,7 @@ bool ApplicationController::storeApiSecret(std::string_view secret, std::string&
         note = "the credential store refused the key: " + std::string(security::nameOf(status))
                + " (" + secretStoreName() + ")";
         log::warning(kComponent, note);
+        diagnostics_.noteEvent("security", note);
         return false;
     }
 }
@@ -271,6 +307,7 @@ void ApplicationController::removeApiSecret(std::string& note)
         case security::SecretStatus::found:
             note = "API key removed from " + secretStoreName() + ".";
             log::info(kComponent, "translation: the operator removed the stored API key");
+            diagnostics_.noteEvent("security", "operator removed the stored API key");
             break;
 
         case security::SecretStatus::notFound:
@@ -286,6 +323,183 @@ void ApplicationController::removeApiSecret(std::string& note)
             log::warning(kComponent, note);
             break;
     }
+}
+
+void ApplicationController::setApplicationVersion(std::string version)
+{
+    appVersion_ = std::move(version);
+}
+
+std::filesystem::path ApplicationController::diagnosticsDirectory() const
+{
+    return config::ConfigStore::defaultFile().parent_path() / "diagnostics";
+}
+
+bool ApplicationController::exportDiagnostics(const std::filesystem::path& directory,
+                                              std::filesystem::path& written,
+                                              std::string& note)
+{
+    using diagnostics::ExportSection;
+
+    const AppStatus status = this->status();
+    const auto diag = diagnostics_.snapshot();
+    const auto& cfg = config_.current();
+    AudioEngine& engine = engine_;
+
+    std::vector<ExportSection> sections;
+
+    sections.push_back({ "app", {
+        { "state", std::string(nameOf(status.application)) },
+        { "audio_state", std::string(audio::nameOf(status.audio)) },
+        { "session_state", std::string(translation::nameOf(status.session)) },
+        { "ndi_state", std::string(ndi::nameOf(status.ndi)) },
+        { "audio_backend", status.audioBackendName },
+        { "detail", status.detail },
+    } });
+
+    const LatencyEstimate latency = estimateBufferDelay(engine, cfg);
+
+    std::vector<std::pair<std::string, std::string>> audioRows;
+    audioRows.emplace_back("sample_rate", std::to_string(engine.sampleRate()));
+    audioRows.emplace_back("buffer_frames", std::to_string(engine.bufferFrames()));
+    audioRows.emplace_back("audio_blocks", std::to_string(diag.audioBlocks));
+    audioRows.emplace_back("audio_frames", std::to_string(diag.audioFrames));
+    audioRows.emplace_back("underruns", std::to_string(diag.underruns));
+    audioRows.emplace_back("overruns", std::to_string(diag.overruns));
+    audioRows.emplace_back("input_ring_dropped_frames", std::to_string(engine.inputRingDroppedFrames()));
+    audioRows.emplace_back("output_silence_frames", std::to_string(engine.outputSilenceFrames()));
+    audioRows.emplace_back("jitter_fill_frames", std::to_string(engine.jitterFillFrames()));
+    audioRows.emplace_back("clip_frames_in", std::to_string(engine.inputClippedFrames()));
+    audioRows.emplace_back("clip_frames_input_gain", std::to_string(engine.inputGainClippedFrames()));
+    audioRows.emplace_back("clip_frames_output_gain", std::to_string(engine.outputGainClippedFrames()));
+    audioRows.emplace_back("gain_requests_clamped", std::to_string(engine.gainRequestsClamped()));
+    audioRows.emplace_back("gain_requests_rejected", std::to_string(engine.gainRequestsRejected()));
+    audioRows.emplace_back("nonfinite_input_frames", std::to_string(engine.nonFiniteInputFrames()));
+    audioRows.emplace_back("malformed_callbacks", std::to_string(engine.malformedCallbacks()));
+    audioRows.emplace_back("oversized_callbacks", std::to_string(engine.oversizedCallbacks()));
+    audioRows.emplace_back("input_level", meterText(engine.inputMeter(0)));
+    audioRows.emplace_back("output_level", meterText(engine.outputMeter(0)));
+    audioRows.emplace_back("input_gain_db", std::format("{:.1f}", engine.inputGainDb()));
+    audioRows.emplace_back("output_gain_db", std::format("{:.1f}", engine.outputGainDb()));
+    audioRows.emplace_back("applied_input_gain_db", std::format("{:.1f}", engine.appliedInputGainDb()));
+    audioRows.emplace_back("applied_output_gain_db", std::format("{:.1f}", engine.appliedOutputGainDb()));
+    audioRows.emplace_back("input_muted", engine.inputMuted() ? "yes" : "no");
+    audioRows.emplace_back("output_muted", engine.outputMuted() ? "yes" : "no");
+    audioRows.emplace_back("buffer_block_ms", std::to_string(latency.blockMs));
+    audioRows.emplace_back("pipeline_buffer_delay_ms", std::to_string(latency.totalMs));
+    audioRows.emplace_back("pipeline_buffer_delay_source", latency.source);
+    audioRows.emplace_back("pipeline_buffer_delay_note",
+                           "buffer arithmetic only; translation and mouth-to-ear latency are "
+                           "measured in task 018 - this number is not a measurement");
+    sections.push_back({ "audio", std::move(audioRows) });
+
+    std::vector<std::pair<std::string, std::string>> translationRows;
+    translationRows.emplace_back("languages", cfg.translation.inputLanguage + "->"
+                                             + cfg.translation.outputLanguage);
+    translationRows.emplace_back("model_hint", cfg.translation.modelHint.empty()
+                                                           ? "(backend default)"
+                                                           : cfg.translation.modelHint);
+    translationRows.emplace_back("instructions", cfg.translation.instructions);
+    translationRows.emplace_back("jitter_buffer_ms", std::to_string(cfg.translation.jitterBufferMs));
+    translationRows.emplace_back("reconnect_enabled", cfg.translation.reconnectEnabled ? "yes" : "no");
+    translationRows.emplace_back("reconnect_initial_backoff_ms",
+                                 std::to_string(cfg.translation.reconnectInitialBackoffMs));
+    translationRows.emplace_back("reconnect_max_backoff_ms",
+                                 std::to_string(cfg.translation.reconnectMaxBackoffMs));
+    translationRows.emplace_back("session_max_age_seconds",
+                                 std::to_string(cfg.translation.sessionMaxAgeSeconds));
+    translationRows.emplace_back("capture_submitted_frames",
+                                 std::to_string(diag.translationSubmittedFrames));
+    translationRows.emplace_back("capture_gap_refused_frames", std::to_string(diag.translationGapFrames));
+    translationRows.emplace_back("translated_audio_frames", std::to_string(diag.translatedAudioFrames));
+    translationRows.emplace_back("rejected_audio_frames", std::to_string(diag.rejectedAudioFrames));
+    translationRows.emplace_back("dropped_audio_frames",
+                                 std::to_string(diag.translatedAudioDroppedFrames));
+    translationRows.emplace_back("text_partial_events", std::to_string(diag.partialTextEvents));
+    translationRows.emplace_back("text_final_events", std::to_string(diag.finalTextEvents));
+    translationRows.emplace_back("text_line_evictions", std::to_string(textPipeline_.evictedLines()));
+    translationRows.emplace_back("text_duplicate_finals_ignored",
+                                 std::to_string(textPipeline_.ignoredDuplicates()));
+    translationRows.emplace_back("reconnects", std::to_string(diag.reconnects));
+    translationRows.emplace_back("translation_errors", std::to_string(diag.translationErrors));
+    translationRows.emplace_back("translation_fatal_errors", std::to_string(diag.translationFatalErrors));
+    sections.push_back({ "translation", std::move(translationRows) });
+
+    sections.push_back({ "ndi", {
+        { "enabled", cfg.ndi.enabled ? "yes" : "no" },
+        { "stream_name", cfg.ndi.streamName },
+        { "published_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishedFrames())
+                                                     : std::string("0") },
+        { "errors", std::to_string(diag.ndiErrors) },
+    } });
+
+    // Security: presence and the store's name. The keys are deliberately not
+    // secret-SHAPED words ("key_present", not "api_key_present") - the redactor
+    // guards values by key shape and does not know semantics; a present-but-
+    // redacted fact would be worse than a renamed one, and this choice was
+    // caught live, by this task's own test. There is no value under any key:
+    // credential values never enter settings, logs or exports (AGENTS.md 10).
+    sections.push_back({ "security", {
+        { "store_backend", secretStoreName() },
+        { "key_present", hasApiSecret() ? "yes" : "no" },
+        { "rule", "credential values never enter settings, logs or exports; presence is the only fact shown" },
+    } });
+
+    std::vector<std::pair<std::string, std::string>> settingRows;
+    settingRows.emplace_back("schema_version", std::to_string(cfg.schemaVersion));
+    settingRows.emplace_back("input_device_id", cfg.audio.inputDeviceId);
+    settingRows.emplace_back("output_device_id", cfg.audio.outputDeviceId);
+    settingRows.emplace_back("input_channel", std::to_string(cfg.audio.inputChannel));
+    settingRows.emplace_back("output_channel", std::to_string(cfg.audio.outputChannel));
+    settingRows.emplace_back("log_level", cfg.diagnostics.logLevel);
+    settingRows.emplace_back("write_log_file", cfg.diagnostics.writeLogFile ? "yes" : "no");
+    if (!diag.lastErrorSubsystem.empty())
+    {
+        settingRows.emplace_back("last_error_subsystem", diag.lastErrorSubsystem);
+        settingRows.emplace_back("last_error_message", diag.lastErrorMessage);
+    }
+    sections.push_back({ "settings", std::move(settingRows) });
+
+    const auto events = diagnostics_.events();
+    const auto rendered = diagnostics::renderExport(appVersion_, sections, events,
+                                                    diagnostics_.evictedEvents(),
+                                                    &config::isSecretFieldName);
+
+    const auto targetDir = directory.empty() ? diagnosticsDirectory() : directory;
+
+    // Two exports in the same second (an excited double-click) must produce two
+    // receipts, not silently overwrite the first one's evidence.
+    const std::string base = "lingoflow-diag-" + fileStamp();
+    std::filesystem::path file = targetDir / (base + ".txt");
+    for (int suffix = 2; std::filesystem::exists(file); ++suffix)
+        file = targetDir / (base + "-" + std::to_string(suffix) + ".txt");
+
+    std::string error;
+    if (!diagnostics::writeExportFile(file, rendered.text, error))
+    {
+        note = "diagnostics export failed: " + error;
+        log::warning(kComponent, note);
+        return false;
+    }
+
+    written = file;
+
+    note = "diagnostics written: " + file.string();
+    if (rendered.redactions > 0)
+        note += " - " + std::to_string(rendered.redactions) + " secret-shaped value(s) were redacted";
+
+    // Said where it belongs: a redaction happened only if a gatherer slipped, and
+    // the operator must hear about that from the same action that produced it.
+    if (rendered.redactions > 0)
+        log::error(kComponent, note);
+    else
+        log::info(kComponent, note);
+
+    // The event is appended AFTER the write: an export cannot contain news of its
+    // own completion; the next one will.
+    diagnostics_.noteEvent("diagnostics", "export written to " + file.string());
+
+    return true;
 }
 
 bool ApplicationController::start()
@@ -352,6 +566,7 @@ bool ApplicationController::start()
 
     state_ = ApplicationState::running;
     log::info(kComponent, "running");
+    diagnostics_.noteEvent("app", "running (audio backend '" + status().audioBackendName + "')");
     return true;
 }
 
@@ -374,6 +589,7 @@ void ApplicationController::stop()
     faultReason_.clear();
     state_ = ApplicationState::stopped;
     log::info(kComponent, "stopped");
+    diagnostics_.noteEvent("app", "stopped");
 }
 
 bool ApplicationController::startAudio(std::string& error)
@@ -548,6 +764,7 @@ void ApplicationController::startStreaming()
         log::info(kComponent,
                   "translation streaming started: device capture at "
                       + std::to_string(engine_.sampleRate()) + " Hz feeds the session");
+        diagnostics_.noteEvent("translation", "streaming started");
     }
     else
     {
@@ -572,6 +789,10 @@ void ApplicationController::stopStreaming() noexcept
               "translation streaming stopped: " + std::to_string(streamer_->submittedFrames())
                   + " frames submitted, " + std::to_string(streamer_->gapRefusedFrames())
                   + " frames gap-refused");
+    diagnostics_.noteEvent("translation",
+                           "streaming stopped: " + std::to_string(streamer_->submittedFrames())
+                               + " submitted, " + std::to_string(streamer_->gapRefusedFrames())
+                               + " gap-refused");
 
     streamer_->stop();
     streamer_.reset();
@@ -593,6 +814,8 @@ bool ApplicationController::startNdi(std::string& error)
         ndiOutput_->stop();
         return false;
     }
+
+    diagnostics_.noteEvent("ndi", "started as '" + config_.current().ndi.streamName + "'");
 
     error.clear();
     return true;
@@ -634,6 +857,11 @@ void ApplicationController::fault(std::string reason)
 {
     faultReason_ = std::move(reason);
     state_ = ApplicationState::faulted;
+
+    // The event ring narrates transitions; the audio/translation noteError calls
+    // already recorded the technical cause. This line is the moment the show
+    // stopped, which is what a replay asks first.
+    diagnostics_.noteEvent("app", "FAULTED: " + faultReason_);
 }
 
 AppStatus ApplicationController::status() const
@@ -780,6 +1008,8 @@ void ApplicationController::onFinalText(std::string_view text)
 
 void ApplicationController::onSessionStateChanged(translation::SessionState state)
 {
+    diagnostics_.noteEvent("translation", std::string("session: ")
+                                              + std::string(translation::nameOf(state)));
     log::info(kComponent, std::string("translation session: ").append(nameOf(state)));
 
     // A fresh (re)connected session deserves a fresh warning: if the new backend

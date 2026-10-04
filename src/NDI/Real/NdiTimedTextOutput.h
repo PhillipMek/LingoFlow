@@ -51,7 +51,7 @@ public:
     /// and after stop() it keeps the last run's number (history, like every other
     /// counter in this product). Displayed or not is the receiver's answer - the
     /// header comment says why we cannot know it from the sender side.
-    std::uint64_t publishedFrames() const noexcept { return published_.load(std::memory_order_relaxed); }
+    std::uint64_t publishedFrames() const noexcept override { return published_.load(std::memory_order_relaxed); }
 
 private:
     /// NDIlib_send_instance_t is a pointer to an opaque struct; kept as void* so

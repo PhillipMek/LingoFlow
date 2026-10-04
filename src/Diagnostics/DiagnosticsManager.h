@@ -14,9 +14,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace liveai {
 
@@ -98,9 +100,42 @@ public:
     /// Non-realtime: clears the recorded backend label.
     void noteAudioBackendStopped();
 
-    /// Non-realtime (allocates): last human-readable error per subsystem.
-    /// Not used as an event log; task 017 adds the ring-buffered event log.
+    /// Non-realtime (allocates): last human-readable error per subsystem, and -
+    /// since task 017 - one entry in the event ring below. Errors are the events
+    /// an operator most needs replayed, so the two roles share one call site.
     void noteError(std::string_view subsystem, std::string_view message);
+
+    // ---------------------------------------------------------------- events (017)
+    /// One dated entry in the ring-buffered event log: the replay of "what
+    /// happened this run" that survives neither the screen (a glance is a
+    /// glance) nor a scrollable log file's 10-thousandth line.
+    struct DiagnosticEvent
+    {
+        std::uint64_t sequence = 0;   ///< monotone, never reused
+        std::string timestamp;        ///< log::timestampNow() - the log's own format
+        std::string subsystem;        ///< app | audio | translation | ndi | security | ...
+        std::string message;
+    };
+
+    /// Ring capacity: enough for a whole show's incidents, small enough that an
+    /// export is readable. Oldest entries are evicted, and the eviction is said
+    /// out loud in evictedEvents() - a truncated history is never presented as
+    /// the complete one.
+    static constexpr std::size_t kMaxEvents = 256;
+
+    /// Non-realtime (allocates a dated copy; the mutex is a UI/worker hand, and
+    /// no audio-thread path calls this - the engine's callback keeps to the
+    /// atomic count*() methods above, which is exactly why incidents from the
+    /// callback arrive as counters and this ring receives the narrated ones).
+    void noteEvent(std::string_view subsystem, std::string_view message);
+
+    /// Oldest-first copy of the ring. Non-realtime (copies strings; UI/export only).
+    std::vector<DiagnosticEvent> events() const;
+
+    /// How many events were evicted since startup. With a nonzero value the
+    /// ring is a WINDOW, not the full history - the export labels itself with
+    /// this number for that reason.
+    std::uint64_t evictedEvents() const noexcept { return evictedEvents_.load(std::memory_order_relaxed); }
 
     // ------------------------------------------------------------------ readout
     struct Snapshot
@@ -147,7 +182,8 @@ public:
                          overruns_.load(std::memory_order_relaxed) };
     }
 
-    /// Test helper: zeroes every counter and clears all recorded strings.
+    /// Test helper: zeroes every counter, clears all recorded strings and the
+    /// event ring.
     void resetForTests() noexcept;
 
 private:
@@ -169,11 +205,17 @@ private:
     std::atomic<int> sampleRate_{ 0 };
     std::atomic<int> bufferFrames_{ 0 };
 
-    // Guarded strings: non-realtime only.
+    // Guarded strings + the event ring: non-realtime only.
     mutable std::mutex textMutex_;
     std::string audioBackend_;
     std::string lastErrorSubsystem_;
     std::string lastErrorMessage_;
+    std::deque<DiagnosticEvent> events_;      ///< oldest first, capped at kMaxEvents
+    std::uint64_t eventSequence_ = 0;         ///< guarded by textMutex_
+    std::atomic<std::uint64_t> evictedEvents_{ 0 };
+
+    /// Caller holds textMutex_.
+    void appendEventLocked(std::string_view subsystem, std::string_view message);
 };
 
 } // namespace liveai

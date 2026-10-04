@@ -72,6 +72,7 @@ private:
     void startPressed();
     void stopPressed();
     void settingsPressed();
+    void exportPressed();
     void refreshDevicesPressed();
     void deviceSelected();
     void sourceSelected();
@@ -100,6 +101,7 @@ private:
     juce::TextButton startButton_ { "Start" };
     juce::TextButton stopButton_ { "Stop" };
     juce::TextButton settingsButton_ { "Settings..." };
+    juce::TextButton exportButton_ { "Export diagnostics" };
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
     juce::Label detailLabel_;
     juce::Label credentialLabel_;

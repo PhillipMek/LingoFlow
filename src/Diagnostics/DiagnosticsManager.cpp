@@ -1,8 +1,23 @@
 #include "Diagnostics/DiagnosticsManager.h"
 
 #include <mutex>
+#include <utility>
+
+#include "Utils/Log.h"
 
 namespace liveai {
+
+void DiagnosticsManager::appendEventLocked(std::string_view subsystem, std::string_view message)
+{
+    events_.push_back(DiagnosticEvent { ++eventSequence_, log::timestampNow(),
+                                         std::string(subsystem), std::string(message) });
+
+    while (events_.size() > kMaxEvents)
+    {
+        events_.pop_front();
+        evictedEvents_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 void DiagnosticsManager::noteAudioBackend(std::string_view backendName)
 {
@@ -21,6 +36,22 @@ void DiagnosticsManager::noteError(std::string_view subsystem, std::string_view 
     std::lock_guard lock(textMutex_);
     lastErrorSubsystem_.assign(subsystem);
     lastErrorMessage_.assign(message);
+
+    // Task 017: an error is also an event. One call site keeps the ring and the
+    // "last error" field telling the same story - two writers could drift.
+    appendEventLocked(subsystem, message);
+}
+
+void DiagnosticsManager::noteEvent(std::string_view subsystem, std::string_view message)
+{
+    std::lock_guard lock(textMutex_);
+    appendEventLocked(subsystem, message);
+}
+
+std::vector<DiagnosticsManager::DiagnosticEvent> DiagnosticsManager::events() const
+{
+    std::lock_guard lock(textMutex_);
+    return { events_.begin(), events_.end() };
 }
 
 DiagnosticsManager::Snapshot DiagnosticsManager::snapshot() const
@@ -78,6 +109,9 @@ void DiagnosticsManager::resetForTests() noexcept
     audioBackend_.clear();
     lastErrorSubsystem_.clear();
     lastErrorMessage_.clear();
+    events_.clear();
+    eventSequence_ = 0;
+    evictedEvents_.store(0, std::memory_order_relaxed);
 }
 
 } // namespace liveai

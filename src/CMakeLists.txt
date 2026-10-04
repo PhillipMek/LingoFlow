@@ -35,6 +35,8 @@ add_library(lingoflow_core STATIC
 
     Diagnostics/DiagnosticsManager.cpp
     Diagnostics/DiagnosticsManager.h
+    Diagnostics/DiagnosticsExport.cpp
+    Diagnostics/DiagnosticsExport.h
 
     Audio/AudioTypes.cpp
     Audio/AudioTypes.h

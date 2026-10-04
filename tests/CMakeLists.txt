@@ -30,6 +30,7 @@ add_executable(lingoflow_tests
     unit/TestLog.cpp
     unit/TestConfig.cpp
     unit/TestConfigManager.cpp
+    unit/TestDiagnosticsExport.cpp
     unit/TestSecretStore.cpp
     unit/TestDiagnosticsManager.cpp
     unit/TestAudioEngine.cpp

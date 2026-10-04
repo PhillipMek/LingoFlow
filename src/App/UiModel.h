@@ -112,6 +112,25 @@ inline constexpr std::size_t kSubtitleHistoryTail = 8;
 /// as every other list on this screen).
 std::vector<UiOption> logLevelChoices();
 
+/// The product's one buffer-delay arithmetic (task 017): live engine geometry
+/// first; before a device runs, the same arithmetic on the settings - what the
+/// operator is told is then explicitly about what Start *will* run, never a
+/// claim about sound that has not passed the pipeline. `source` names which
+/// answered, because a number whose origin the reader cannot see is half a
+/// number. This is NOT a latency measurement of any kind (mouth-to-ear is task
+/// 018's); every user of these numbers carries that sentence.
+struct LatencyEstimate
+{
+    int blockMs = 0;
+    int totalMs = 0;   ///< block + block + jitter pre-roll
+    bool fromEngine = false;
+    std::string source;   ///< "live pipeline" | "settings (not running)"
+};
+
+/// Computes the estimate above. Non-realtime (reads atomics and config strings;
+/// safe from the UI thread, pointless from anywhere else).
+LatencyEstimate estimateBufferDelay(const AudioEngine& engine, const AppConfig& settings);
+
 /// Builds the panel from public reads. Non-realtime by construction (called on
 /// the GUI thread); it allocates strings, which is exactly what a UI thread may
 /// do and the audio callback may never. `actionNote` is carried in from the

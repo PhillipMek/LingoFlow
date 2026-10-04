@@ -85,6 +85,16 @@ public:
     void setJitterBufferMs(int jitterBufferMs) noexcept;
     int jitterBufferMs() const noexcept { return jitterMs_.load(std::memory_order_relaxed); }
 
+    /// Buffer-delay arithmetic from the live geometry (task 017's single source,
+    /// used by the UI line and the diagnostics export alike): one input block +
+    /// one output block + the jitter pre-roll, in ms, from exactly the numbers
+    /// the running pipeline reports (zeros before activation). This is NOT a
+    /// latency measurement and says nothing about the translation - end-to-end
+    /// (mouth-to-ear) latency is task 018's measurement job, and every user of
+    /// these numbers must carry that sentence with it (AGENTS.md 19).
+    int bufferBlockMs() const noexcept;
+    int pipelineBufferDelayMs() const noexcept;
+
     /// Owner of the input rings: the loopback worker (005) or the streaming worker
     /// (012) attaches here. Non-realtime call, cheap atomic.
     void attachInputConsumer() noexcept { consumerAttached_.store(true, std::memory_order_relaxed); }
