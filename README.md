@@ -7,10 +7,10 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011, 013 and 014 complete; 012 and 015 implemented** - 012's REQUIRED
-human checkpoint (real EN<->RU streaming through ASIO/SoundGrid + OpenAI on a rig) and
-015's (operator entering the key through the Settings dialog on the target venue machine)
-are open, run sheet `docs/rig-checklist.md`. The repository contains a JUCE/CMake
+Status: **tasks 000-011, 013 and 014 complete; 012, 015 and 016 implemented** - their
+open REQUIRED human checkpoints (012 live EN<->RU through ASIO+OpenAI; 015 key entry on
+the target machine; 016 real NDI receiver on the venue network) are run from
+`docs/rig-checklist.md`. The repository contains a JUCE/CMake
 application, a portable core (`lingoflow_core`) with the module interfaces, a realtime
 audio pipeline (lock-free ring buffer, output jitter buffer, input and output gain with
 click-free gliding, level meters, clipping and underrun/overrun counters) with
@@ -23,7 +23,8 @@ single language registry with its versioned OpenAI capability manifest, the moun
 translation pipeline (task 012: capture worker + supervisor + real backend in the
 composition root), the typed text pipeline (task 013: snapshot events, bounded history,
 UI-facing model), the operator window (task 014: a JUCE shell over the tested UiModel),
-the Settings dialog with Windows-secure API-key storage (task 015), and 258 tests.
+the Settings dialog with Windows-secure API-key storage (task 015), the real NDI
+timed-text subtitle output behind the contract (task 016), and 262 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -91,7 +92,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-258 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+262 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -102,7 +103,9 @@ and the task 014 UiModel suite that runs the whole operator screen headless thro
 real controller; the task 015 credential suites - chain-store routing rules, a live
 Windows Credential Manager round-trip including a child-process case proving the store
 is not process memory, and the controller funnel that keeps the secret out of settings,
-notes and logs), the
+notes and logs; the task 016 NDI suites - the TTML document shape and escaping rules, and
+the real output's lifecycle against the machine's loaded NDI runtime (sender created,
+captions handed over, state polled, destroyed)), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -546,6 +549,35 @@ applies now (gains, jitter, log level) versus what waits for Stop + Start (devic
 languages, NDI) versus what waits for a full application restart (recovery policy is
 mounted by the composition root at startup, and the log-file sink is chosen there too).
 
+## The real NDI subtitle output (task 016)
+
+Mode A of SPEC 38: caption snapshots travel as NDI metadata frames carrying TTML1
+documents - every format/API fact is dated and cited in `docs/ndi-protocol.md`, nothing
+is quoted from memory. The pieces:
+
+* `NDI/NdiTimedText.{h,cpp}` (portable, tested): one complete snapshot document per
+  publish - one root, no XML prolog, the W3C TTML1 namespace, the pipeline's own sequence
+  as `xml:id`, total escaping for text content and removal of characters XML 1.0 forbids.
+  A document a receiver cannot parse is the failure mode this file exists to prevent.
+* `NDI/Real/` (a separate target, compiled against the SDK's headers): `NdiRuntime` loads
+  `Processing.NDI.Lib.x64.dll` at run time through the SDK's own dynamic-load entry point
+  - the license rule of docs/licensing.md made concrete: the import library is never
+  linked. `NdiTimedTextOutput` implements `INdiOutput` with an honest state machine:
+  `ready` while nothing consumes, `publishing` when `send_get_no_connections` says a
+  receiver is there, and `stop()` answering "not started" to any early publish. The SDK's
+  `send_send_metadata` returns void - so this product never claims "displayed", only
+  "handed to the SDK"; delivery truth belongs to the venue receiver, which is precisely
+  why the task carries a REQUIRED real-receiver checkpoint.
+* `lingoflow_ndi_probe.exe`: `list` / `recv` / `send` / `selfcheck` - the same loader and
+  the same document builder as the app, so a ten-second run on the venue network either
+  receives the captions or says which step failed. (On the development laptop the send
+  side runs green while discovery legitimately sees zero sources through the VPN stack -
+  measured and recorded, not hidden, in docs/ndi-protocol.md.)
+* Composition root: the real output is mounted only for the windowed run; `--smoke` keeps
+  Null NDI (a startup check must not touch the LAN discovery stack either), and with no
+  NDI runtime installed `start()` says so in one sentence while audio and translation
+  keep running (AGENTS.md 12, the task's FAIL criterion kept out by construction).
+
 ## Layout
 
 ```text
@@ -555,7 +587,7 @@ src/App/                ApplicationController (composition root), TranslationStr
 src/Audio/              AudioEngine + pipeline (ring/jitter/gain/meters/loopback), IAudioBackend (+ DeviceRequest), ASIO model/policy, Null/ device
 src/Translation/        ITranslationBackend contract (states, request, errors, sink), ReconnectSupervisor (010 recovery), LanguageRegistry (011 single language list + frozen OpenAI capability manifest), TextPipeline (013 typed events + bounded history), Null/ backend
 src/Network/            OpenAI realtime backend (contract impl) + WinHTTP WebSocket transport + PCM resampler + base64, and the live lingoflow_openai_probe tool
-src/NDI/                INdiOutput contract, Null/ output
+src/NDI/                INdiOutput contract, NdiTimedText (TTML1, portable), Null/ output, Real/ (runtime-loaded sender + probe, never links the SDK import lib)
 src/Platform/Asio/      JUCE ASIO discovery, JuceAsioBackend, lingoflow_asio_probe tool
 src/Config/             AppConfig, ConfigSchema (validation + JSON text), ConfigStore (atomic file), ConfigManager
 src/Security/           ISecretStore boundary + NullSecretStore + WindowsCredentialStore (015 production storage) + ChainedSecretStore (store-first, environment-fallback)

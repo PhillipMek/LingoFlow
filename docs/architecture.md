@@ -38,7 +38,10 @@ Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, g
                                                   meters, loopback, IAudioBackend,
                                                   ASIO model/policy, Null backend
 Translation    -> Utils, Diagnostics              ITranslationBackend contract, Null backend
-NDI            -> Utils, Diagnostics              INdiOutput contract, Null output
+NDI            -> Utils, Diagnostics              INdiOutput contract, NdiTimedText (TTML1),
+                                                   Null output; Real/ sender + probe compile
+                                                   against SDK headers but link nothing from
+                                                   the SDK (dynamic load only, docs/licensing.md)
 Platform       -> Audio, Utils, Diagnostics       JUCE adapters (ASIO device discovery/lifecycle)
 App            -> all of the above                ApplicationController (composition root)
 App/Main.cpp   -> App, Platform, Utils, JUCE      UI + installation of the device backend factory
@@ -61,6 +64,14 @@ adapter).
 One more dependency exception is registered in the audit: `nlohmann/json.hpp` may be
 included by `Config` only, and only in a `.cpp` - no header in the project exposes a
 JSON type, so the UI and the audio path cannot start parsing configuration or wire text.
+
+The NDI boundary has a second, licensing kind (task 016): the SDK's **headers** may be
+used only by `src/NDI/Real/` (a separate CMake target whose SDK include path is PRIVATE),
+and the SDK's **import library is never linked anywhere** - the product reaches NDI by
+loading the installed runtime DLL at run time through the SDK's dynamic-load entry
+point. No header outside `src/NDI/Real/` names an NDIlib type: `NdiTimedTextOutput.h`
+holds the sender handle as `void*`, so even the app composition root includes only the
+contract, not the SDK.
 
 Rules that the audit enforces:
 
