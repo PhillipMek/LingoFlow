@@ -45,6 +45,7 @@ set(rt_audit_rows
     "Audio/GainStage.cpp|float GainStage::dbToLinear"
     "Audio/GainStage.cpp|void GainStage::process\\(const float\\* input"
     "Audio/AudioEngine.cpp|AudioEngine::processAudio"
+    "Audio/Asio/AsioChannelForwarding.h|ChannelArrayShape forwardActiveChannels"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceIOCallbackWithContext"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceError")
 

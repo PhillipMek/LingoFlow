@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "Audio/Asio/AsioChannelForwarding.h"
 #include "Audio/Asio/AsioDeviceInfo.h"
 #include "Platform/Asio/JuceAsioCommon.h"
 #include "Utils/Log.h"
@@ -18,6 +19,18 @@ using asio_detail::createAsioTypeOrNull;
 using asio_detail::toStdBuffers;
 using asio_detail::toStdNames;
 using asio_detail::toStdRates;
+
+/// The zero-based physical positions of the enabled bits, ascending - the same
+/// walk JUCE's own ASIO wrapper uses to build its buffer table, kept here so
+/// the callback can map driver entries by position when the driver indexes
+/// physically. Runs on the control thread only (audioDeviceAboutToStart).
+void activeChannelPositions(const juce::BigInteger& mask, std::vector<int>& out)
+{
+    out.clear();
+    for (int bit = 0; bit <= mask.getHighestBit(); ++bit)
+        if (mask[bit])
+            out.push_back(bit);
+}
 
 } // namespace
 
@@ -38,14 +51,19 @@ public:
         if (numSamples <= 0 || inputChannelData == nullptr || outputChannelData == nullptr)
             return;
 
-        // Fixed-size forwarding: views were sized in audioDeviceAboutToStart.
-        for (int channel = 0; channel < inputCount_; ++channel)
-            inputViews_[static_cast<std::size_t>(channel)] = channel < numInputChannels
-                ? inputChannelData[channel] : nullptr;
+        // Fixed-size forwarding: the views and the physical maps were built in
+        // audioDeviceAboutToStart, so per block the callback only applies the
+        // tested shape decision (Audio/Asio/AsioChannelForwarding.h). The shape
+        // flags feed nothing but the evidence line at stop: relaxed stores.
+        const auto inShape = asio::forwardActiveChannels(inputChannelData, numInputChannels,
+                                                         inputPhysical_, inputViews_);
+        const auto outShape = asio::forwardActiveChannels(outputChannelData, numOutputChannels,
+                                                          outputPhysical_, outputViews_);
 
-        for (int channel = 0; channel < outputCount_; ++channel)
-            outputViews_[static_cast<std::size_t>(channel)] = channel < numOutputChannels
-                ? outputChannelData[channel] : nullptr;
+        if (inShape == asio::ChannelArrayShape::physicallyIndexed || outShape == asio::ChannelArrayShape::physicallyIndexed)
+            sawPhysicalArrays_.store(true, std::memory_order_relaxed);
+        if (inShape == asio::ChannelArrayShape::truncated || outShape == asio::ChannelArrayShape::truncated)
+            sawTruncatedArrays_.store(true, std::memory_order_relaxed);
 
         processor_.processAudio(inputViews_.data(), outputViews_.data(), numSamples);
         blocks_.fetch_add(1, std::memory_order_relaxed);
@@ -54,10 +72,27 @@ public:
     void audioDeviceAboutToStart(juce::AudioIODevice* device) override
     {
         // Control thread: the only place allowed to allocate.
-        inputCount_ = std::max(1, device != nullptr ? device->getActiveInputChannels().countNumberOfSetBits() : 1);
-        outputCount_ = std::max(1, device != nullptr ? device->getActiveOutputChannels().countNumberOfSetBits() : 1);
-        inputViews_.assign(static_cast<std::size_t>(inputCount_), nullptr);
-        outputViews_.assign(static_cast<std::size_t>(outputCount_), nullptr);
+        inputPhysical_.clear();
+        outputPhysical_.clear();
+        if (device != nullptr)
+        {
+            activeChannelPositions(device->getActiveInputChannels(), inputPhysical_);
+            activeChannelPositions(device->getActiveOutputChannels(), outputPhysical_);
+        }
+
+        // The engine geometry this class serves guarantees at least one channel
+        // per direction (capabilities_ uses max(1, ...)), and open() has already
+        // rejected a selection outside the device's channel names, so a mask with
+        // no bits set cannot legitimately reach here. The fallback keeps the view
+        // count matching what the engine allocated; a driver that delivers nothing
+        // then arrives as null, which the engine reads as "no data".
+        if (inputPhysical_.empty())
+            inputPhysical_.push_back(0);
+        if (outputPhysical_.empty())
+            outputPhysical_.push_back(0);
+
+        inputViews_.assign(inputPhysical_.size(), nullptr);
+        outputViews_.assign(outputPhysical_.size(), nullptr);
     }
 
     void audioDeviceStopped() override {}
@@ -69,14 +104,26 @@ public:
 
     bool sawError() const noexcept { return errorFlag_.load(std::memory_order_relaxed); }
 
+    /// Which channel-array layouts the driver actually used since the last
+    /// resetArrayEvidence(): read on a control thread for the stop log line.
+    bool sawPhysicalArrays() const noexcept { return sawPhysicalArrays_.load(std::memory_order_relaxed); }
+    bool sawTruncatedArrays() const noexcept { return sawTruncatedArrays_.load(std::memory_order_relaxed); }
+    void resetArrayEvidence() noexcept
+    {
+        sawPhysicalArrays_.store(false, std::memory_order_relaxed);
+        sawTruncatedArrays_.store(false, std::memory_order_relaxed);
+    }
+
 private:
     audio::IAudioProcessor& processor_;
     std::atomic<std::uint64_t>& blocks_;
-    int inputCount_ = 1;
-    int outputCount_ = 1;
+    std::vector<int> inputPhysical_;   ///< logical input channel -> driver index
+    std::vector<int> outputPhysical_;  ///< logical output channel -> driver index
     std::vector<const float*> inputViews_;
     std::vector<float*> outputViews_;
     std::atomic<bool> errorFlag_{ false };
+    std::atomic<bool> sawPhysicalArrays_{ false };
+    std::atomic<bool> sawTruncatedArrays_{ false };
 };
 
 JuceAsioBackend::JuceAsioBackend(std::string deviceId)
@@ -244,6 +291,7 @@ bool JuceAsioBackend::start(std::string& error)
 
     callbackBlocks_.store(0, std::memory_order_relaxed);
     xrunCount_.store(0, std::memory_order_relaxed);
+    callback_->resetArrayEvidence();
 
     device_->start(callback_.get());
     state_ = audio::BackendState::running;
@@ -267,8 +315,25 @@ bool JuceAsioBackend::stop(std::string& error)
     const std::string driverError = (callback_ != nullptr && callback_->sawError())
                                         ? device_->getLastError().toStdString()
                                         : std::string();
+
+    // Code review P0 evidence: which channel-array layout the driver actually
+    // used. "compacted" is what vendored JUCE's ASIO wrapper promises today;
+    // anything else means the stack hands out physically indexed (or short)
+    // arrays - the forwarding handled it by the tested rule either way, but a
+    // venue log should state the fact, not let a reader infer it from silence.
+    const bool physical = (callback_ != nullptr && callback_->sawPhysicalArrays());
+    const bool truncated = (callback_ != nullptr && callback_->sawTruncatedArrays());
+    std::string arrays = "compacted";
+    if (physical && truncated)
+        arrays = "physically-indexed+truncated";
+    else if (physical)
+        arrays = "physically-indexed";
+    else if (truncated)
+        arrays = "truncated";
+
     log::info(kComponent, "stopped '" + deviceId_ + "' callbacks=" + std::to_string(callbackBlocks_.load())
-                              + " xruns=" + asio::describeXRunCount(xrunCount_.load()));
+                              + " xruns=" + asio::describeXRunCount(xrunCount_.load())
+                              + " channel-arrays=" + arrays);
 
     if (!driverError.empty())
         log::error(kComponent, "driver reported: " + driverError);

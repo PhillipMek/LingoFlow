@@ -7,10 +7,11 @@
 // NDI or the UI.
 //
 // Realtime contract: audioDeviceIOCallbackWithContext forwards the driver's channel
-// pointers into IAudioProcessor::processAudio. It allocates nothing, locks nothing,
-// logs nothing and touches no other subsystem. The only allocation happens in
-// audioDeviceAboutToStart, which JUCE calls on the control thread before the first
-// block.
+// pointers into IAudioProcessor::processAudio through the tested shape decision in
+// Audio/Asio/AsioChannelForwarding.h, applied against the physical channel map built
+// in audioDeviceAboutToStart. It allocates nothing, locks nothing, logs nothing and
+// touches no other subsystem. The only allocations happen in audioDeviceAboutToStart,
+// which JUCE calls on the control thread before the first block.
 //
 // open()/start()/stop()/close() run on non-realtime threads only.
 
