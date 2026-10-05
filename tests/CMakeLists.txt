@@ -47,6 +47,7 @@ add_executable(lingoflow_tests
     unit/TestMockTranslationBackend.cpp
     unit/TestReconnectSupervisor.cpp
     unit/TestApplicationController.cpp
+    unit/TestNdiDispatch.cpp
     unit/TestNdiOutput.cpp
     unit/TestSecretStores.cpp
     unit/TestTextPipeline.cpp

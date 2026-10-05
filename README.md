@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 294 tests.
+(task 019), and 309 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-294 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+309 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -111,7 +111,7 @@ Windows Credential Manager round-trip including a child-process case proving the
 is not process memory, and the controller funnel that keeps the secret out of settings,
 notes and logs; the task 016 NDI suites - the TTML document shape and escaping rules, and
 the real output's lifecycle against the machine's loaded NDI runtime (sender created,
-captions handed over, state polled, destroyed)), the task 017 diagnostics suites - the
+captions handed over, state polled, destroyed), the task 017 diagnostics suites - the
 event ring's order, bounds and announced eviction; the renderer's redaction pass with
 Config's own secret-shape predicate injected; atomic file landing; and the controller's
 full export with a canary credential proven absent; the task 018 latency accounting rows -
@@ -122,7 +122,10 @@ formats and its honest refusals, the mock backend's contract rules 1-6 with its 
 echo and dropped-at-close queue, the plan that turns a default config into NOTHING at all
 and a --dev flag into tone+mock without ever touching loopback, and the offline showpiece:
 a WAV file in, the mock echo, and a WAV file out through the real controller with no
-device and no key), the
+device and no key; plus the code-review suites of 2026-10-05 - ASIO channel forwarding
+pinned under BOTH driver-array conventions, engine defensive paths silencing every
+promised output channel against poisoned buffers, and the NDI dispatch worker proven
+producer-non-blocking against a transport frozen mid-publish), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own

@@ -525,6 +525,15 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
         { "stream_name", cfg.ndi.streamName },
         { "published_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishedFrames())
                                                      : std::string("0") },
+        // Task 016 contract, review P1 counters: "errors" is what the PRODUCER
+        // was told (not started / shutting down); dropped_frames and
+        // transport_errors are what happened after acceptance, on the dispatch
+        // side - a post-mortem must be able to tell "we chose to drop stale
+        // captions" apart from "the transport refused".
+        { "dropped_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->droppedFrames())
+                                                   : std::string("0") },
+        { "transport_errors", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishErrors())
+                                                      : std::string("0") },
         { "errors", std::to_string(diag.ndiErrors) },
     } });
 

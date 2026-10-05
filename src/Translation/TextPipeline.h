@@ -32,10 +32,14 @@
 // threads (the contract does not serialize sink callbacks). snapshot() and the
 // counters are safe from any thread. The listener fires synchronously, on the
 // ingesting thread, while the pipeline's lock is held - it must be
-// non-blocking (NDI publish is non-blocking by its own contract, task 016;
-// the controller's use below is a counter + a bounded publish). A listener
-// that blocks stalls text, never audio, because audio never traverses this
-// class.
+// bounded-cost. "Audio never traverses this class" is NOT the safety argument
+// it once claimed (code review P1, 2026-10-05): the OpenAI receiver thread
+// consumes both translated audio and translated text from one stream, so a
+// listener that blocks here stalls that thread and starves the jitter buffer
+// downstream. Every product listener honours the bound: the controller's use
+// is a counter plus an NDI publish, and NDI publish only enqueues behind its
+// own dispatch worker (NDI/NdiDispatch.h) - no network call is ever made on
+// the ingesting thread.
 //
 // Sequence: one monotonic counter per pipeline, stamped on every event the
 // pipeline actually emits (duplicates and empty finals it ignores consume no

@@ -77,6 +77,8 @@ add_library(lingoflow_core STATIC
 
     NDI/INdiOutput.cpp
     NDI/INdiOutput.h
+    NDI/NdiDispatch.cpp
+    NDI/NdiDispatch.h
     NDI/NdiTimedText.cpp
     NDI/NdiTimedText.h
     NDI/Null/NullNdiOutput.cpp

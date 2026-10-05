@@ -163,8 +163,14 @@ TranslationTextEvent TextPipeline::stampLocked(TextKind kind, std::string text)
         finalEvents_.fetch_add(1, std::memory_order_relaxed);
 
     // Documented: synchronous, under the lock, on the ingesting thread. The
-    // listener is required to be non-blocking (header); the audio path never
-    // passes here, so even a slow listener stalls text alone.
+    // listener must therefore be BOUNDED-COST, and "the audio path never
+    // passes here" is not the safety argument it pretended to be (code review
+    // P1, 2026-10-05): the OpenAI receiver thread is this product's single
+    // consumer of BOTH translated audio and translated text, so a listener
+    // that blocks stalls audio delivery one level up, no matter where the
+    // samples themselves flow. The NDI listener obeys the bound by
+    // construction - NdiDispatch enqueues and returns; the SDK runs on the
+    // dispatch worker thread (AGENTS.md 6).
     if (listener_)
         listener_(event);
 
