@@ -62,6 +62,12 @@ namespace log
     /// True if messages of the given level would be emitted.
     bool enabled(LogLevel level);
 
+    /// The product's one timestamp format: "YYYY-MM-DD HH:MM:SS.mmm" in local
+    /// time, exactly the stamp the log lines carry. For event rings and export
+    /// files that must line up with the log (task 017) - not a second format
+    /// invented nearby.
+    std::string timestampNow();
+
     /// Formats "<timestamp> [<LEVEL>] [<component>] <message>".
     /// Exposed for tests: the timestamp is passed in so output is deterministic.
     std::string formatLine(LogLevel level,

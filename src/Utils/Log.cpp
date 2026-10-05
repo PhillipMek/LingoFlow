@@ -132,6 +132,15 @@ const std::vector<LogLevel>& allLevels()
     return levels;
 }
 
+std::string timestampNow()
+{
+    // The log line's own format, exposed: an event ring or a diagnostics export
+    // stamped with a *different* clock format than the log next to it is a small
+    // lie told at audit time. One timestamp function in this product (the one
+    // above, file-local), two honest users.
+    return currentTimestamp();
+}
+
 bool enabled(LogLevel level)
 {
     auto& s = state();
