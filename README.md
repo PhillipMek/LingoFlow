@@ -7,7 +7,7 @@ SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio 
                                        ->  NDI subtitle out (optional)
 ```
 
-Status: **tasks 000-011 and 013-015, 017 and 018 complete; 012 and 016 implemented** - their
+Status: **tasks 000-011 and 013-019 complete; 012 and 016 implemented** - their
 open REQUIRED human checkpoints (012 live EN<->RU through ASIO+OpenAI; 015 key entry on
 the target machine; 016 real NDI receiver on the venue network) are run from
 `docs/rig-checklist.md`. The repository contains a JUCE/CMake
@@ -26,8 +26,9 @@ UI-facing model), the operator window (task 014: a JUCE shell over the tested Ui
 the Settings dialog with Windows-secure API-key storage (task 015), the real NDI
 timed-text subtitle output behind the contract (task 016), the bounded event ring and
 the structured diagnostics export (task 017), the honest
-latency accounting with per-row kinds and no measured numbers in code (task 018),
-and 274 tests.
+latency accounting with per-row kinds and no measured numbers in code (task 018), the
+developer & mock mode that runs the whole core without SoundGrid and without an API key
+(task 019), and 294 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -40,7 +41,9 @@ long-run/expiry and rig-routing behavior are the remaining human checkpoints (ta
 streams from the engine's input ring to the backend on a worker thread, and delivered
 audio is the only source of the output jitter buffer - what a rig still has to confirm is
 sound through a real SoundGrid path (run sheet `docs/rig-checklist.md`). Startup checks
-(`--smoke`) deliberately stay offline on the Null backend.
+(`--smoke`) deliberately stay offline on the Null backend; `--dev --smoke` (task 019) runs
+the same offline startup through the simulated tone + mock-echo chain - the proof that the
+core needs neither hardware nor a provider account.
 
 Licences are decided and binding: **JUCE 9 under AGPLv3**, **ASIO SDK under GPLv3**,
 which makes this product AGPLv3 and puts NDI behind runtime loading
@@ -95,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-274 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+294 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -114,7 +117,12 @@ Config's own secret-shape predicate injected; atomic file landing; and the contr
 full export with a canary credential proven absent; the task 018 latency accounting rows -
 kinds per row, the in-flight backlog arithmetic with its clamp and gap rules, a reporting
 driver quoted with its frames versus a silent one rendered "not reported", and the export
-shipping the same rows the screen shows), the
+shipping the same rows the screen shows; the task 019 developer suites - the WAV reader's
+formats and its honest refusals, the mock backend's contract rules 1-6 with its labelled
+echo and dropped-at-close queue, the plan that turns a default config into NOTHING at all
+and a --dev flag into tone+mock without ever touching loopback, and the offline showpiece:
+a WAV file in, the mock echo, and a WAV file out through the real controller with no
+device and no key), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own
@@ -636,6 +644,40 @@ file, from the note, and impossible by structure; redaction pass separately test
 including its honest counting), callback unaffected (the allocation gates plus the
 fact that no `src/Audio` path can even reach the ring) - is closed entirely
 headless; the task declares no human checkpoint.
+
+## Developer & mock mode (task 019)
+
+The pack asks that the core be operable and testable without hardware or a provider
+account, and that mock behaviour never leak into production. What exists for it:
+
+* `LingoFlow.exe --dev` mounts a test tone as the "device" and an **echo translator**
+  in place of the OpenAI chain: no ASIO device is opened, no key is read, no socket is
+  created - while the windowed app runs its full pipeline (capture rings, streaming
+  worker, sink checks, jitter pre-roll, meters, counters, the 018 accounting). Combined
+  with `--smoke` it is the offline startup proof; the settings file is never rewritten
+  by the flag, and `--dev` never enables loopback - routing a room's microphones to its
+  own speakers stays a settings-level, two-intentional-clicks decision.
+* The settings gain a `developer` section (round-tripped, repaired per field, absent =
+  off): audio source `device|wav|tone`, WAV input and rehearsal-recording paths, mock
+  echo delay, loopback. `App/DeveloperMode.h`'s `developerPlan()` is the ONE
+  interpretation: the composition root mounts from it, the controller gates loopback
+  and streaming through it, the badge and the export render it - and a default config
+  plans nothing at all (asserted, not trusted).
+* `Audio/Dev/SimulatedDeviceBackend` is a real `IAudioBackend`: its worker paces blocks
+  at the configured block time and counts its own lateness honestly (a rehearsal drift
+  is reported as simulator pacing, never claimed as audio timing). The WAV backend
+  refuses a file whose rate disagrees with the settings instead of resampling silently.
+* `Translation/Mock/MockTranslationBackend` honours the task 007 contract rules 1-6 -
+  the same lifecycle tests the supervisor runs against the real seam apply - and every
+  text event it emits begins with "mock" and says "no model ran", because a mock that
+  could be mistaken for a translation is the one thing this product must never ship.
+* Isolation visible everywhere: the operator screen carries a red DEVELOPER MODE band
+  (loopback suffix reports the worker's real state, not the wish), the log opens with
+  `DEVELOPER MODE: <badge>`, and the diagnostics export ships a `[developer]` section
+  so any venue report can answer "was that a mock run?" from the file alone.
+* The 018 in-flight backlog row gains a ground truth here: the mock's configured delay
+  is known, so the "audio in the translator path" arithmetic can be verified offline
+  against a deliberate latency.
 
 ## Honest latency accounting (task 018)
 

@@ -379,6 +379,17 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   it, driver answers pass through `DeviceCapabilities`, and the network+model row is
   one computed backlog because the provider API offers no timestamp to split it with
   - an honest combination, not an invented separation.
+* Task 019's developer/mock mode is isolation by construction, not by care: the
+  simulated devices (`Audio/Dev`), the echo translator (`Translation/Mock`) and the
+  WAV module (`Utils`) obey the existing include direction and the realtime audit's
+  function table unchanged (they are worker-thread code, and the audit table is the
+  proof). The ONLY path from settings to their mounting is `App/DeveloperMode.h`'s
+  `developerPlan()` - one pure interpretation that the composition root executes, the
+  controller consults for loopback and streaming, and the badge and the export render;
+  a default configuration plans nothing (tested), an absent config section means off
+  (tested), and `--dev` never reaches loopback (tested). The mock names itself in
+  every event because a mock mistaken for a translation is the failure this boundary
+  exists to prevent.
 * Task 017 extends the same one-funnel idea downward into diagnostics: the audio
   callback's only voice remains the relaxed-atomic counters, transitions are
   *narrated* into the bounded event ring from worker/UI threads (`noteEvent`, and
