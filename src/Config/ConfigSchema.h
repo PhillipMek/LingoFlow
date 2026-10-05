@@ -52,6 +52,15 @@ namespace config {
     /// (0 disables the proactive reopen).
     std::pair<int, int> sessionMaxAgeRange() noexcept;
 
+    /// Bounds validate() accepts for the task 019 developer fields: the mock
+    /// echo delay (ms), the test-tone frequency (Hz) and level (dBFS).
+    std::pair<int, int> mockLatencyRange() noexcept;
+    std::pair<double, double> toneFrequencyRange() noexcept;
+    std::pair<double, double> toneLevelRangeDb() noexcept;
+
+    /// The audioSource values validate() accepts, for building a selector.
+    std::vector<std::string> developerAudioSources();
+
     /// The longest instructions string validate() accepts, characters.
     std::size_t maxInstructionsLength() noexcept;
 

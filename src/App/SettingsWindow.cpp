@@ -121,6 +121,49 @@ SettingsContent::SettingsContent(ApplicationController& controller)
                               juce::NotificationType::dontSendNotification);
     addAndMakeVisible(restartHintLabel_);
 
+    // ------------------------------------------------------- developer mode (019)
+    caption(developerCaption_,
+            "DEVELOPER / MOCK MODE - off is the real chain; while off, nothing below does anything",
+            *this);
+
+    developerToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(developerToggle_);
+
+    caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", *this);
+    addAndMakeVisible(devSourceChoice_);
+
+    caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", *this);
+    editor(devWavInEditor_, *this);
+
+    caption(devWavOutCaption_, "Rehearsal recording WAV (empty = do not record)", *this);
+    editor(devWavOutEditor_, *this);
+
+    mockToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(mockToggle_);
+
+    const auto [mockMin, mockMax] = config::mockLatencyRange();
+    caption(mockLatencyCaption_, "Mock echo delay (ms) - known ground truth for the in-flight row", *this);
+    slider(devMockLatencySlider_, mockMin, mockMax, 10, *this);
+
+    caption(devToneFreqCaption_, "Test tone frequency (Hz)", *this);
+    const auto [toneMin, toneMax] = config::toneFrequencyRange();
+    slider(devToneFreqSlider_, toneMin, toneMax, 10, *this);
+
+    caption(devToneLevelCaption_, "Test tone level (dBFS)", *this);
+    const auto [levelMin, levelMax] = config::toneLevelRangeDb();
+    slider(devToneLevelSlider_, levelMin, levelMax, 1, *this);
+
+    loopbackToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(loopbackToggle_);
+
+    developerHintLabel_.setFont(uiFont(11.0f));
+    developerHintLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    developerHintLabel_.setText("Mounted at application start: source, mock and loopback edits take "
+                                "effect on restart. Loopback plays the capture to the audience and "
+                                "leaves the translator unfed - never enable it with a live room.",
+                                juce::NotificationType::dontSendNotification);
+    addAndMakeVisible(developerHintLabel_);
+
     applyButton_.onClick = [this] { applyPressed(); };
     addAndMakeVisible(applyButton_);
 
@@ -184,6 +227,22 @@ void SettingsContent::applyPressed()
     }
 
     candidate.diagnostics.writeLogFile = logFileToggle_.getToggleState();
+
+    candidate.developer.enabled = developerToggle_.getToggleState();
+
+    if (const int index = devSourceChoice_.getSelectedItemIndex();
+        index >= 0 && static_cast<std::size_t> (index) < devSourceCache_.size())
+    {
+        candidate.developer.audioSource = devSourceCache_[static_cast<std::size_t> (index)];
+    }
+
+    candidate.developer.wavInputPath = devWavInEditor_.getText().toStdString();
+    candidate.developer.wavOutputPath = devWavOutEditor_.getText().toStdString();
+    candidate.developer.mockTranslation = mockToggle_.getToggleState();
+    candidate.developer.mockLatencyMs = static_cast<int> (devMockLatencySlider_.getValue());
+    candidate.developer.toneFrequencyHz = devToneFreqSlider_.getValue();
+    candidate.developer.toneLevelDb = devToneLevelSlider_.getValue();
+    candidate.developer.loopback = loopbackToggle_.getToggleState();
 
     std::string note;
     controller_.updateSettings(candidate, note);
@@ -252,6 +311,48 @@ void SettingsContent::refreshFromSettings()
     logFileToggle_.setToggleState(cfg.diagnostics.writeLogFile,
                                   juce::NotificationType::dontSendNotification);
 
+    // ------------------------------------------------------- developer mode (019)
+    developerToggle_.setToggleState(cfg.developer.enabled, juce::NotificationType::dontSendNotification);
+    mockToggle_.setToggleState(cfg.developer.mockTranslation, juce::NotificationType::dontSendNotification);
+    loopbackToggle_.setToggleState(cfg.developer.loopback, juce::NotificationType::dontSendNotification);
+
+    // The schema's own list builds the selector - the UI again owns no vocabulary.
+    const auto sources = config::developerAudioSources();
+
+    if (devSourceCache_ != sources)
+    {
+        devSourceChoice_.clear(juce::NotificationType::dontSendNotification);
+
+        for (std::size_t i = 0; i < sources.size(); ++i)
+        {
+            const std::string_view value = sources[i];
+            devSourceChoice_.addItem(juce::String(value == "device" ? "ASIO device (real)"
+                                                       : value == "wav"   ? "WAV file (simulated)"
+                                                                            : "Test tone (simulated)"),
+                                     static_cast<int> (i) + 1);
+        }
+
+        devSourceCache_ = sources;
+    }
+
+    for (std::size_t i = 0; i < devSourceCache_.size(); ++i)
+    {
+        if (devSourceCache_[i] == cfg.developer.audioSource)
+        {
+            devSourceChoice_.setSelectedId(static_cast<int> (i) + 1,
+                                           juce::NotificationType::dontSendNotification);
+            break;
+        }
+    }
+
+    devWavInEditor_.setText(juce::String(cfg.developer.wavInputPath),
+                            juce::NotificationType::dontSendNotification);
+    devWavOutEditor_.setText(juce::String(cfg.developer.wavOutputPath),
+                             juce::NotificationType::dontSendNotification);
+    devMockLatencySlider_.setValue(cfg.developer.mockLatencyMs, juce::NotificationType::dontSendNotification);
+    devToneFreqSlider_.setValue(cfg.developer.toneFrequencyHz, juce::NotificationType::dontSendNotification);
+    devToneLevelSlider_.setValue(cfg.developer.toneLevelDb, juce::NotificationType::dontSendNotification);
+
     credStatusLabel_.setText(juce::String(presenceLine(controller_)),
                              juce::NotificationType::dontSendNotification);
 
@@ -293,6 +394,36 @@ void SettingsContent::resized()
     credStatusLabel_.setBounds(credRow);
     keyHintLabel_.setBounds(bounds.removeFromTop(26));
     bounds.removeFromTop(6);
+
+    // --- developer / mock band across the bottom (task 019)
+    auto devBand = bounds.removeFromBottom(246);
+    devBand.removeFromTop(6);
+    developerCaption_.setBounds(devBand.removeFromTop(16));
+    developerToggle_.setBounds(devBand.removeFromTop(24));
+    developerHintLabel_.setBounds(devBand.removeFromBottom(28));
+
+    auto devCols = devBand;
+    auto devLeft = devCols.removeFromLeft(devCols.getWidth() / 2);
+    auto devRight = devCols;
+    devRight.removeFromLeft(12);
+
+    devSourceCaption_.setBounds(devLeft.removeFromTop(16));
+    devSourceChoice_.setBounds(devLeft.removeFromTop(26));
+    devLeft.removeFromTop(4);
+    devWavInCaption_.setBounds(devLeft.removeFromTop(16));
+    devWavInEditor_.setBounds(devLeft.removeFromTop(26));
+    devLeft.removeFromTop(4);
+    devWavOutCaption_.setBounds(devLeft.removeFromTop(16));
+    devWavOutEditor_.setBounds(devLeft.removeFromTop(26));
+
+    mockToggle_.setBounds(devRight.removeFromTop(24));
+    mockLatencyCaption_.setBounds(devRight.removeFromTop(16));
+    devMockLatencySlider_.setBounds(devRight.removeFromTop(26));
+    devToneFreqCaption_.setBounds(devRight.removeFromTop(16));
+    devToneFreqSlider_.setBounds(devRight.removeFromTop(26));
+    devToneLevelCaption_.setBounds(devRight.removeFromTop(16));
+    devToneLevelSlider_.setBounds(devRight.removeFromTop(26));
+    loopbackToggle_.setBounds(devRight.removeFromTop(24));
 
     auto body = bounds;
     auto left = body.removeFromLeft(body.getWidth() / 2);
@@ -350,8 +481,10 @@ SettingsWindow::SettingsWindow(ApplicationController& controller)
     setContentOwned(content, true);
 
     setResizable(true, true);
-    setResizeLimits(680, 520, 4000, 4000);
-    setSize(780, 620);
+    // Task 019 grew the content: the credentials header, two columns and the
+    // developer band across the bottom need the extra height.
+    setResizeLimits(720, 780, 4000, 4000);
+    setSize(820, 860);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

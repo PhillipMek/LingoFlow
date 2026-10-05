@@ -19,6 +19,14 @@
 //             the Null translation backend: a startup check must not open network
 //             sockets or provider sessions (deterministic, cost-free, offline-
 //             capable), the windowed run is what mounts the real chain.
+//   --dev     developer mode (task 019) regardless of the settings file: the test
+//             tone becomes the "device", the mock echo becomes the translator,
+//             no OpenAI session is opened and no ASIO device is touched. It does
+//             NOT rewrite the settings file, and it never enables loopback - a
+//             microphone routed to its own room's speakers is a settings-level,
+//             two-intentional-clicks decision, never a flag side effect. Combined
+//             with --smoke it is the offline proof that the core runs without
+//             hardware and without an API key.
 //
 // The windowed run (task 014) opens the operator screen: status chips, device /
 // language / format selectors, live meters and gain, jitter pre-roll, counters
@@ -44,10 +52,13 @@
 #include <string>
 
 #include "App/ApplicationController.h"
+#include "App/DeveloperMode.h"
 #include "App/OperatorWindow.h"
+#include "Audio/Dev/SimulatedDeviceBackend.h"
 #include "Config/ConfigStore.h"
 #include "Platform/Asio/AsioDiscovery.h"
 #include "Platform/Asio/JuceAsioBackend.h"
+#include "Translation/Mock/MockTranslationBackend.h"
 #include "Utils/Log.h"
 
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
@@ -191,6 +202,7 @@ public:
     void initialise(const juce::String& commandLineParameters) override
     {
         const bool smoke = commandLineParameters.containsIgnoreCase("--smoke");
+        const bool dev = commandLineParameters.containsIgnoreCase("--dev");
 
         // A windowed GUI process has no usable console, so the file sink is the
         // source of truth for automated startup checks. Start from the operator
@@ -250,8 +262,65 @@ public:
         // the ASIO registry only; it never loads a driver.
         controller_.setDeviceLister([] { return liveai::platform::scanAsioDevices().devices; });
 
+        // Task 019: one plan, computed here from the loaded settings (plus the
+        // --dev forcing), handed to the controller as the mounted authority and
+        // executed by the mounts below. Production defaults - no forcing, and a
+        // settings file whose developer section is absent or off - produce a
+        // plan that mounts NOTHING, so every line below is inert in a real run
+        // unless somebody asked for it with hands on a switch.
+        const liveai::DeveloperPlan plan =
+            liveai::developerPlan(controller_.config().current(), dev);
+        controller_.setDeveloperPlan(plan);
+
+        if (plan.enabled)
+        {
+            liveai::log::warning(kLogComponent, "DEVELOPER MODE: " + plan.badge);
+
+            for (const auto& note : plan.notes)
+                liveai::log::warning(kLogComponent, "developer plan note: " + note);
+        }
+
+        if (plan.useWavSource)
+        {
+            controller_.setAudioBackend(std::make_unique<liveai::audio::WavFileAudioBackend>(
+                plan.wavInputPath, plan.wavOutputPath));
+            liveai::log::info(kLogComponent,
+                              "developer mode: WAV file '" + plan.wavInputPath
+                                  + "' mounted as the audio source - no ASIO device will be opened");
+        }
+        else if (plan.useToneSource)
+        {
+            controller_.setAudioBackend(std::make_unique<liveai::audio::TestToneAudioBackend>(
+                plan.toneFrequencyHz, plan.toneLevelDb, plan.wavOutputPath));
+            liveai::log::info(kLogComponent, "developer mode: test tone mounted as the audio source "
+                                             "- no ASIO device will be opened");
+        }
+
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
-        if (smoke)
+        // The credential store serves the Settings dialog and the real backend
+        // alike; a windowed run installs it even when the mock replaces the
+        // backend, because entering a key is never a developer-mode privilege.
+        // Smoke skips it: reading stores is not something a startup check needs.
+        if (!smoke)
+            installCredentialStores();
+#endif
+
+        if (plan.mockTranslation)
+        {
+            // Mounted even in builds without the network module: the mock needs
+            // no provider and no key - that is precisely its purpose.
+            liveai::translation::MockTranslationBackend::Options options;
+            options.latencyMs = plan.mockLatencyMs;
+
+            controller_.setTranslationBackend(
+                std::make_unique<liveai::translation::MockTranslationBackend>(std::move(options)));
+
+            liveai::log::warning(kLogComponent,
+                                 "developer mode: mock echo translation mounted - no OpenAI backend "
+                                 "will be constructed and no provider session will be opened");
+        }
+#ifdef LINGOFLOW_WITH_OPENAI_BACKEND
+        else if (smoke)
             liveai::log::info(kLogComponent,
                               "smoke mode: the translation backend stays Null - a startup check must not "
                               "open network sockets or provider sessions");
@@ -307,21 +376,18 @@ public:
 
 private:
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
-    /// Mounts the production translation chain (task 012): the real backend of
-    /// task 009 inside the recovery supervisor of task 010, its policy built from
-    /// the operator's settings. From here up the application sees only the task
-    /// 007 contract - the OpenAI names stop at this composition root.
-    void installProductionTranslation()
+    /// Mounts the credential store chain (task 015): the Windows Credential
+    /// Manager is the primary store - a key the operator enters in Settings is
+    /// written there by the OS, encrypted and restart-proof - and the
+    /// environment variable keeps the exact role AGENTS.md 10 gave it: a
+    /// development path. The chain reads the store first (a stored key wins)
+    /// and writes only to the store (the environment is not the product's to
+    /// rewrite). Idempotent: whoever needs the store calls this first.
+    void installCredentialStores()
     {
-        const auto& cfg = controller_.config().current().translation;
+        if (secretStore_ != nullptr)
+            return;
 
-        // Task 015: the key now has a production home. The Windows Credential
-        // Manager is the primary store - a key the operator enters in Settings
-        // is written there by the OS, encrypted and restart-proof - and the
-        // environment variable keeps the exact role AGENTS.md 10 gave it: a
-        // development path. The chain reads the store first (a stored key wins)
-        // and writes only to the store (the environment is not the product's
-        // to rewrite).
         windowsStore_ = std::make_unique<liveai::security::WindowsCredentialStore>();
         devStore_ = std::make_unique<EnvironmentSecretStore>();
         secretStore_ = std::make_unique<liveai::security::ChainedSecretStore>(*windowsStore_,
@@ -345,6 +411,17 @@ private:
             liveai::log::info(kLogComponent,
                               "translation: OpenAI credential found ("
                                   + std::string(secretStore_->name()) + ")");
+    }
+
+    /// Mounts the production translation chain (task 012): the real backend of
+    /// task 009 inside the recovery supervisor of task 010, its policy built from
+    /// the operator's settings. From here up the application sees only the task
+    /// 007 contract - the OpenAI names stop at this composition root.
+    void installProductionTranslation()
+    {
+        installCredentialStores();
+
+        const auto& cfg = controller_.config().current().translation;
 
         liveai::network::OpenAIRealtimeOptions options; // documented defaults, no invented overrides
 

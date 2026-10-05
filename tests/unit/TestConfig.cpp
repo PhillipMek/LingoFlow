@@ -124,6 +124,114 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.diagnostics.writeLogFile == original.diagnostics.writeLogFile);
 }
 
+TEST_CASE("ConfigSchema: developer fields round-trip", "[config][schema][developer]")
+{
+    AppConfig cfg = config::defaults();
+    cfg.developer.enabled = true;
+    cfg.developer.audioSource = "wav";
+    cfg.developer.wavInputPath = "D:\\rehearsal\\input.wav";
+    cfg.developer.wavOutputPath = "D:\\rehearsal\\record.wav";
+    cfg.developer.toneFrequencyHz = 440.0;
+    cfg.developer.toneLevelDb = -18.0;
+    cfg.developer.mockTranslation = true;
+    cfg.developer.mockLatencyMs = 800;
+    cfg.developer.loopback = true;
+
+    const std::string text = config::toJsonText(cfg);
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, restored, problems, error));
+    CHECK(problems.empty());
+    CHECK(restored.developer == cfg.developer);
+    CHECK(restored.developer.enabled);
+    CHECK(restored.developer.audioSource == "wav");
+    CHECK(restored.developer.mockLatencyMs == 800);
+    CHECK(restored.developer.loopback);
+}
+
+TEST_CASE("ConfigSchema: a config file predating the developer section loads as developer-off",
+          "[config][schema][developer][isolation]")
+{
+    // Task 019's isolation runs down into the storage layer: an installation
+    // that never touched developer mode keeps running the real chain after the
+    // update - the absent section means "off", there is no absent-means-on path.
+    const std::string text =
+        R"({"schemaVersion":1,"audio":{"sampleRate":48000,"bufferFrames":480},)"
+        R"("translation":{"inputLanguage":"en","outputLanguage":"ru"},)"
+        R"("ndi":{"enabled":false,"streamName":"LingoFlow"},)"
+        R"("diagnostics":{"logLevel":"info","writeLogFile":true}})";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, restored, problems, error));
+    CHECK(problems.empty());
+
+    CHECK_FALSE(restored.developer.enabled);
+    CHECK(restored.developer.audioSource == "device");
+    CHECK_FALSE(restored.developer.mockTranslation);
+    CHECK_FALSE(restored.developer.loopback);
+}
+
+TEST_CASE("ConfigSchema: developer values are validated and repaired per field",
+          "[config][schema][developer]")
+{
+    // A nonsense source, an out-of-bounds mock delay and an incoherent
+    // wav-without-file: every one gets its own report, defaults come back for
+    // the offending fields, and the valid ones (enabled, mock) stay.
+    const std::string text =
+        R"({"developer":{"enabled":true,"audioSource":"flac","mockLatencyMs":99999,)"
+        R"("toneFrequencyHz":0,"wavOutputPath":"ok.wav","mockTranslation":true}})";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, restored, problems, error));
+
+    CHECK(restored.developer.enabled);          // untouched: not a listed problem
+    CHECK(restored.developer.mockTranslation);  // untouched
+    CHECK(restored.developer.audioSource == "device");   // repaired
+    CHECK(restored.developer.mockLatencyMs == 300);      // repaired
+    CHECK(restored.developer.toneFrequencyHz == 1000.0); // repaired
+    CHECK(restored.developer.wavOutputPath == "ok.wav"); // untouched
+
+    const auto names = [](const ConfigProblems& list)
+    {
+        std::string joined;
+        for (const auto& problem : list)
+            joined += problem.field + ";";
+        return joined;
+    };
+
+    const std::string reported = names(problems);
+    CHECK(reported.find("developer.audioSource") != std::string::npos);
+    CHECK(reported.find("developer.mockLatencyMs") != std::string::npos);
+    CHECK(reported.find("developer.toneFrequencyHz") != std::string::npos);
+}
+
+TEST_CASE("ConfigStore: the developer section survives a real file round-trip",
+          "[config][store][developer]")
+{
+    livetest::TempDirectory temp;
+    const auto file = temp.file("config.json");
+
+    AppConfig cfg = config::defaults();
+    cfg.developer.enabled = true;
+    cfg.developer.audioSource = "tone";
+    cfg.developer.toneLevelDb = -12.0;
+
+    config::ConfigStore store(file);
+    std::string error;
+    REQUIRE(store.save(cfg, error));
+
+    const auto loaded = store.load();
+    CHECK(loaded.outcome == config::LoadOutcome::loaded);
+    CHECK(loaded.config.developer == cfg.developer);
+    CHECK(loaded.config.developer.audioSource == "tone");
+}
+
 TEST_CASE("ConfigSchema: recovery policy fields validate and repair per field",
           "[config][schema][recovery]")
 {

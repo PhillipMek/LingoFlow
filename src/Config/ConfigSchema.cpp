@@ -33,6 +33,15 @@ constexpr std::size_t kMaxIdentifierLength = 64;
 constexpr std::size_t kMaxDeviceIdLength = 256;
 constexpr std::size_t kMaxLanguageTagLength = 12;
 
+// Task 019 developer-mode bounds. The paths ride the same shape rule as device
+// identifiers (bounded, control-character-free) - a settings field is never a
+// license for an unbounded string, even a "only ever dev" one.
+constexpr int kMaxMockLatencyMs = 5000;
+constexpr double kMinToneFrequencyHz = 20.0;
+constexpr double kMaxToneFrequencyHz = 20000.0;
+constexpr double kMinToneLevelDb = -60.0;
+constexpr double kMaxToneLevelDb = 0.0;
+
 const std::set<int> kSupportedSampleRates{ 44100, 48000, 88200, 96000 };
 
 bool hasControlCharacter(std::string_view text)
@@ -203,6 +212,26 @@ std::pair<int, int> sessionMaxAgeRange() noexcept
     return { 0, kMaxSessionAgeSeconds };
 }
 
+std::pair<int, int> mockLatencyRange() noexcept
+{
+    return { 0, kMaxMockLatencyMs };
+}
+
+std::pair<double, double> toneFrequencyRange() noexcept
+{
+    return { kMinToneFrequencyHz, kMaxToneFrequencyHz };
+}
+
+std::pair<double, double> toneLevelRangeDb() noexcept
+{
+    return { kMinToneLevelDb, kMaxToneLevelDb };
+}
+
+std::vector<std::string> developerAudioSources()
+{
+    return { "device", "wav", "tone" };
+}
+
 std::size_t maxInstructionsLength() noexcept
 {
     return kMaxInstructionsLength;
@@ -308,6 +337,59 @@ ConfigProblems validate(const AppConfig& candidate)
         problems.push_back(ConfigProblem{ "diagnostics.logLevel",
                                           "unknown log level '" + candidate.diagnostics.logLevel + "'" });
 
+    // Developer mode (task 019): the SHAPE is validated always - a nonsense
+    // field is repaired even in the disabled state, so switching developer mode
+    // on later cannot resurrect a typo the operator made months ago. Whether
+    // the values MEAN anything is decided elsewhere (App/DeveloperMode.h),
+    // where everything but `enabled` is inert while it is false.
+    const auto& developer = candidate.developer;
+
+    const auto developerSources = developerAudioSources();
+
+    if (!developerSources.empty()
+        && std::find(developerSources.begin(), developerSources.end(), developer.audioSource)
+               == developerSources.end())
+        problems.push_back(ConfigProblem{ "developer.audioSource",
+                                          "audio source must be one of device, wav, tone (got '"
+                                              + developer.audioSource + "')" });
+
+    const auto pathOk = [](const std::string& path)
+    { return path.size() <= kMaxDeviceIdLength && !hasControlCharacter(path); };
+
+    if (!developer.wavInputPath.empty() && !pathOk(developer.wavInputPath))
+        problems.push_back(ConfigProblem{ "developer.wavInputPath",
+                                          "a WAV path must stay under 256 characters with no control characters" });
+
+    if (!developer.wavOutputPath.empty() && !pathOk(developer.wavOutputPath))
+        problems.push_back(ConfigProblem{ "developer.wavOutputPath",
+                                          "a WAV path must stay under 256 characters with no control characters" });
+
+    if (!std::isfinite(developer.toneFrequencyHz)
+        || developer.toneFrequencyHz < kMinToneFrequencyHz
+        || developer.toneFrequencyHz > kMaxToneFrequencyHz)
+        problems.push_back(ConfigProblem{ "developer.toneFrequencyHz",
+                                          "test tone frequency must be between "
+                                              + std::to_string(static_cast<int>(kMinToneFrequencyHz)) + " and "
+                                              + std::to_string(static_cast<int>(kMaxToneFrequencyHz)) + " Hz" });
+
+    if (!std::isfinite(developer.toneLevelDb) || developer.toneLevelDb < kMinToneLevelDb
+        || developer.toneLevelDb > kMaxToneLevelDb)
+        problems.push_back(ConfigProblem{ "developer.toneLevelDb",
+                                          "test tone level must be between -60 and 0 dBFS" });
+
+    if (developer.mockLatencyMs < 0 || developer.mockLatencyMs > kMaxMockLatencyMs)
+        problems.push_back(ConfigProblem{ "developer.mockLatencyMs",
+                                          "mock latency must be between 0 and "
+                                              + std::to_string(kMaxMockLatencyMs) + " ms" });
+
+    // An incoherent combination is refused here, not discovered at Start: a
+    // WAV source needs the file. ("enabled" matters: the same fields while
+    // developer mode sleeps are inert but shape-checked above; requiring the
+    // path only when the mode lives keeps old files loadable.)
+    if (developer.enabled && developer.audioSource == "wav" && developer.wavInputPath.empty())
+        problems.push_back(ConfigProblem{ "developer.wavInputPath",
+                                          "developer mode asks for a WAV source but names no file" });
+
     return problems;
 }
 
@@ -355,6 +437,16 @@ std::string toJsonText(const AppConfig& settings)
             { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds } } },
         { "ndi", { { "enabled", settings.ndi.enabled }, { "streamName", settings.ndi.streamName } } },
         { "diagnostics", { { "logLevel", settings.diagnostics.logLevel }, { "writeLogFile", settings.diagnostics.writeLogFile } } },
+        { "developer",
+          { { "enabled", settings.developer.enabled },
+            { "audioSource", settings.developer.audioSource },
+            { "wavInputPath", settings.developer.wavInputPath },
+            { "wavOutputPath", settings.developer.wavOutputPath },
+            { "toneFrequencyHz", settings.developer.toneFrequencyHz },
+            { "toneLevelDb", settings.developer.toneLevelDb },
+            { "mockTranslation", settings.developer.mockTranslation },
+            { "mockLatencyMs", settings.developer.mockLatencyMs },
+            { "loopback", settings.developer.loopback } } },
     };
 
     return root.dump(2) + "\n";
@@ -410,7 +502,8 @@ bool fromJsonText(std::string_view text,
 
     scanForSecretKeys(root, "");
 
-    static const std::set<std::string> kRootKeys{ "schemaVersion", "audio", "translation", "ndi", "diagnostics" };
+    static const std::set<std::string> kRootKeys{ "schemaVersion", "audio", "translation", "ndi", "diagnostics",
+                                                  "developer" };
     reportUnknownKeys(root, "", kRootKeys, problems);
 
     readNumber<std::uint32_t>(root, "schemaVersion", "schemaVersion", out.schemaVersion, problems);
@@ -474,6 +567,30 @@ bool fromJsonText(std::string_view text,
         readBool(*section, "writeLogFile", "diagnostics.writeLogFile", out.diagnostics.writeLogFile, problems);
     }
 
+    // Absent section = every field keeps its default, and the defaults say
+    // "developer mode off, real chain" - which is why files written before this
+    // section existed load into production behaviour untouched (task 019's
+    // isolation rule works on the storage level too, not only at mount time).
+    if (const auto* section = findSection(root, "developer", problems); section != nullptr)
+    {
+        static const std::set<std::string> kKeys{ "enabled",           "audioSource",   "wavInputPath",
+                                                  "wavOutputPath",     "toneFrequencyHz", "toneLevelDb",
+                                                  "mockTranslation",   "mockLatencyMs",  "loopback" };
+        reportUnknownKeys(*section, "developer", kKeys, problems);
+
+        auto& developer = out.developer;
+        readBool(*section, "enabled", "developer.enabled", developer.enabled, problems);
+        readString(*section, "audioSource", "developer.audioSource", developer.audioSource, problems);
+        readString(*section, "wavInputPath", "developer.wavInputPath", developer.wavInputPath, problems);
+        readString(*section, "wavOutputPath", "developer.wavOutputPath", developer.wavOutputPath, problems);
+        readNumber<double>(*section, "toneFrequencyHz", "developer.toneFrequencyHz", developer.toneFrequencyHz,
+                           problems);
+        readNumber<double>(*section, "toneLevelDb", "developer.toneLevelDb", developer.toneLevelDb, problems);
+        readBool(*section, "mockTranslation", "developer.mockTranslation", developer.mockTranslation, problems);
+        readNumber<int>(*section, "mockLatencyMs", "developer.mockLatencyMs", developer.mockLatencyMs, problems);
+        readBool(*section, "loopback", "developer.loopback", developer.loopback, problems);
+    }
+
     // Values that parsed but are not usable: keep the file as it is, restore the
     // default for every offending field and report each one instead of hiding it.
     struct Repair
@@ -531,6 +648,30 @@ bool fromJsonText(std::string_view text,
               c.ndi.enabled = d.ndi.enabled;
           } },
         { "diagnostics.logLevel", [](AppConfig& c, const AppConfig& d) { c.diagnostics.logLevel = d.diagnostics.logLevel; } },
+        { "developer.audioSource",
+          [](AppConfig& c, const AppConfig& d)
+          {
+              c.developer.audioSource = d.developer.audioSource;
+              c.developer.wavInputPath = d.developer.wavInputPath;
+          } },
+        { "developer.wavInputPath",
+          [](AppConfig& c, const AppConfig& d)
+          {
+              c.developer.wavInputPath = d.developer.wavInputPath;
+
+              // The empty-path-while-source-is-wav repair has to move the source
+              // too, or the restored file stays as incoherent as the refused one.
+              if (c.developer.audioSource == "wav")
+                  c.developer.audioSource = d.developer.audioSource;
+          } },
+        { "developer.wavOutputPath",
+          [](AppConfig& c, const AppConfig& d) { c.developer.wavOutputPath = d.developer.wavOutputPath; } },
+        { "developer.toneFrequencyHz",
+          [](AppConfig& c, const AppConfig& d) { c.developer.toneFrequencyHz = d.developer.toneFrequencyHz; } },
+        { "developer.toneLevelDb",
+          [](AppConfig& c, const AppConfig& d) { c.developer.toneLevelDb = d.developer.toneLevelDb; } },
+        { "developer.mockLatencyMs",
+          [](AppConfig& c, const AppConfig& d) { c.developer.mockLatencyMs = d.developer.mockLatencyMs; } },
     };
 
     for (const auto& problem : validate(out))

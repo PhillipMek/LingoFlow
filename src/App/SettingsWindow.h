@@ -77,10 +77,26 @@ private:
     juce::ComboBox logLevelChoice_;
     juce::ToggleButton logFileToggle_ { "Write the log file" };    juce::Label restartHintLabel_;
 
+    // ------------------------------------------------- developer / mock mode (019)
+    // The whole band renders inert unless developer mode is enabled - that is
+    // the plan's job, not the widgets'; here the rule is only that the draft
+    // carries exactly what is on screen and the hint states when edits count.
+    juce::Label developerCaption_, devSourceCaption_, devWavInCaption_, devWavOutCaption_,
+                mockLatencyCaption_, developerHintLabel_;
+    juce::ToggleButton developerToggle_ { "Developer mode (simulated source / mock translation / loopback)" };
+    juce::ToggleButton mockToggle_ { "Mock translation: echo + labelled mock text, no provider session" };
+    juce::ToggleButton loopbackToggle_ { "Loopback: capture to the audience; the translator is NOT fed" };
+    juce::ComboBox devSourceChoice_;
+    juce::TextEditor devWavInEditor_, devWavOutEditor_;
+    juce::Slider devMockLatencySlider_;
+    juce::Label devToneFreqCaption_, devToneLevelCaption_;
+    juce::Slider devToneFreqSlider_, devToneLevelSlider_;
+
     juce::TextButton applyButton_ { "Apply settings" };
     juce::Label noteLabel_;
 
     std::vector<UiOption> logLevelCache_;
+    std::vector<std::string> devSourceCache_;   ///< developer.audioSource values, schema's list
     bool updatingWidgets_ = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SettingsContent)

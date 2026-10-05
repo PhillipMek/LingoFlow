@@ -143,6 +143,34 @@ void ApplicationController::setNdiOutput(std::unique_ptr<ndi::INdiOutput> output
     ndiOutput_ = std::move(output);
 }
 
+void ApplicationController::setDeveloperPlan(DeveloperPlan plan)
+{
+    if (state_ != ApplicationState::stopped)
+    {
+        // The plan decides what gets MOUNTED at start; swapping it under a
+        // running pipeline would leave the running world and the plan telling
+        // different stories, so the pipeline goes down first - the same
+        // discipline as every other injection seam.
+        log::warning(kComponent, "developer plan replaced while not stopped - stopping first");
+        stop();
+    }
+
+    devPlan_ = std::move(plan);
+
+    if (devPlan_.enabled)
+        log::warning(kComponent, "developer plan mounted: " + devPlan_.badge);
+}
+
+bool ApplicationController::loopbackActive() const noexcept
+{
+    return loopback_ != nullptr && loopback_->running();
+}
+
+std::uint64_t ApplicationController::loopbackTransferredFrames() const noexcept
+{
+    return loopback_ != nullptr ? loopback_->transferredFrames() : 0;
+}
+
 void ApplicationController::setDeviceLister(DeviceLister lister)
 {
     deviceLister_ = std::move(lister);
@@ -200,6 +228,7 @@ void ApplicationController::setJitterLive(int jitterMs) noexcept
 
 bool ApplicationController::updateSettings(const AppConfig& candidate, std::string& note)
 {
+    const auto previous = config_.current();
     std::string error;
 
     if (!config_.update(candidate, error))
@@ -239,6 +268,12 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
                "the application restarts.";
     else
         note = "settings are active for this run but were NOT saved: " + saveError;
+
+    // Task 019: developer mode is a MOUNTING decision - backends are chosen
+    // when the composition root builds the world, and the plan snapshot the
+    // running app holds does not change under its feet. Say it, do not hint.
+    if (candidate.developer != previous.developer)
+        note += " Developer-mode edits take effect when the application restarts.";
 
     log::info(kComponent, "operator settings update: " + note);
     diagnostics_.noteEvent("settings", note);
@@ -408,6 +443,50 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                              "count as 0.0 in the total; the total is an accounting sum, NOT a "
                              "mouth-to-ear measurement - see docs/latency-budget.md");
     sections.push_back({ "latency", std::move(latencyRows) });
+
+    // [developer]: whether this run is a developer run, in the file itself -
+    // a venue report that cannot answer "was that a mock?" is a report that
+    // invites exactly the confusion task 019 exists to prevent.
+    std::vector<std::pair<std::string, std::string>> developerRows;
+    developerRows.emplace_back("mode", devPlan_.enabled ? "DEVELOPER" : "production");
+    developerRows.emplace_back("audio_source",
+                               devPlan_.useWavSource ? "wav file (simulated device)"
+                               : devPlan_.useToneSource ? "test tone (simulated device)"
+                                                        : std::string("configured device"));
+    developerRows.emplace_back("wav_input", devPlan_.wavInputPath.empty() ? "-" : devPlan_.wavInputPath);
+    developerRows.emplace_back("recording", devPlan_.wavOutputPath.empty() ? "-" : devPlan_.wavOutputPath);
+    developerRows.emplace_back("translation", devPlan_.mockTranslation
+                                                   ? "MOCK ECHO - no provider session was opened"
+                                                   : "configured provider chain");
+    developerRows.emplace_back("mock_latency_ms", std::to_string(devPlan_.mockLatencyMs));
+    developerRows.emplace_back("loopback",
+                               devPlan_.loopback ? (loopbackActive()
+                                                        ? "ON - capture goes to the output, "
+                                                          "translation NOT fed ("
+                                                          + std::to_string(loopbackTransferredFrames())
+                                                          + " frames moved)"
+                                                        : "requested but not running")
+                                                 : "off");
+    developerRows.emplace_back("notes",
+                               devPlan_.notes.empty()
+                                   ? "-"
+                                   : [this]
+                                     {
+                                         std::string joined;
+                                         for (const auto& note : devPlan_.notes)
+                                         {
+                                             if (!joined.empty())
+                                                 joined += "; ";
+                                             joined += note;
+                                         }
+                                         return joined;
+                                     }());
+    developerRows.emplace_back("limitations",
+                               "the developer plan is a snapshot taken when the application "
+                               "started; settings edits restart it, nothing re-mounts mid-run. "
+                               "A production export has mode=production and no mock path is "
+                               "active in it");
+    sections.push_back({ "developer", std::move(developerRows) });
 
     std::vector<std::pair<std::string, std::string>> translationRows;
     translationRows.emplace_back("languages", cfg.translation.inputLanguage + "->"
@@ -599,6 +678,7 @@ void ApplicationController::stop()
     // while the subtitle transport is up. Audio goes last, as before - the
     // session teardown joins the streaming worker before the device dies.
     stopSession();
+    stopLoopback();
     stopNdi();
     stopAudio();
 
@@ -652,9 +732,33 @@ bool ApplicationController::startAudio(std::string& error)
     engine_.setInputGainDb(cfg.audio.inputGainDb);
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
 
+    const bool devSource = devPlan_.useWavSource || devPlan_.useToneSource;
+
+    // A planned simulated source must actually BE the injected backend: the
+    // alternative - "planned wav, opened the null device quietly" - is exactly
+    // the leaked-mock (or leaked-silence) failure this task must not ship.
+    if (devSource && !audioBackendOverridden_)
+    {
+        error = "the developer plan asks for a simulated audio source, but the "
+                "composition root installed no simulated device";
+        log::error(kComponent, error);
+        return false;
+    }
+
     if (!deviceId.empty())
     {
-        if (audioBackendFactory_ != nullptr)
+        if (devSource)
+        {
+            // The configured device loses to the developer plan visibly, never
+            // silently: an operator who sees the tone in the meters and had
+            // left a SoundGrid device in settings gets the whole sentence in
+            // the log, and the badge on the screen says it too.
+            log::info(kComponent, "developer mode runs the simulated source '"
+                                      + std::string(audioBackend_->name())
+                                      + "': the configured device '" + deviceId
+                                      + "' was NOT opened (developer plan)");
+        }
+        else if (audioBackendFactory_ != nullptr)
         {
             std::string factoryError;
             auto built = audioBackendFactory_(request, factoryError);
@@ -697,6 +801,12 @@ bool ApplicationController::startAudio(std::string& error)
               "audio gains in effect: input " + std::format("{:+.1f}", engine_.inputGainDb())
             + " dB, output " + std::format("{:+.1f}", engine_.outputGainDb())
             + " dB, glide " + std::to_string(engine_.gainRampMs()) + " ms");
+
+    // Developer loopback (task 019) claims the input rings before any streaming
+    // worker is even considered; startSession() -> startStreaming() checks for
+    // it and keeps the translator unfed while the room's own audio plays.
+    if (devPlan_.loopback)
+        startLoopbackIfNeeded();
 
     lastAudioError_.clear();
     return true;
@@ -771,6 +881,19 @@ void ApplicationController::startStreaming()
     if (translationBackend_ == nullptr)
         return;
 
+    // Two consumers cannot own one ring: while the developer loopback plays
+    // the capture to the room, the translator is deliberately NOT fed, and
+    // that fact goes to the log, the event ring and the badge - it is never
+    // a silent half-state (task 005's exclusivity, made visible by 019).
+    if (loopbackActive())
+    {
+        log::info(kComponent,
+                  "translation session is open but the developer loopback owns the capture: "
+                  "the translator is not being fed");
+        diagnostics_.noteEvent("translation", "not streaming: developer loopback owns the input");
+        return;
+    }
+
     streamer_ = std::make_unique<TranslationStreamer>(engine_, *translationBackend_, &diagnostics_);
 
     std::string error;
@@ -812,6 +935,47 @@ void ApplicationController::stopStreaming() noexcept
 
     streamer_->stop();
     streamer_.reset();
+}
+
+void ApplicationController::startLoopbackIfNeeded()
+{
+    loopback_ = std::make_unique<audio::AudioLoopback>(engine_);
+
+    std::string error;
+
+    if (!loopback_->start(error))
+    {
+        // The plan asked for loopback and the worker refused: say it loudly and
+        // fall back to the normal streaming (which startStreaming will then
+        // happily do, loopbackActive() being false). Audio itself runs either
+        // way - loopback is a developer convenience, never an audio-path must.
+        log::error(kComponent, "developer loopback refused to start: " + error
+                               + " - capture streaming will feed the translator instead");
+        diagnostics_.noteError("developer", "loopback not started: " + error);
+        loopback_.reset();
+        return;
+    }
+
+    log::warning(kComponent,
+                 "DEVELOPER LOOPBACK ON: capture is routed to the output - the audience hears "
+                 "the input, NOT a translation, and the translator is not fed");
+    diagnostics_.noteEvent("developer", "loopback running (capture -> output; translation not fed)");
+}
+
+void ApplicationController::stopLoopback() noexcept
+{
+    if (loopback_ == nullptr)
+        return;
+
+    log::info(kComponent, "developer loopback stopped after moving "
+                              + std::to_string(loopback_->transferredFrames())
+                              + " frames from capture to output");
+    diagnostics_.noteEvent("developer",
+                           "loopback stopped: " + std::to_string(loopback_->transferredFrames())
+                               + " frames transferred");
+
+    loopback_->stop();
+    loopback_.reset();
 }
 
 bool ApplicationController::startNdi(std::string& error)

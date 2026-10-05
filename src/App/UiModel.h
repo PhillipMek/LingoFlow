@@ -66,6 +66,7 @@ struct OperatorPanel
     std::string audioBackendName;
     std::string detail;                ///< the freshest problem, or "ok"
     std::string credentialLine;        ///< task 015: where the API key stands, in one sentence
+    std::string developerBadge;        ///< task 019: empty in production, unmistakable otherwise
     bool faulted = false;              ///< the Start button must offer Retry (clearFault)
     bool canStart = false;
     bool canStop = false;

@@ -17,6 +17,8 @@
 add_library(lingoflow_core STATIC
     Utils/Log.cpp
     Utils/Log.h
+    Utils/WavFile.cpp
+    Utils/WavFile.h
 
     Config/AppConfig.h
     Config/ConfigSchema.cpp
@@ -55,6 +57,8 @@ add_library(lingoflow_core STATIC
     Audio/LevelMeter.h
     Audio/Asio/AsioDeviceInfo.cpp
     Audio/Asio/AsioDeviceInfo.h
+    Audio/Dev/SimulatedDeviceBackend.cpp
+    Audio/Dev/SimulatedDeviceBackend.h
     Audio/Null/NullAudioBackend.cpp
     Audio/Null/NullAudioBackend.h
 
@@ -68,6 +72,8 @@ add_library(lingoflow_core STATIC
     Translation/TextPipeline.h
     Translation/Null/NullTranslationBackend.cpp
     Translation/Null/NullTranslationBackend.h
+    Translation/Mock/MockTranslationBackend.cpp
+    Translation/Mock/MockTranslationBackend.h
 
     NDI/INdiOutput.cpp
     NDI/INdiOutput.h
@@ -78,6 +84,8 @@ add_library(lingoflow_core STATIC
 
     App/ApplicationController.cpp
     App/ApplicationController.h
+    App/DeveloperMode.cpp
+    App/DeveloperMode.h
     App/TranslationStreamer.cpp
     App/TranslationStreamer.h
     App/UiModel.cpp

@@ -29,9 +29,11 @@
 #include <string>
 #include <string_view>
 
+#include "App/DeveloperMode.h"
 #include "App/TranslationStreamer.h"
 #include "Audio/Asio/AsioDeviceInfo.h"
 #include "Audio/AudioEngine.h"
+#include "Audio/AudioLoopback.h"
 #include "Config/ConfigManager.h"
 #include "Diagnostics/DiagnosticsManager.h"
 #include "NDI/INdiOutput.h"
@@ -81,6 +83,25 @@ public:
     void setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend);
     void setTranslationBackend(std::unique_ptr<translation::ITranslationBackend> backend);
     void setNdiOutput(std::unique_ptr<ndi::INdiOutput> output);
+
+    // ------------------------------------------------------- developer mode (019)
+    /// Installs the mounted meaning of the task 019 developer settings. The
+    /// composition root calls this once (it owns the --dev question), and it is
+    /// the controller's ONLY authority on developer behaviour: the factory
+    /// device path, the streaming worker and the loopback gate all consult the
+    /// stored plan instead of re-reading the settings through different eyes.
+    /// The default-constructed plan means "production": every field off, no
+    /// badge, nothing mounted - so a controller that was never told about
+    /// developer mode behaves exactly like before task 019 (isolation by
+    /// default, tested, not trusted). Must be called while stopped.
+    void setDeveloperPlan(DeveloperPlan plan);
+    const DeveloperPlan& developerPlan() const noexcept { return devPlan_; }
+
+    /// Loopback evidence for the badge and the export. `loopbackActive` is the
+    /// truth about the worker, not about the settings: a running pipeline that
+    /// was denied its loopback says so through the note in the log.
+    bool loopbackActive() const noexcept;
+    std::uint64_t loopbackTransferredFrames() const noexcept;
 
     /// Builds the backend for a device the operator selected in settings. Installed
     /// by the composition root (Main.cpp) because the platform adapter is the only
@@ -280,6 +301,11 @@ private:
     /// fed, and everything else keeps running.
     void startStreaming();
     void stopStreaming() noexcept;
+    /// Developer loopback (task 019): started after the engine activates only
+    /// when the mounted plan asks for it; a refusal to start is recorded and
+    /// everything else keeps running (loopback is not an audio-path must).
+    void startLoopbackIfNeeded();
+    void stopLoopback() noexcept;
     /// Returns true when NDI is disabled in settings (nothing to start) or when
     /// the output started; false only on a real start failure.
     bool startNdi(std::string& error);
@@ -310,6 +336,15 @@ private:
     /// it holds pointers into the engine's pipeline, so it must be gone before
     /// the engine deactivates - stop() runs session teardown before audio teardown.
     std::unique_ptr<TranslationStreamer> streamer_;
+
+    /// Developer mode (task 019): the mounted plan, and the loopback worker it
+    /// may have asked for. The worker lives exactly as long as a running
+    /// pipeline: it claims the input rings' consumer slot, so its presence is
+    /// what startStreaming() checks before deciding whether the translator
+    /// gets fed at all - two consumers of one ring is not a configuration,
+    /// it is a bug, and the plan makes the choice explicit.
+    DeveloperPlan devPlan_;
+    std::unique_ptr<audio::AudioLoopback> loopback_;
 
     AudioBackendFactory audioBackendFactory_;
     /// Device enumeration seam (014): installed by the composition root, cached

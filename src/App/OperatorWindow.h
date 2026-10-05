@@ -104,6 +104,7 @@ private:
     juce::TextButton exportButton_ { "Export diagnostics" };
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
     juce::Label detailLabel_;
+    juce::Label devBadge_;   ///< task 019: the developer-mode band, invisible in production
     juce::Label credentialLabel_;
 
     // ---------------------------------------------------------- settings column

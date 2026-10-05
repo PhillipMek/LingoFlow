@@ -81,6 +81,23 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
         : "API key: NOT stored - sessions will refuse until it is entered in Settings (store: "
               + controller.secretStoreName() + ")";
 
+    // Task 019. The badge is the mounted plan, extended with the worker's real
+    // state: a banner that promised "loopback on" while the worker failed to
+    // start would sell a developer fiction - the opposite of what this banner
+    // exists to prevent. Production: the plan's badge is empty, so is this.
+    {
+        const auto& plan = controller.developerPlan();
+        std::string badge = plan.badge;
+
+        if (plan.loopback)
+            badge += controller.loopbackActive()
+                       ? " | loopback worker RUNNING, "
+                         + std::to_string(controller.loopbackTransferredFrames()) + " frames moved"
+                       : " | loopback NOT running (see log)";
+
+        panel.developerBadge = std::move(badge);
+    }
+
     // --------------------------------------------------------------- devices
     for (const auto& device : controller.devices())
         panel.devices.push_back({ device.id, device.name });

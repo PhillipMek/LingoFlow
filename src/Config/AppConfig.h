@@ -101,6 +101,56 @@ struct DiagnosticsSettings
     friend constexpr bool operator==(const DiagnosticsSettings&, const DiagnosticsSettings&) = default;
 };
 
+/// Developer & mock mode (task 019). Every field is inert while `enabled` is
+/// false, which is the default - and a config file from before this section
+/// existed parses to exactly that, so an existing installation keeps running
+/// the real chain (AGENTS.md 16's extension point, AGENTS.md 19's no fake
+/// success, and this task's FAIL criterion all point the same way).
+///
+/// What this section does NOT contain: any credential. The mock runs with no
+/// key at all; the OpenAI-backed paths keep using the credential store.
+struct DeveloperSettings
+{
+    /// Master switch. False (the default) makes every field below meaningless:
+    /// no simulated device is mounted, no mock backend exists, no loopback
+    /// runs, and no badge appears. The plan builder (App/DeveloperMode.h) and
+    /// the controller each re-check this - the isolation is belt AND braces.
+    bool enabled = false;
+
+    /// Where the "microphone" comes from: "device" (the real ASIO story, the
+    /// default), "wav" (a file loops as input) or "tone" (a sine generator).
+    std::string audioSource = "device";
+
+    /// WAV file used when audioSource == "wav". Its sample rate must match the
+    /// audio settings - the simulated device refuses a mismatch instead of
+    /// resampling silently (task 007's delivered-audio rule, input side).
+    std::string wavInputPath;
+
+    /// When non-empty (and developer mode is on), everything the pipeline
+    /// produced for the audience is appended here as a PCM16 WAV.
+    std::string wavOutputPath;
+
+    /// Test-tone parameters when audioSource == "tone".
+    double toneFrequencyHz = 1000.0;
+    double toneLevelDb = -20.0;
+
+    /// Mount the echo translator instead of the provider chain. The session
+    /// works end to end - audio returns, text events flow - and every text
+    /// event says "mock" in words, because confusion with real translation is
+    /// the one failure mode this feature cannot have.
+    bool mockTranslation = false;
+    int mockLatencyMs = 300;
+
+    /// Route capture straight to the output (the task 005 loopback worker):
+    /// the operator hears the room, not a translation. Loudly bad on a real
+    /// show, so this is honored only while `enabled` is true, the controller
+    /// refuses it otherwise, and the --dev command-line preset never turns it
+    /// on - it stays a deliberate settings edit.
+    bool loopback = false;
+
+    friend constexpr bool operator==(const DeveloperSettings&, const DeveloperSettings&) = default;
+};
+
 struct AppConfig
 {
     std::uint32_t schemaVersion = kConfigSchemaVersion;
@@ -109,6 +159,7 @@ struct AppConfig
     TranslationSettings translation;
     NdiSettings ndi;
     DiagnosticsSettings diagnostics;
+    DeveloperSettings developer;
 
     /// Used by tests, by change detection and by "did the load really change
     /// anything" checks. Comparison is exact: these are operator settings, not

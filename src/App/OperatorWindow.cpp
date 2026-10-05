@@ -130,6 +130,13 @@ OperatorContent::OperatorContent(ApplicationController& controller)
         addAndMakeVisible(*chip);
     }
 
+    devBadge_.setFont(uiFont(13.0f));
+    devBadge_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
+    devBadge_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff3c1416u));
+    devBadge_.setJustificationType(juce::Justification::centredLeft);
+    devBadge_.setVisible(false);   // empty in production - the band appears only when real
+    addAndMakeVisible(devBadge_);
+
     detailLabel_.setFont(uiFont(13.0f));
     detailLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd29922u));
     addAndMakeVisible(detailLabel_);
@@ -571,6 +578,12 @@ void OperatorContent::rebuild()
                                    ? juce::Colour(0xff8b949eu)
                                    : juce::Colour(0xffd29922u));
 
+    // Task 019: visible only when the mounted plan is a developer plan; the
+    // text itself is the plan's badge, extended with the loopback worker's
+    // real state (UiModel does the composing, this widget only paints it).
+    devBadge_.setVisible(!panel.developerBadge.empty());
+    devBadge_.setText(juce::String(panel.developerBadge), juce::NotificationType::dontSendNotification);
+
     startButton_.setEnabled(panel.canStart || panel.faulted);
     startButton_.setButtonText(panel.faulted ? "Retry" : "Start");
     stopButton_.setEnabled(panel.canStop);
@@ -670,6 +683,12 @@ void OperatorContent::resized()
 
     detailLabel_.setBounds(bounds.removeFromTop(20));
     credentialLabel_.setBounds(bounds.removeFromTop(18));
+
+    // Task 019: the developer band sits above everything the operator reads -
+    // production hides it (empty label, no paint), a developer run cannot
+    // scroll it away or overlook it.
+    devBadge_.setBounds(bounds.removeFromTop(24));
+
     bounds.removeFromTop(6);
 
     auto content = bounds;

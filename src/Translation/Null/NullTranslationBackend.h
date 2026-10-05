@@ -5,8 +5,10 @@
 // and no text - deliberately, so that nothing in the product can mistake it for
 // a working translation (AGENTS.md 19 forbids fake success).
 //
-// The behavioural mock used by Developer/Mock mode (task 019) is a different
-// class and lives next to the tests, not in the product core.
+// The behavioural mock of Developer/Mock mode is a DIFFERENT class on purpose:
+// Translation/Mock/MockTranslationBackend.cpp (task 019) echoes audio and emits
+// labelled text; this one produces nothing at all, so "Null" can never be
+// mistaken for "working" anywhere - in tests, in smoke runs, or at a venue.
 
 #include <string>
 
