@@ -30,6 +30,32 @@ std::size_t clampedJitterMs(int jitterBufferMs) noexcept
     return static_cast<std::size_t>(std::clamp(jitterBufferMs, kJitterMinMs, kJitterMaxMs));
 }
 
+/// Silence EVERY output channel this callback was promised. Device callbacks
+/// treat output buffer content as undefined: touching only channel 0 leaves
+/// stale audio - or raw uninitialised memory - on the wire for every other
+/// channel, which is the opposite of what the defensive paths owe the audience
+/// (code review P0, 2026-10-05). `channels` is the geometry the backend
+/// advertised at configuration; 0 means nothing was ever configured - the only
+/// way to reach this from a real product flow is the teardown window between
+/// pipelineReady_ going false and the counts going 0, and the honest minimal
+/// answer there is the contract's first channel. Realtime-safe: memset and a
+/// bounded loop over pointers the caller handed over.
+void silenceOutputs(float* const* output, int channels, std::size_t frames) noexcept
+{
+    if (output == nullptr)
+        return;
+
+    const int promised = channels > 0 ? channels : 1;
+
+    for (int channel = 0; channel < promised; ++channel)
+    {
+        float* destination = output[channel];
+
+        if (destination != nullptr)
+            std::memset(destination, 0, frames * sizeof(float));
+    }
+}
+
 } // namespace
 
 AudioEngine::AudioEngine(DiagnosticsManager* diagnostics) noexcept
@@ -497,7 +523,8 @@ void AudioEngine::processAudio(const float* const* input,
     // Realtime thread: fixed-size work only. No allocation, no logging, no network,
     // no filesystem, no locks. Relaxed atomics and memcpy are all that appears here.
     if (frameCount <= 0)
-        return;   // an empty block is not work, and not a defect either
+        return;   // an empty block is not work, and not a defect either: there are
+                  // no frames to fill, so buffer content cannot reach an audience
 
     const std::size_t frames = static_cast<std::size_t>(frameCount);
 
@@ -515,8 +542,10 @@ void AudioEngine::processAudio(const float* const* input,
     {
         malformedCallbacks_.fetch_add(1, std::memory_order_relaxed);
 
-        if (output[0] != nullptr)
-            std::memset(output[0], 0, frames * sizeof(float));
+        // Every promised output channel goes silent, not just the first: a
+        // multi-output geometry leaving stale bytes on channel 1 is exactly how
+        // "looks connected, plays something else" reaches the audience.
+        silenceOutputs(output, outputChannels_.load(std::memory_order_relaxed), frames);
 
         return;
     }
@@ -646,11 +675,13 @@ void AudioEngine::processAudio(const float* const* input,
         return;
     }
 
-    // No pipeline: nothing was ever configured, so only the contract's first channel
-    // can be answered. A real backend always goes through activate(), which builds the
-    // pipeline before the device starts; this branch exists for direct calls in tests.
-    if (output[0] != nullptr)
-        std::memset(output[0], 0, frames * sizeof(float));
+    // No pipeline: nothing was ever configured, so the count is 0 and only the
+    // contract's first channel can be honestly answered - a real backend always
+    // goes through activate(), which builds the pipeline before the device
+    // starts; this branch exists for direct calls in tests. A callback landing
+    // in the teardown window (ready already false, counts not yet zeroed)
+    // silences the whole geometry it still advertises.
+    silenceOutputs(output, outputChannels_.load(std::memory_order_relaxed), frames);
 }
 
 void AudioEngine::onAudioConfigurationChanged(int sampleRate, int bufferFrames)

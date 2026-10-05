@@ -146,6 +146,81 @@ TEST_CASE("AudioEngine: malformed and empty callbacks are not counted as blocks"
     engine.deactivate();
 }
 
+TEST_CASE("AudioEngine: a malformed callback silences EVERY output channel",
+          "[audio][engine][realtime]")
+{
+    // Code review P0 (2026-10-05): device output buffers start undefined, and
+    // JUCE requires the callback to fill every channel. The old defensive paths
+    // cleared only channel 0 - on a multi-output geometry the audience would
+    // have kept hearing stale bytes (or uninitialised memory) on channel 1,
+    // exactly when the system was already broken. Poison both outputs and
+    // demand all of them back silent.
+    DeviceCapabilities caps = mono48k();
+    caps.outputChannels = 2;
+
+    AudioEngine engine;
+    NullAudioBackend backend(caps);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    REQUIRE(engine.outputChannels() == 2);
+
+    std::array<float, static_cast<std::size_t>(kFrames)> buf0{};
+    std::array<float, static_cast<std::size_t>(kFrames)> buf1{};
+    buf0.fill(0.25f);   // stale show audio
+    buf1.fill(0.5f);    // channel 1: the one the old code left untouched
+
+    float* out[] = { buf0.data(), buf1.data() };
+
+    engine.processAudio(nullptr, out, kFrames);   // backend broke the input promise
+
+    CHECK(engine.malformedCallbacks() == 1);
+    CHECK(engine.blockCount() == 0);
+
+    for (int i = 0; i < kFrames; ++i)
+    {
+        REQUIRE(buf0[static_cast<std::size_t>(i)] == 0.0f);
+        REQUIRE(buf1[static_cast<std::size_t>(i)] == 0.0f);   // the regression assertion
+    }
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: null entries among outputs are skipped, the rest go silent",
+          "[audio][engine][realtime]")
+{
+    // A hole the driver hands us has no buffer to dirty, so silence must reach
+    // every OTHER promised channel, and the null one must not be written or
+    // crash: defensive paths cannot afford to fail harder than the failure.
+    DeviceCapabilities caps = mono48k();
+    caps.outputChannels = 3;
+
+    AudioEngine engine;
+    NullAudioBackend backend(caps);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    std::array<float, static_cast<std::size_t>(kFrames)> buf0{};
+    std::array<float, static_cast<std::size_t>(kFrames)> buf2{};
+    buf0.fill(0.25f);
+    buf2.fill(0.5f);
+
+    float* out[] = { buf0.data(), nullptr, buf2.data() };
+
+    engine.processAudio(nullptr, out, kFrames);
+
+    CHECK(engine.malformedCallbacks() == 1);
+
+    for (int i = 0; i < kFrames; ++i)
+    {
+        REQUIRE(buf0[static_cast<std::size_t>(i)] == 0.0f);
+        REQUIRE(buf2[static_cast<std::size_t>(i)] == 0.0f);
+    }
+
+    engine.deactivate();
+}
+
 TEST_CASE("AudioEngine: null diagnostics pointer is tolerated", "[audio][engine]")
 {
     AudioEngine engine;   // no DiagnosticsManager

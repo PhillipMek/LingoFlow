@@ -1,6 +1,7 @@
 #include "Platform/Asio/JuceAsioBackend.h"
 
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 #include "Audio/Asio/AsioChannelForwarding.h"
@@ -48,8 +49,27 @@ public:
                                          int numSamples,
                                          const juce::AudioIODeviceCallbackContext&) override
     {
-        if (numSamples <= 0 || inputChannelData == nullptr || outputChannelData == nullptr)
+        if (numSamples <= 0 || outputChannelData == nullptr)
+            return;   // no frames exist, or no wire exists: there is nothing to fill
+
+        if (inputChannelData == nullptr)
+        {
+            // A driver that breaks its own input promise must still not hear the
+            // previous block played back as if audio were flowing: the engine is
+            // never reached, so the callback owes the outputs their silence.
+            // Vendored JUCE hands out non-null arrays (it jasserts), which makes
+            // this a defensive path, not an expected one.
+            asio::forwardActiveChannels(outputChannelData, numOutputChannels,
+                                        outputPhysical_, outputViews_);
+
+            for (float* destination : outputViews_)
+            {
+                if (destination != nullptr)
+                    std::memset(destination, 0, static_cast<std::size_t>(numSamples) * sizeof(float));
+            }
+
             return;
+        }
 
         // Fixed-size forwarding: the views and the physical maps were built in
         // audioDeviceAboutToStart, so per block the callback only applies the

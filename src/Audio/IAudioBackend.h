@@ -45,6 +45,12 @@ public:
     /// `inputChannels` pointers to `frameCount` frames, `output` holds
     /// `outputChannels` pointers to `frameCount` frames. Both are preallocated by
     /// the backend; the processor never resizes them.
+    /// The processor must leave EVERY output channel written on EVERY call it
+    /// returns from - data or silence, never untouched. Device callbacks treat
+    /// output buffer content as undefined, so on a multi-output geometry a
+    /// partial fill is stale audio (or uninitialised memory) reaching the
+    /// audience; AudioEngine::processAudio honours this on every path including
+    /// the malformed ones (code review P0, 2026-10-05, pinned by tests).
     /// Realtime-safe by contract: the implementation must not allocate, block,
     /// log or touch the network/UI.
     virtual void processAudio(const float* const* input,
