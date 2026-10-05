@@ -45,11 +45,16 @@ struct TranslationSettings
     std::string inputLanguage = "en";
     std::string outputLanguage = "ru";
 
-    /// Interpreter instructions (SPEC "Translation instructions"), operator-editable.
-    std::string instructions =
-        "Preserve meaning, names, numbers, terminology, proper nouns and intent. "
-        "Do not summarize, add explanations or comment. "
-        "Prioritize low latency without sacrificing quality.";
+    /// Interpreter instructions (SPEC "Translation instructions"). OPTIONAL with
+    /// an empty default since code review P1 (2026-10-05): the translation
+    /// model accepts no custom prompting (protocol docs section 12.1), so a
+    /// REQUIRED field here only made the operator type a setting that does
+    /// nothing - a fake contract. The text still round-trips (storage is
+    /// model-agnostic), a future model that honours instructions reuses it, and
+    /// the current backend says in the log, never silently, that it is ignored.
+    /// A present value must stay free of control characters and within the
+    /// schema's length bound; "empty" simply means "nothing configured".
+    std::string instructions;
 
     /// Empty = "use the backend default". Free-form model identifiers are not
     /// invented here: allowed values come from the capability manifest

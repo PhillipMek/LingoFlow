@@ -61,7 +61,7 @@ private:
     juce::TextButton removeKeyButton_ { "Remove key" };
 
     // ------------------------------------------------------------ translation
-    juce::Label instructionsCaption_, modelHintCaption_, reconnectCaption_, initialBackoffCaption_,
+    juce::Label instructionsCaption_, instructionsHintLabel_, modelHintCaption_, reconnectCaption_, initialBackoffCaption_,
                maxBackoffCaption_, sessionAgeCaption_;
     juce::TextEditor instructionsEditor_, modelHintEditor_;
     juce::ToggleButton reconnectToggle_ { "Reconnect after a dropped session" };

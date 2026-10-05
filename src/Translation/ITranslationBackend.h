@@ -75,6 +75,12 @@ struct LanguagePair
 struct SessionRequest
 {
     LanguagePair pair;
+    /// Operator intent text. Whether a backend can honour it is a PROVIDER
+    /// fact, not a contract promise: gpt-realtime-translate accepts no custom
+    /// prompting (protocol docs section 12.1), so that backend says so in the
+    /// log and never fakes it; a model that does honour instructions uses this
+    /// same field. Empty means "nothing configured" (code review P1, 2026-10-05
+    /// - the config made it required while the provider ignored it).
     std::string instructions;
 
     /// Opaque provider model identifier, empty = "backend default". The set of

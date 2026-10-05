@@ -345,6 +345,15 @@ but stays aligned with "now") - the docs do not choose it for us.
    the supervisor's terminal category (section 10), so an ordinary every-start capability
    fact must not appear as a failure in the operator's status. The field itself stays in
    the contract because other backends may support it.
+   **Second half resolved by code review P1 (2026-10-05)**: requiring an
+   operator to author a text the provider ignores is its own fake contract.
+   `translation.instructions` became OPTIONAL with an empty default (the field
+   round-trips and future models reuse it), the Settings dialog shows it
+   read-only and says plainly "unsupported by gpt-realtime-translate" with the
+   reason, and the diagnostics export pairs the value with an
+   `instructions_effect` line - "not set" or "ignored - ...". The backend
+   warning at open stays exactly as decided 2026-10-03: a config file carrying
+   legacy text still learns the truth from the log.
 2. **No glossaries or pronunciation guides**; the model "can sometimes substitute
    incorrect names or entities"; golden-set testing before launch is documented advice
    [R8]. Relevant to any "terminology" feature in SPEC.

@@ -495,6 +495,12 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                                                            ? "(backend default)"
                                                            : cfg.translation.modelHint);
     translationRows.emplace_back("instructions", cfg.translation.instructions);
+    // The paired truth (code review P1, 2026-10-05): a venue reading the file
+    // must know the text was never sent, not reconstruct it from a log line.
+    translationRows.emplace_back("instructions_effect",
+                                 cfg.translation.instructions.empty()
+                                     ? std::string("not set")
+                                     : std::string("ignored - the current model accepts no prompting (docs section 12.1)"));
     translationRows.emplace_back("jitter_buffer_ms", std::to_string(cfg.translation.jitterBufferMs));
     translationRows.emplace_back("reconnect_enabled", cfg.translation.reconnectEnabled ? "yes" : "no");
     translationRows.emplace_back("reconnect_initial_backoff_ms",

@@ -540,8 +540,8 @@ TEST_CASE("ConfigSchema: validation covers the documented bounds", "[config][sch
     CHECK(countProblems(cfg) >= 1);
 
     cfg = config::defaults();
-    cfg.translation.instructions.clear();
-    CHECK(countProblems(cfg) == 1);
+    cfg.translation.instructions.clear();   // optional since review P1: "nothing configured" is legal
+    CHECK(countProblems(cfg) == 0);         // and it is now the DEFAULT too
 
     cfg = config::defaults();
     cfg.translation.instructions = std::string(5000, 'x');

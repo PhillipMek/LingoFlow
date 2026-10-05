@@ -306,10 +306,14 @@ ConfigProblems validate(const AppConfig& candidate)
     if (translation.inputLanguage == translation.outputLanguage)
         problems.push_back(ConfigProblem{ "translation.outputLanguage", "input and output language must differ" });
 
-    if (translation.instructions.empty() || translation.instructions.size() > kMaxInstructionsLength
+    // Optional since code review P1 (2026-10-05): "not set" is legal - the
+    // current translation model ignores this text entirely (docs section 12.1),
+    // so requiring it only forced operators to author a setting that does
+    // nothing. A value that IS present still has to survive the shape rules.
+    if (translation.instructions.size() > kMaxInstructionsLength
         || hasControlCharacter(translation.instructions))
         problems.push_back(ConfigProblem{ "translation.instructions",
-                                          "instructions must be non-empty, free of control characters and at most "
+                                          "when set, instructions must be free of control characters and at most "
                                               + std::to_string(kMaxInstructionsLength) + " characters" });
 
     if (!translation.modelHint.empty()

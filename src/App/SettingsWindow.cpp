@@ -77,10 +77,26 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     addAndMakeVisible(keyHintLabel_);
 
     // ------------------------------------------------------------- translation
-    caption(instructionsCaption_, "Translation instructions", *this);
+    // The editor is READ-ONLY on purpose (code review P1, 2026-10-05): the
+    // current model ignores this text (protocol docs section 12.1), and making
+    // the operator author a setting that does nothing is a fake contract. The
+    // value stays visible - older installs may carry text - and the hint says
+    // what the truth is.
+    caption(instructionsCaption_, "Translation instructions - unsupported by gpt-realtime-translate", *this);
     instructionsEditor_.setMultiLine(true);
     instructionsEditor_.setScrollbarsShown(true);
+    instructionsEditor_.setReadOnly(true);
     editor(instructionsEditor_, *this);
+
+    instructionsHintLabel_.setFont(uiFont(11.0f));
+    instructionsHintLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    instructionsHintLabel_.setText(
+        "The translation provider accepts no custom prompting: it translates what it hears "
+        "toward the target language and nothing else (protocol docs section 12.1). This field "
+        "is stored for a future model that honours instructions, is never sent today, and the "
+        "backend logs plainly that it was ignored. Empty means \"nothing configured\".",
+        juce::NotificationType::dontSendNotification);
+    addAndMakeVisible(instructionsHintLabel_);
 
     caption(modelHintCaption_, "Model hint (empty = backend default)", *this);
     editor(modelHintEditor_, *this);
@@ -433,6 +449,7 @@ void SettingsContent::resized()
     // --- translation column
     instructionsCaption_.setBounds(left.removeFromTop(16));
     instructionsEditor_.setBounds(left.removeFromTop(110));
+    instructionsHintLabel_.setBounds(left.removeFromTop(48));
     left.removeFromTop(4);
 
     modelHintCaption_.setBounds(left.removeFromTop(16));
@@ -483,8 +500,8 @@ SettingsWindow::SettingsWindow(ApplicationController& controller)
     setResizable(true, true);
     // Task 019 grew the content: the credentials header, two columns and the
     // developer band across the bottom need the extra height.
-    setResizeLimits(720, 780, 4000, 4000);
-    setSize(820, 860);
+    setResizeLimits(720, 830, 4000, 4000);
+    setSize(820, 910);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

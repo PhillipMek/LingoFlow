@@ -258,6 +258,11 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     CHECK(report.find("operator stored the API key") != std::string::npos);
     CHECK(report.find("[audio]") != std::string::npos);
     CHECK(report.find("[translation]") != std::string::npos);
+    // The paired truth of the instructions field (code review P1, 2026-10-05):
+    // unreadable from the log alone, a venue report must see right there that
+    // the text was never sent. Default config = not set; if it were set the
+    // same key would say "ignored - ...".
+    CHECK(report.find("instructions_effect=not set") != std::string::npos);
     CHECK(report.find("[ndi]") != std::string::npos);
     CHECK(report.find("[settings]") != std::string::npos);
 
