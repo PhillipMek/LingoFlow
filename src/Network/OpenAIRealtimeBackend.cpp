@@ -54,13 +54,21 @@ long long wallNowMs()
 
 /// Protocol section 9 connection-level table: HTTP status before the upgrade
 /// maps to product categories; nothing provider-named crosses the sink seam.
+/// Finer than the first pass (code review P2, 2026-10-05): the status table
+/// already distinguished "come back later" (429/503) from "fix yourself"
+/// (401/403) - the categories now say so instead of flattening both into
+/// connection/refused, because the supervisor's policy IS that difference.
 translation::TranslationErrorCategory categoryForHttpStatus(int status)
 {
     switch (status)
     {
         case 401:
         case 403:
-            return translation::TranslationErrorCategory::rejectedRequest;
+            return translation::TranslationErrorCategory::authentication;
+        case 429:
+            return translation::TranslationErrorCategory::rateLimited;
+        case 503:
+            return translation::TranslationErrorCategory::serviceOverloaded;
         default:
             return translation::TranslationErrorCategory::connection;
     }
@@ -1056,17 +1064,29 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
         // session stays open unless the transport itself dies.
         std::string message = "unspecified";
         std::string errorType;
+        std::string errorCode;
         if (parsed.contains("error") && parsed["error"].is_object())
         {
             message = stringField(parsed["error"], "message");
             if (message.empty())
                 message = "unspecified";
             errorType = stringField(parsed["error"], "type");
+            errorCode = stringField(parsed["error"], "code");
         }
 
+        // Classification keeps its precedence (section 9 + code review P2):
+        // a provider complaint about OUR audio is the audioFormat fact the
+        // operator can act on; the documented transient codes rate-limiting
+        // and overload classify before the coarse type, because "server_error"
+        // as a type is not a statement about recoverability while slow_down
+        // and server_is_overloaded are.
         auto category = TranslationErrorCategory::internal;
         if (containsAudioWord(message))
             category = TranslationErrorCategory::audioFormat;
+        else if (errorCode == "slow_down")
+            category = TranslationErrorCategory::rateLimited;
+        else if (errorCode == "server_is_overloaded")
+            category = TranslationErrorCategory::serviceOverloaded;
         else if (errorType == "invalid_request_error")
             category = TranslationErrorCategory::rejectedRequest;
 
@@ -1074,8 +1094,9 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
         // diagnostics; provider type/code NAMES stay in this log line, never
         // in the sink message (section 9 mapping rule).
         log::warning(kLogComponent,
-                     "server error event (type=" + errorType + ") mapped to "
-                         + std::string(translation::nameOf(category)) + ": " + message);
+                     "server error event (type=" + errorType
+                         + (errorCode.empty() ? "" : ", code=" + errorCode)
+                         + ") mapped to " + std::string(translation::nameOf(category)) + ": " + message);
         reportError(category, "openai: translation service reported: " + message, false);
         return EventResult::keepGoing;
     }

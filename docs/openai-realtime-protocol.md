@@ -239,25 +239,36 @@ Sep 2, 2026 changelog change [R7]:
 
 | HTTP | Documented meaning | Our category (contract, section 13) |
 | --- | --- | --- |
-| 401 | invalid/revoked key, wrong org, IP not authorized | `rejectedRequest` (config error; reconnecting cannot help) |
-| 403 | country/region not supported | `rejectedRequest` (with actionable detail) |
-| 429 | `slow_down` (ramp-rate), plain rate limit, spend/usage limits, `credit_balance_exhausted` | `connection`, retry honoring `Retry-After` |
+| 401 | invalid/revoked key, wrong org, IP not authorized | `authentication` (operator-actionable; retrying without a change repeats it) |
+| 403 | country/region not supported | `authentication` (with actionable detail in the message) |
+| 429 | `slow_down` (ramp-rate), plain rate limit, spend/usage limits, `credit_balance_exhausted` | `rateLimited`, retry honoring `Retry-After`; the documented billing code (`credit_balance_exhausted`) is `rejectedRequest` - retrying cannot restore access [R9] |
 | 500 | server error while processing | `connection`, backoff retry |
-| 503 | `server_is_overloaded` (model temporarily overloaded) | `connection`, backoff retry |
+| 503 | `server_is_overloaded` (model temporarily overloaded) | `serviceOverloaded`, backoff retry (transient by the provider's own word) |
 
 `Retry-After` header: "When the header is present, wait at least as long as it
 specifies... If it's missing, use exponential backoff" [R7][R9]. Billing/quota 429s are
 the documented exception: "Retrying billing, spend, or quota errors won't restore API
 access" [R9] - treat as operator-actionable, retrying is pointless (task 010 policy).
 
+In-session `error` events may carry the same transient vocabulary in `error.code`
+([R7] Sep 2 2026 separates `slow_down` from `server_is_overloaded`): the codes classify
+to `rateLimited` / `serviceOverloaded` before the coarse `error.type` is consulted, and
+an in-session error event alone never faults the session (the official stance above).
+
 **Mapping rule for task 009**: provider error names/types (`invalid_request_error`,
 `server_error`, `slow_down`, `server_is_overloaded`, ...) are translated **only** into
-the five product `TranslationErrorCategory` values plus `fatal`; nothing provider-named
-crosses the sink seam (contract header, AGENTS.md 8). `audioFormat` on our side means
-the 24 kHz PCM16 contract was violated locally; a provider validation error about our
-audio maps to `audioFormat`, everything else the provider refuses the request maps to
-`rejectedRequest`, transport death maps to `connection`, and anything we cannot classify
-maps to `internal` - never dropped silently.
+the product `TranslationErrorCategory` values (`connection`, `rejectedRequest`,
+`audioFormat`, `protocol`, `rateLimited`, `serviceOverloaded`, `authentication`,
+`internal`) plus `fatal`; nothing provider-named crosses the sink seam (contract header,
+AGENTS.md 8). `audioFormat` on our side means the 24 kHz PCM16 contract was violated
+locally; a provider validation error about our audio maps to `audioFormat`, everything
+else the provider refuses about the request maps to `rejectedRequest`, the account gate
+refusing us maps to `authentication`, the provider asking us to come back later maps to
+`rateLimited`/`serviceOverloaded`, transport death maps to `connection`, and anything we
+cannot classify maps to `internal` - never dropped silently.
+(Task 010 policy over this vocabulary: `connection`, `protocol`, `rateLimited`,
+`serviceOverloaded` are recoverable by a fresh session; `authentication`,
+`rejectedRequest`, `audioFormat` and `internal` stop at `faulted` for the operator.)
 
 ## 10. Reconnect and recovery semantics
 

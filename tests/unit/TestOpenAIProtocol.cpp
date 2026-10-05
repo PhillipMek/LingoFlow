@@ -414,12 +414,15 @@ TEST_CASE("OpenAI backend: refused upgrade maps HTTP status per section 9", "[op
         int status;
         TranslationErrorCategory expected;
     };
+    // The table since code review P2 (2026-10-05): the categories now carry the
+    // same distinctions section 9 always documented - the supervisor's policy
+    // reads them, so the sink must not arrive flattened.
     const Case cases[] = {
-        { 401, TranslationErrorCategory::rejectedRequest },
-        { 403, TranslationErrorCategory::rejectedRequest },
-        { 429, TranslationErrorCategory::connection },
+        { 401, TranslationErrorCategory::authentication },
+        { 403, TranslationErrorCategory::authentication },
+        { 429, TranslationErrorCategory::rateLimited },
         { 500, TranslationErrorCategory::connection },
-        { 503, TranslationErrorCategory::connection },
+        { 503, TranslationErrorCategory::serviceOverloaded },
     };
 
     for (const Case& c : cases)
@@ -450,9 +453,9 @@ TEST_CASE("OpenAI backend: refused upgrade maps HTTP status per section 9", "[op
 TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
           "[openai][protocol][faults]")
 {
-    // 429 with Retry-After: a retryable connection failure whose hint must
-    // cross the seam so the task 010 policy can honour "wait at least this
-    // long" (protocol section 9).
+    // 429 with Retry-After: a rate-limited refusal whose hint must cross the
+    // seam so the task 010 policy can honour "wait at least this long"
+    // (protocol section 9).
     {
         Scenario s;
         network::ConnectResult cr { false, 429, {} };
@@ -462,7 +465,7 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
 
         const auto errors = s.sink.errors();
         REQUIRE(errors.size() == 1);
-        CHECK(errors[0].category == TranslationErrorCategory::connection);
+        CHECK(errors[0].category == TranslationErrorCategory::rateLimited);
         CHECK(errors[0].retryAfterMs == 5000);
         s.sink.armAfterCloseExpectation();
         s.backend->closeSession();
@@ -503,7 +506,7 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
 
         const auto errors = s.sink.errors();
         REQUIRE(errors.size() == 1);
-        CHECK(errors[0].category == TranslationErrorCategory::connection);
+        CHECK(errors[0].category == TranslationErrorCategory::rateLimited);
         CHECK(errors[0].retryAfterMs == 0); // no hint -> the policy's own backoff
         s.sink.armAfterCloseExpectation();
         s.backend->closeSession();
@@ -1109,10 +1112,17 @@ TEST_CASE("OpenAI backend: in-session error events map to categories and stay re
     s.fake->queueMessage(
         R"({"type":"error","error":{"type":"invalid_request_error","message":"Invalid language code"}})");
     s.fake->queueMessage(R"({"type":"error","error":{"type":"server_error","message":"Temporary failure"}})");
+    // The section 9 transient codes, classification before the coarse type
+    // (code review P2): a bare "server_error" stays internal (unclassified),
+    // a coded refusal says which recovery applies.
+    s.fake->queueMessage(
+        R"({"type":"error","error":{"type":"server_error","code":"slow_down","message":"Please reduce your request rate."}})");
+    s.fake->queueMessage(
+        R"({"type":"error","error":{"type":"server_error","code":"server_is_overloaded","message":"The model is temporarily overloaded."}})");
     s.fake->queueMessage(R"({"type":"no_such_event_from_the_reference"})");
     s.fake->queueMessage("{not json at all");
 
-    REQUIRE(Scenario::waitFor([&] { return s.sink.errors().size() >= 5; }));
+    REQUIRE(Scenario::waitFor([&] { return s.sink.errors().size() >= 7; }));
     const auto errors = s.sink.errors();
 
     CHECK(std::any_of(errors.begin(), errors.end(), [](const TranslationError& e) {
@@ -1125,12 +1135,22 @@ TEST_CASE("OpenAI backend: in-session error events map to categories and stay re
         return e.category == TranslationErrorCategory::internal && !e.fatal;
     }));
     CHECK(std::any_of(errors.begin(), errors.end(), [](const TranslationError& e) {
+        return e.category == TranslationErrorCategory::rateLimited && !e.fatal;
+    }));
+    CHECK(std::any_of(errors.begin(), errors.end(), [](const TranslationError& e) {
+        return e.category == TranslationErrorCategory::serviceOverloaded && !e.fatal;
+    }));
+    CHECK(std::any_of(errors.begin(), errors.end(), [](const TranslationError& e) {
         return e.category == TranslationErrorCategory::protocol && !e.fatal; // unknown event + malformed
     }));
 
     // The provider's error-type names must not cross the sink seam (section 9).
     for (const auto& e : errors)
+    {
         CHECK(e.message.find("invalid_request_error") == std::string::npos);
+        CHECK(e.message.find("slow_down") == std::string::npos);
+        CHECK(e.message.find("server_is_overloaded") == std::string::npos);
+    }
 
     // Section 9: none of this killed the session.
     CHECK(s.backend->state() == SessionState::connected);

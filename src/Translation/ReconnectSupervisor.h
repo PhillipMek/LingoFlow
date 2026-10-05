@@ -14,13 +14,19 @@
 //
 // Policy decided here, from the protocol doc section 9 table (task 010 owns the
 // "when"; the docs deliberately do not choose for the product):
-//   * retryable: `connection` (transport death, refused upgrade with 429
-//     slow_down/rate/500/503) and `protocol` (the event stream broke its shape -
-//     a new session is the cure, and the docs' stance is that a broken stream
-//     says nothing about the request being valid).
-//   * terminal: `rejectedRequest` (a bad pair, a bad key, billing - "retrying
-//     won't restore API access"), `audioFormat` (a contract we ourselves got
-//     wrong; replaying the same request cannot help) and `internal` (unknown:
+//   * retryable: `connection` (transport death, refused upgrade with 500) and
+//     `protocol` (the event stream broke its shape - a new session is the cure,
+//     and the docs' stance is that a broken stream says nothing about the request
+//     being valid) - plus, since code review P2 (2026-10-05), the provider's own
+//     transient vocabulary: `rateLimited` (429/slow_down - Retry-After is the
+//     floor of the wait, the policy's backoff when no hint came) and
+//     `serviceOverloaded` (503/server_is_overloaded - transient by the provider's
+//     own description, the machine to back off against, not to fault on).
+//   * terminal: `authentication` (the account gate refused us - key, org, region:
+//     retrying without an operator change repeats the identical refusal),
+//     `rejectedRequest` (a bad pair, a bad model, billing - "retrying won't
+//     restore API access"), `audioFormat` (a contract we ourselves got wrong;
+//     replaying the same request cannot help) and `internal` (unknown:
 //     never mask an implementation defect inside a forever-loop). These map to
 //     the operator-actionable `faulted` state instead of hammering.
 //   * retries continue forever while the application runs - a venue network

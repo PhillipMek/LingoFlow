@@ -20,11 +20,14 @@ std::string_view nameOf(TranslationErrorCategory category) noexcept
 {
     switch (category)
     {
-        case TranslationErrorCategory::connection:      return "connection";
-        case TranslationErrorCategory::rejectedRequest: return "rejected-request";
-        case TranslationErrorCategory::audioFormat:     return "audio-format";
-        case TranslationErrorCategory::protocol:        return "protocol";
-        case TranslationErrorCategory::internal:        return "internal";
+        case TranslationErrorCategory::connection:        return "connection";
+        case TranslationErrorCategory::rejectedRequest:   return "rejected-request";
+        case TranslationErrorCategory::audioFormat:       return "audio-format";
+        case TranslationErrorCategory::protocol:          return "protocol";
+        case TranslationErrorCategory::rateLimited:       return "rate-limited";
+        case TranslationErrorCategory::serviceOverloaded: return "service-overloaded";
+        case TranslationErrorCategory::authentication:    return "authentication";
+        case TranslationErrorCategory::internal:          return "internal";
     }
     return "unknown";
 }

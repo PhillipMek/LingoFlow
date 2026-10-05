@@ -52,12 +52,18 @@ ReconnectSupervisor::~ReconnectSupervisor()
 
 bool ReconnectSupervisor::isRetryable(TranslationErrorCategory category) noexcept
 {
-    // docs/openai-realtime-protocol.md section 9, decided by task 010:
-    // a new session fixes transport deaths and a broken event stream; it fixes
-    // nothing that was refused because of what the request (or our own contract
-    // handling) is, and unknown failures must stay visible, not looped.
+    // docs/openai-realtime-protocol.md section 9, decided by task 010 and
+    // refined by code review P2 (2026-10-05): a new session fixes transport
+    // deaths, a broken event stream, and everything the provider labelled
+    // transient ("come back later" - 429 with its Retry-After, 503 overload).
+    // It fixes nothing that was refused because of WHO the request comes from
+    // (authentication), WHAT it asks (rejectedRequest: pair/model/rates, or
+    // the documented billing account state), or our own contract handling
+    // (audioFormat); and unknown failures must stay visible, not looped.
     return category == TranslationErrorCategory::connection
-        || category == TranslationErrorCategory::protocol;
+        || category == TranslationErrorCategory::protocol
+        || category == TranslationErrorCategory::rateLimited
+        || category == TranslationErrorCategory::serviceOverloaded;
 }
 
 // ---------------------------------------------------------------- ITranslationBackend

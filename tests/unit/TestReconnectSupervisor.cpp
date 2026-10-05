@@ -332,11 +332,13 @@ TEST_CASE("ReconnectSupervisor: protocol-fatal is retryable (task 010 decision)"
 TEST_CASE("ReconnectSupervisor: errors a new session cannot fix end recovery",
           "[translation][reconnect][faults]")
 {
-    // rejectedRequest (bad pair, bad key, billing), audioFormat (our own
-    // contract handling) and internal (unknown) are terminal by the policy in
+    // rejectedRequest (bad pair, billing), audioFormat (our own
+    // contract handling), authentication (the account gate) and internal
+    // (unknown) are terminal by the policy in
     // ReconnectSupervisor.h - retrying those loops on a closed door.
     for (const auto category : { TranslationErrorCategory::rejectedRequest,
                                  TranslationErrorCategory::audioFormat,
+                                 TranslationErrorCategory::authentication,
                                  TranslationErrorCategory::internal })
     {
         RecordingSink sink;
@@ -615,12 +617,49 @@ TEST_CASE("ReconnectSupervisor: audio keeps flowing after a recovery", "[transla
 TEST_CASE("ReconnectSupervisor: isRetryable matches the documented policy",
           "[translation][reconnect]")
 {
-    // The task 010 decision (docs section 9): transport deaths and broken
-    // event streams are fixed by a new session; refusals of what the request
-    // IS, contract-side format failures, and the unknown are not.
+    // The task 010 decision (docs section 9), refined by code review P2
+    // (2026-10-05): transport deaths, broken event streams and everything the
+    // provider itself labels transient ("come back later": rate limits,
+    // overload) are fixed - or at least retried honestly - by a new session.
+    // Refusals of WHO asks (authentication), of WHAT the request IS
+    // (rejectedRequest, billing included), our contract-side format failures
+    // (audioFormat) and the unknown are not.
     CHECK(ReconnectSupervisor::isRetryable(TranslationErrorCategory::connection));
     CHECK(ReconnectSupervisor::isRetryable(TranslationErrorCategory::protocol));
+    CHECK(ReconnectSupervisor::isRetryable(TranslationErrorCategory::rateLimited));
+    CHECK(ReconnectSupervisor::isRetryable(TranslationErrorCategory::serviceOverloaded));
+    CHECK_FALSE(ReconnectSupervisor::isRetryable(TranslationErrorCategory::authentication));
     CHECK_FALSE(ReconnectSupervisor::isRetryable(TranslationErrorCategory::rejectedRequest));
     CHECK_FALSE(ReconnectSupervisor::isRetryable(TranslationErrorCategory::audioFormat));
     CHECK_FALSE(ReconnectSupervisor::isRetryable(TranslationErrorCategory::internal));
+}
+
+TEST_CASE("ReconnectSupervisor: transient refusals recover, the account gate does not",
+          "[translation][reconnect][faults]")
+{
+    // The behavioral half of the same decision: a finer vocabulary is decoration
+    // until the policy table acts differently on it.
+    RecordingSink sink;
+    MockTranslationBackend* m = nullptr;
+    auto supervisor = makeSupervisor(std::make_unique<MockTranslationBackend>(), fastPolicy(), m, sink);
+    openAndRequire(*supervisor);
+
+    m->injectError(TranslationErrorCategory::rateLimited, "come back later", /*fatal=*/true);
+    REQUIRE(waitUntil([&] { return supervisor->state() == SessionState::connected; }));
+    CHECK(supervisor->stats().recoveries == 1);
+    CHECK(supervisor->stats().terminalFaults == 0);
+
+    m->injectError(TranslationErrorCategory::serviceOverloaded, "overloaded", /*fatal=*/true);
+    REQUIRE(waitUntil([&] { return supervisor->state() == SessionState::connected; }));
+    CHECK(supervisor->stats().recoveries == 2);
+
+    // The account gate: terminal, no background hammering of a door that only
+    // the operator can open.
+    m->injectError(TranslationErrorCategory::authentication, "the key was refused", /*fatal=*/true);
+    CHECK(supervisor->state() == SessionState::faulted);
+    CHECK(supervisor->stats().terminalFaults == 1);
+    const std::uint64_t attemptsAfter = supervisor->stats().attempts;
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    CHECK(supervisor->stats().attempts == attemptsAfter);
+    CHECK(supervisor->stats().recoveries == 2);   // and no "recoveries" were invented
 }

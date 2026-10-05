@@ -94,6 +94,9 @@ TEST_CASE("Translation error category names are stable", "[translation][contract
     CHECK(nameOf(TranslationErrorCategory::rejectedRequest) == "rejected-request");
     CHECK(nameOf(TranslationErrorCategory::audioFormat) == "audio-format");
     CHECK(nameOf(TranslationErrorCategory::protocol) == "protocol");
+    CHECK(nameOf(TranslationErrorCategory::rateLimited) == "rate-limited");
+    CHECK(nameOf(TranslationErrorCategory::serviceOverloaded) == "service-overloaded");
+    CHECK(nameOf(TranslationErrorCategory::authentication) == "authentication");
     CHECK(nameOf(TranslationErrorCategory::internal) == "internal");
 }
 

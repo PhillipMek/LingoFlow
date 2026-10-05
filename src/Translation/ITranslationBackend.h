@@ -113,10 +113,22 @@ enum class TranslationErrorCategory
 {
     connection = 0,   ///< transport-level failure: dropped, refused, timed out
     rejectedRequest,  ///< the session request itself was refused: pair, instructions,
-                      ///< model or rates the backend will not accept
+                      ///< model or rates the backend will not accept; also the
+                      ///< documented account/billing refusals (the request is fine,
+                      ///< the access is not - a fresh session fixes neither)
     audioFormat,      ///< audio cannot be used: bad rate or format on either side
     protocol,         ///< event stream broke the agreed shape (task 010 decides what
                       ///< is recoverable)
+    rateLimited,      ///< the provider said "come back later" (429 / slow_down,
+                      ///< protocol docs section 9): transient by description, and a
+                      ///< Retry-After hint travels with it when one was sent -
+                      ///< task 010 must honour it and must NOT declare death
+    serviceOverloaded,///< the service is temporarily saturated (503 /
+                      ///< server_is_overloaded, section 9): the machine to keep
+                      ///< backing off against, not the machine to fault on
+    authentication,   ///< the account gate refused us (401/403: key, org, region):
+                      ///< operator-actionable; retrying without an operator change
+                      ///< repeats the identical refusal, so task 010 stops
     internal          ///< anything else; the message is the whole truth we have
 };
 
