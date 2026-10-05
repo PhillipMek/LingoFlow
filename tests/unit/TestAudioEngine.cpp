@@ -252,7 +252,7 @@ TEST_CASE("AudioEngine: a null among promised inputs is a malformed callback, no
 
     CHECK(engine.malformedCallbacks() == 1);
     CHECK(engine.blockCount() == 0);
-    CHECK(engine.inputFramesCaptured() == 0);   // the surviving channel is NOT mixed alone
+    CHECK(engine.inputSamplesCaptured() == 0);   // the surviving channel is NOT mixed alone
     CHECK(engine.frameCount() == 0);            // and the block is not in the processed total
 
     for (int i = 0; i < kFrames; ++i)
@@ -303,6 +303,44 @@ TEST_CASE("AudioEngine: a null among promised outputs refuses the whole block",
     for (int i = 0; i < kFrames; ++i)
         REQUIRE(outBuf0[static_cast<std::size_t>(i)] == 0.0f);
 
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: channel-sample counters are channel-summed, frameCount is not",
+          "[audio][engine]")
+{
+    // Code review P2 (2026-10-05): two units live in the engine and they must
+    // not be confusable. One block of C channels and N frames adds C x N to
+    // the *Samples counters and exactly N to frameCount(). On the shipping
+    // single-channel capture they coincide numerically - which is why the old
+    // names went unchallenged - and on, say, 32 x 480 reading "captured 15360"
+    // as frames would claim 32x the room time. The names carry the unit; this
+    // test pins the arithmetic that makes the names true.
+    DeviceCapabilities caps = mono48k();
+    caps.inputChannels = 3;
+
+    AudioEngine engine;
+    NullAudioBackend backend(caps);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    REQUIRE(engine.inputChannels() == 3);
+
+    std::array<float, static_cast<std::size_t>(kFrames)> inBuf{};
+    std::array<float, static_cast<std::size_t>(kFrames)> outBuf{};
+    inBuf.fill(0.5f);
+    const float* in[] = { inBuf.data(), inBuf.data(), inBuf.data() };
+    float* out[] = { outBuf.data() };
+
+    engine.processAudio(in, out, kFrames);   // no consumer attached: captured, not forwarded
+
+    CHECK(engine.frameCount() == static_cast<std::uint64_t>(kFrames));   // device frames
+    CHECK(engine.inputSamplesCaptured() == 3u * static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputSamplesNotForwarded() == 3u * static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputSamplesForwarded() == 0);
+
+    // The single-channel coincidence the rename does not change: everything
+    // earlier tests asserted on 1 channel still reads identically.
     engine.deactivate();
 }
 

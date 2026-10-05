@@ -131,9 +131,9 @@ TEST_CASE("Realtime path: the audio callback allocates nothing", "[realtime][all
 
     // The accounting has to close. A synthetic burst can outrun the worker, in which
     // case the ring drops - that is allowed; audio vanishing without being counted is not.
-    CHECK(engine.inputFramesCaptured() == engine.inputFramesForwarded() + engine.inputRingDroppedFrames());
-    CHECK(engine.inputFramesCaptured() >= static_cast<std::uint64_t>(5050 * kFrames));
-    CHECK(engine.inputFramesForwarded() > 0);
+    CHECK(engine.inputSamplesCaptured() == engine.inputSamplesForwarded() + engine.inputRingDroppedSamples());
+    CHECK(engine.inputSamplesCaptured() >= static_cast<std::uint64_t>(5050 * kFrames));
+    CHECK(engine.inputSamplesForwarded() > 0);
 }
 
 TEST_CASE("Realtime path: the lock-free buffers allocate nothing while running",

@@ -193,9 +193,12 @@ guarantee that changing either makes no click.
   keeping the previous level instead of inventing one (`gainRequestsRejected()`). A
   refused request is never silent.
 * **Three clipping counts, because they are three different questions.**
-  `inputClippedFrames()` (the device fed us full scale), `inputGainClippedFrames()` (our
-  own trim created it on the way to the translator) and `outputGainClippedFrames()` (what
-  is heading at the audience). A latching `takeInputClipIndicator()` /
+  `inputClippedSamples()` (the device fed us full scale), `inputGainClippedSamples()` (our
+  own trim created it on the way to the translator) and `outputGainClippedSamples()` (what
+  is heading at the audience). Every `*Samples()` engine counter is channel-summed (one
+  block of C channels and N frames adds C x N); `frameCount()` alone counts device frames
+  - the unit note of code review P2, 2026-10-05, which is invisible on the single-channel
+  capture and misleading on a multi-channel one. A latching `takeInputClipIndicator()` /
   `takeOutputClipIndicator()` exists for the UI lamp, so the interface does not have to
   diff counters between frames.
 * **This stage does not limit.** SPEC puts a limiter under "Future architecture", so a
@@ -204,7 +207,7 @@ guarantee that changing either makes no click.
   to infinity becomes full scale, because no converter can reproduce infinity, and every
   such sample is counted. A test pins the rule so a future limiter cannot arrive quietly.
 * **Non-finite samples become silence, counted.** NaN from a driver is not audio; one
-  poisoned sample silences one sample (`nonFiniteInputFrames()`) instead of propagating
+  poisoned sample silences one sample (`nonFiniteInputSamples()`) instead of propagating
   into the translation stream or the room.
 * **Input mute and output mute are different controls.** Muting the input stops feeding
   the translator; muting the output stops the audience hearing anything. One shared

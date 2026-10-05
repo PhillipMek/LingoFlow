@@ -218,14 +218,14 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
         { "audio blocks", formatCount(diag.audioBlocks) },
         { "underruns", formatCount(diag.underruns) },
         { "overruns", formatCount(diag.overruns) },
-        { "ring dropped", formatCount(engine.inputRingDroppedFrames()) },
+        { "ring dropped (samples)", formatCount(engine.inputRingDroppedSamples()) },
         { "capture submitted", formatCount(diag.translationSubmittedFrames) },
         { "capture gap-refused", formatCount(diag.translationGapFrames) },
         { "translated audio frames", formatCount(diag.translatedAudioFrames) },
         { "rejected (wrong rate)", formatCount(diag.rejectedAudioFrames) },
         { "dropped (buffer full)", formatCount(diag.translatedAudioDroppedFrames) },
-        { "clip frames in / out", formatCount(engine.inputClippedFrames())
-                                      + " / " + formatCount(engine.outputGainClippedFrames()) },
+        { "clip samples in / out", formatCount(engine.inputClippedSamples())
+                                      + " / " + formatCount(engine.outputGainClippedSamples()) },
         { "translation errors (fatal)", formatCount(diag.translationErrors)
                                             + " (" + formatCount(diag.translationFatalErrors) + ")" },
         { "reconnects", formatCount(diag.reconnects) },

@@ -424,22 +424,22 @@ std::uint64_t AudioEngine::sumOutputStages(std::uint64_t (audio::GainStage::*cou
     return total;
 }
 
-std::uint64_t AudioEngine::inputClippedFrames() const noexcept
+std::uint64_t AudioEngine::inputClippedSamples() const noexcept
 {
     return sumInputStages(&audio::GainStage::clippedInFrames);
 }
 
-std::uint64_t AudioEngine::inputGainClippedFrames() const noexcept
+std::uint64_t AudioEngine::inputGainClippedSamples() const noexcept
 {
     return sumInputStages(&audio::GainStage::clippedOutFrames);
 }
 
-std::uint64_t AudioEngine::outputGainClippedFrames() const noexcept
+std::uint64_t AudioEngine::outputGainClippedSamples() const noexcept
 {
     return sumOutputStages(&audio::GainStage::clippedOutFrames);
 }
 
-std::uint64_t AudioEngine::nonFiniteInputFrames() const noexcept
+std::uint64_t AudioEngine::nonFiniteInputSamples() const noexcept
 {
     return sumInputStages(&audio::GainStage::nonFiniteInFrames);
 }
@@ -611,21 +611,21 @@ void AudioEngine::processAudio(const float* const* input,
                 // stage's own count, which attenuation cannot hide.
                 inputMeters_[static_cast<std::size_t>(channel)]->measure(scratch, take);
 
-                inputCaptured_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
+                inputSamplesCaptured_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
 
                 if (!forwarding)
                 {
                     // Nobody is draining the rings yet (no translation worker, no
                     // loopback). Counting this as an overrun would be a lie: nothing
                     // overflowed, there was simply no consumer.
-                    inputDropped_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
+                    inputSamplesNotForwarded_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
                     offset += take;
                     continue;
                 }
 
                 const std::size_t written = ring != nullptr ? ring->write(scratch, take) : 0;
 
-                inputForwarded_.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
+                inputSamplesForwarded_.fetch_add(static_cast<std::uint64_t>(written), std::memory_order_relaxed);
 
                 if (written != take)
                 {
@@ -634,7 +634,7 @@ void AudioEngine::processAudio(const float* const* input,
                     // Counted at engine level on purpose: deactivate() destroys the ring
                     // objects, and a counter that reads through to them would silently
                     // report 0 after shutdown, exactly when the operator wants to see it.
-                    ringDropped_.fetch_add(static_cast<std::uint64_t>(take - written), std::memory_order_relaxed);
+                    ringDroppedSamples_.fetch_add(static_cast<std::uint64_t>(take - written), std::memory_order_relaxed);
 
                     if (diagnostics_ != nullptr)
                         diagnostics_->countOverrun();
@@ -658,7 +658,7 @@ void AudioEngine::processAudio(const float* const* input,
 
             if (taken != frames)
             {
-                outputSilence_.fetch_add(static_cast<std::uint64_t>(frames - taken), std::memory_order_relaxed);
+                outputSilenceSamples_.fetch_add(static_cast<std::uint64_t>(frames - taken), std::memory_order_relaxed);
                 underruns_.fetch_add(1, std::memory_order_relaxed);
 
                 if (diagnostics_ != nullptr)

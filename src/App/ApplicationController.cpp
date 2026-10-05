@@ -401,15 +401,21 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     audioRows.emplace_back("audio_frames", std::to_string(diag.audioFrames));
     audioRows.emplace_back("underruns", std::to_string(diag.underruns));
     audioRows.emplace_back("overruns", std::to_string(diag.overruns));
-    audioRows.emplace_back("input_ring_dropped_frames", std::to_string(engine.inputRingDroppedFrames()));
-    audioRows.emplace_back("output_silence_frames", std::to_string(engine.outputSilenceFrames()));
+    // Units stated where the numbers are read (code review P2, 2026-10-05):
+    // *_samples are channel-summed, *_frames are device frames. On the
+    // single-channel capture the values coincide; a multi-channel venue
+    // receipt must not require knowing the geometry to be read correctly.
+    audioRows.emplace_back("counter_units",
+                           "samples = channel-summed; frames = device frames (x channels when > 1)");
+    audioRows.emplace_back("input_ring_dropped_samples", std::to_string(engine.inputRingDroppedSamples()));
+    audioRows.emplace_back("output_silence_samples", std::to_string(engine.outputSilenceSamples()));
     audioRows.emplace_back("jitter_fill_frames", std::to_string(engine.jitterFillFrames()));
-    audioRows.emplace_back("clip_frames_in", std::to_string(engine.inputClippedFrames()));
-    audioRows.emplace_back("clip_frames_input_gain", std::to_string(engine.inputGainClippedFrames()));
-    audioRows.emplace_back("clip_frames_output_gain", std::to_string(engine.outputGainClippedFrames()));
+    audioRows.emplace_back("clip_samples_in", std::to_string(engine.inputClippedSamples()));
+    audioRows.emplace_back("clip_samples_input_gain", std::to_string(engine.inputGainClippedSamples()));
+    audioRows.emplace_back("clip_samples_output_gain", std::to_string(engine.outputGainClippedSamples()));
     audioRows.emplace_back("gain_requests_clamped", std::to_string(engine.gainRequestsClamped()));
     audioRows.emplace_back("gain_requests_rejected", std::to_string(engine.gainRequestsRejected()));
-    audioRows.emplace_back("nonfinite_input_frames", std::to_string(engine.nonFiniteInputFrames()));
+    audioRows.emplace_back("nonfinite_input_samples", std::to_string(engine.nonFiniteInputSamples()));
     audioRows.emplace_back("malformed_callbacks", std::to_string(engine.malformedCallbacks()));
     audioRows.emplace_back("oversized_callbacks", std::to_string(engine.oversizedCallbacks()));
     audioRows.emplace_back("input_level", meterText(engine.inputMeter(0)));

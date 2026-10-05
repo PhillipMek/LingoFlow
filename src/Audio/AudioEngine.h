@@ -25,7 +25,7 @@
 // The input rings are drained by whoever is consuming translation: task 005 ships the
 // loopback worker, task 012 the OpenAI streaming worker. While nobody is attached, the
 // engine still measures the input but does not write it into the rings, and counts
-// those frames separately (inputFramesNotForwarded) instead of reporting a fake
+// those samples separately (inputSamplesNotForwarded) instead of reporting a fake
 // overrun.
 //
 // Dependency direction (AGENTS.md 7): AudioEngine knows IAudioBackend only. It does
@@ -137,19 +137,22 @@ public:
     float appliedInputGainDb() const noexcept;
     float appliedOutputGainDb() const noexcept;
 
-    /// Clipping, as three separate facts, because they need three different reactions:
-    ///  inputClippedFrames()      - full scale arriving from the device. Turning our own
+    /// Clipping, as three separate facts, because they need three different
+    /// reactions (channel samples, summed across channels - see the units note
+    /// above the live readouts):
+    ///  inputClippedSamples()      - full scale arriving from the device. Turning our own
     ///                              gain down cannot undo it, and a post-gain meter alone
     ///                              would hide a damaged console feed.
-    ///  inputGainClippedFrames()  - full scale produced by the input trim, i.e. what the
+    ///  inputGainClippedSamples()  - full scale produced by the input trim, i.e. what the
     ///                              translator is being handed.
-    ///  outputGainClippedFrames() - full scale on the way to the audience.
-    std::uint64_t inputClippedFrames() const noexcept;
-    std::uint64_t inputGainClippedFrames() const noexcept;
-    std::uint64_t outputGainClippedFrames() const noexcept;
+    ///  outputGainClippedSamples() - full scale on the way to the audience.
+    std::uint64_t inputClippedSamples() const noexcept;
+    std::uint64_t inputGainClippedSamples() const noexcept;
+    std::uint64_t outputGainClippedSamples() const noexcept;
 
-    /// Non-finite samples the input stage replaced by silence (counted, never swallowed).
-    std::uint64_t nonFiniteInputFrames() const noexcept;
+    /// Non-finite samples the input stage replaced by silence (counted, never
+    /// swallowed; channel samples).
+    std::uint64_t nonFiniteInputSamples() const noexcept;
 
     /// Requests the engine had to clamp or refuse, summed over both sides.
     std::uint64_t gainRequestsClamped() const noexcept { return gainClamped_.load(std::memory_order_relaxed); }
@@ -170,28 +173,43 @@ public:
     const audio::LevelMeter* outputMeter(int channel) const noexcept;
 
     // ---------------------------------------------------------------- live readouts
+    //
+    // Counter units, stated because two natural units live in this class and the
+    // difference only bites on multi-channel geometry (code review P2, 2026-10-05):
+    //   DEVICE FRAMES  - frameCount() adds the callback's frameCount once per
+    //     block: 480 means 480 frames of room time whatever the channel count.
+    //   CHANNEL SAMPLES - every *Samples counter accumulates per channel inside
+    //     the callback loop, so one block of C channels and N frames adds C x N.
+    // With the single-channel capture the product actually translates on, the two
+    // units coincide numerically - which is exactly why the old names could sit
+    // unchallenged: on 32 x 480 "captured 15360" is samples, and reading it as
+    // frames would claim 32x the room time. The names carry the unit so nobody
+    // has to know the channel count to read the diagnostics correctly. The 018
+    // latency accounting divides only device-frame quantities (jitter fill, the
+    // single-channel translation stream) into milliseconds; no *Samples number
+    // is a duration input anywhere.
     std::uint64_t blockCount() const noexcept { return blocks_.load(std::memory_order_relaxed); }
     std::uint64_t frameCount() const noexcept { return frames_.load(std::memory_order_relaxed); }
     int sampleRate() const noexcept { return sampleRate_.load(std::memory_order_relaxed); }
     int bufferFrames() const noexcept { return bufferFrames_.load(std::memory_order_relaxed); }
 
-    /// Device frames seen in the callback.
-    std::uint64_t inputFramesCaptured() const noexcept { return inputCaptured_.load(std::memory_order_relaxed); }
+    /// Channel samples read from the device in the callback.
+    std::uint64_t inputSamplesCaptured() const noexcept { return inputSamplesCaptured_.load(std::memory_order_relaxed); }
 
-    /// Frames written into the input rings for the consumer.
-    std::uint64_t inputFramesForwarded() const noexcept { return inputForwarded_.load(std::memory_order_relaxed); }
+    /// Channel samples written into the input rings for the consumer.
+    std::uint64_t inputSamplesForwarded() const noexcept { return inputSamplesForwarded_.load(std::memory_order_relaxed); }
 
-    /// Frames not forwarded because no consumer was attached.
-    std::uint64_t inputFramesNotForwarded() const noexcept { return inputDropped_.load(std::memory_order_relaxed); }
+    /// Channel samples not forwarded because no consumer was attached.
+    std::uint64_t inputSamplesNotForwarded() const noexcept { return inputSamplesNotForwarded_.load(std::memory_order_relaxed); }
 
-    /// Frames the rings lost because the consumer stalled (ring overflow). Kept as an
-    /// engine-level total, not read out of the buffers: deactivate() releases the
-    /// buffers, and a counter that silently turns into 0 after shutdown would be worse
-    /// than useless for the operator's diagnostics.
-    std::uint64_t inputRingDroppedFrames() const noexcept { return ringDropped_.load(std::memory_order_relaxed); }
+    /// Channel samples the rings lost because the consumer stalled (ring overflow).
+    /// Kept as an engine-level total, not read out of the buffers: deactivate()
+    /// releases the buffers, and a counter that silently turns into 0 after
+    /// shutdown would be worse than useless for the operator's diagnostics.
+    std::uint64_t inputRingDroppedSamples() const noexcept { return ringDroppedSamples_.load(std::memory_order_relaxed); }
 
-    /// Frames played as silence (jitter underflow or pre-roll).
-    std::uint64_t outputSilenceFrames() const noexcept { return outputSilence_.load(std::memory_order_relaxed); }
+    /// Channel samples played as silence (jitter underflow or pre-roll).
+    std::uint64_t outputSilenceSamples() const noexcept { return outputSilenceSamples_.load(std::memory_order_relaxed); }
 
     /// Blocks that had to be partly or fully silence.
     std::uint64_t underrunEvents() const noexcept { return underruns_.load(std::memory_order_relaxed); }
@@ -272,13 +290,13 @@ private:
     std::atomic<int> sampleRate_{ 0 };
     std::atomic<int> bufferFrames_{ 0 };
 
-    std::atomic<std::uint64_t> inputCaptured_{ 0 };
-    std::atomic<std::uint64_t> inputForwarded_{ 0 };
-    std::atomic<std::uint64_t> inputDropped_{ 0 };
-    std::atomic<std::uint64_t> outputSilence_{ 0 };
+    std::atomic<std::uint64_t> inputSamplesCaptured_{ 0 };
+    std::atomic<std::uint64_t> inputSamplesForwarded_{ 0 };
+    std::atomic<std::uint64_t> inputSamplesNotForwarded_{ 0 };
+    std::atomic<std::uint64_t> outputSilenceSamples_{ 0 };
     std::atomic<std::uint64_t> underruns_{ 0 };
     std::atomic<std::uint64_t> overruns_{ 0 };
-    std::atomic<std::uint64_t> ringDropped_{ 0 };
+    std::atomic<std::uint64_t> ringDroppedSamples_{ 0 };
     std::atomic<std::uint64_t> malformedCallbacks_{ 0 };
     std::atomic<std::uint64_t> oversized_{ 0 };
 

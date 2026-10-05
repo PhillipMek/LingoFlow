@@ -402,9 +402,9 @@ TEST_CASE("AudioEngine: without a consumer the input is measured but not forward
 
     engine.processAudio(inPointers, outPointers, kFrames);
 
-    CHECK(engine.inputFramesCaptured() == static_cast<std::uint64_t>(kFrames));
-    CHECK(engine.inputFramesForwarded() == 0);
-    CHECK(engine.inputFramesNotForwarded() == static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputSamplesCaptured() == static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputSamplesForwarded() == 0);
+    CHECK(engine.inputSamplesNotForwarded() == static_cast<std::uint64_t>(kFrames));
     CHECK(engine.inputRing(0)->readable() == 0);
 
     // Nothing was dropped by a full buffer, so the overrun counter must stay clean.
@@ -431,8 +431,8 @@ TEST_CASE("AudioEngine: input frames are measured and underruns are reported to 
     REQUIRE(instrumented.activate(backend, request(), error));
     REQUIRE(backend.renderOneBlock());
 
-    CHECK(instrumented.inputFramesCaptured() == static_cast<std::uint64_t>(kFrames));
-    CHECK(instrumented.outputSilenceFrames() == static_cast<std::uint64_t>(kFrames));
+    CHECK(instrumented.inputSamplesCaptured() == static_cast<std::uint64_t>(kFrames));
+    CHECK(instrumented.outputSilenceSamples() == static_cast<std::uint64_t>(kFrames));
     CHECK(instrumented.underrunEvents() >= 1);
     CHECK(diagnostics.counters().underruns >= 1);
     CHECK(diagnostics.counters().overruns == 0);
@@ -478,9 +478,9 @@ TEST_CASE("AudioEngine: pipeline counters survive deactivation", "[audio][engine
     for (int block = 0; block < 400; ++block)
         engine.processAudio(inPointers, outPointers, kFrames);
 
-    const std::uint64_t captured = engine.inputFramesCaptured();
-    const std::uint64_t forwarded = engine.inputFramesForwarded();
-    const std::uint64_t dropped = engine.inputRingDroppedFrames();
+    const std::uint64_t captured = engine.inputSamplesCaptured();
+    const std::uint64_t forwarded = engine.inputSamplesForwarded();
+    const std::uint64_t dropped = engine.inputRingDroppedSamples();
 
     REQUIRE(dropped > 0);                                   // the overflow did happen
     REQUIRE(captured == forwarded + dropped);               // and was accounted for
@@ -489,9 +489,9 @@ TEST_CASE("AudioEngine: pipeline counters survive deactivation", "[audio][engine
     // operator-facing numbers must not silently fall back to zero afterwards.
     engine.deactivate();
 
-    CHECK(engine.inputFramesCaptured() == captured);
-    CHECK(engine.inputFramesForwarded() == forwarded);
-    CHECK(engine.inputRingDroppedFrames() == dropped);
+    CHECK(engine.inputSamplesCaptured() == captured);
+    CHECK(engine.inputSamplesForwarded() == forwarded);
+    CHECK(engine.inputRingDroppedSamples() == dropped);
     CHECK(engine.underrunEvents() > 0);
     CHECK(engine.overrunEvents() > 0);
     CHECK(engine.blockCount() == 400);
@@ -650,13 +650,13 @@ TEST_CASE("AudioEngine: attenuation cannot hide clipping that came from the devi
 
     // The count says the console fed clipped audio, and it stays true however much the
     // application turns its own gain down.
-    CHECK(engine.inputClippedFrames() == 4 * static_cast<std::uint64_t>(kFrames));
-    CHECK(engine.inputGainClippedFrames() == 0);   // ... and after -24 dB nothing is at full scale
+    CHECK(engine.inputClippedSamples() == 4 * static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputGainClippedSamples() == 0);   // ... and after -24 dB nothing is at full scale
     CHECK(engine.takeInputClipIndicator());        // the indicator still lights
 
     // The output side has its own number, because it answers a different question: what
     // is being sent to the audience.
-    CHECK(engine.outputGainClippedFrames() == 0);
+    CHECK(engine.outputGainClippedSamples() == 0);
 
     engine.deactivate();
 }
@@ -693,7 +693,7 @@ TEST_CASE("AudioEngine: output gain sits after the jitter buffer, on the way to 
 
     // The meter and the wire agree: what the operator sees is what the audience hears.
     CHECK(std::fabs(engine.outputMeter(0)->peakLinear() - expected) < 1e-5f);
-    CHECK(engine.outputSilenceFrames() == 0);
+    CHECK(engine.outputSilenceSamples() == 0);
 
     engine.deactivate();
 }
@@ -802,7 +802,7 @@ TEST_CASE("AudioEngine: gain settings and clipping history survive a device rest
     // that it clipped.
     CHECK(engine.inputGainDb() == -6.0f);
     CHECK(engine.outputGainDb() == 3.0f);
-    CHECK(engine.inputClippedFrames() == static_cast<std::uint64_t>(kFrames));
+    CHECK(engine.inputClippedSamples() == static_cast<std::uint64_t>(kFrames));
 
     NullAudioBackend another;
     REQUIRE(engine.activate(another, request(), error));
@@ -821,7 +821,7 @@ TEST_CASE("AudioEngine: gain settings and clipping history survive a device rest
     for (const float sample : received)
         CHECK(std::fabs(sample - expected) < 1e-5f);
 
-    CHECK(engine.inputClippedFrames() == static_cast<std::uint64_t>(kFrames));   // not reset, not doubled
+    CHECK(engine.inputClippedSamples() == static_cast<std::uint64_t>(kFrames));   // not reset, not doubled
     CHECK(engine.oversizedCallbacks() == 0);
 
     engine.deactivate();
@@ -848,9 +848,9 @@ TEST_CASE("AudioEngine: a block bigger than one gain chunk is chunked, not overr
     drive.run(engine, 0.5f, frames);
 
     CHECK(engine.oversizedCallbacks() == 1);
-    CHECK(engine.inputFramesCaptured() == static_cast<std::uint64_t>(frames));
-    CHECK(engine.inputFramesForwarded() == static_cast<std::uint64_t>(frames));
-    CHECK(engine.inputRingDroppedFrames() == 0);
+    CHECK(engine.inputSamplesCaptured() == static_cast<std::uint64_t>(frames));
+    CHECK(engine.inputSamplesForwarded() == static_cast<std::uint64_t>(frames));
+    CHECK(engine.inputRingDroppedSamples() == 0);
     CHECK(engine.malformedCallbacks() == 0);
 
     std::vector<float> received(static_cast<std::size_t>(frames), 0.0f);
@@ -937,9 +937,9 @@ TEST_CASE("AudioEngine: both trims compose along the pipeline in SPEC order",
     for (const float sample : drive.out)
         CHECK(std::fabs(sample - 0.25f) < 1e-5f);
 
-    CHECK(engine.inputFramesForwarded() > 0);
-    CHECK(engine.outputGainClippedFrames() == 0);
-    CHECK(engine.inputGainClippedFrames() == 0);
+    CHECK(engine.inputSamplesForwarded() > 0);
+    CHECK(engine.outputGainClippedSamples() == 0);
+    CHECK(engine.inputGainClippedSamples() == 0);
 
     // The same run with the output trim pushed to the ceiling must clip on the way out and
     // say so, rather than deliver a quietly limited signal.
@@ -956,11 +956,11 @@ TEST_CASE("AudioEngine: both trims compose along the pipeline in SPEC order",
     }
 
     // The input is still the tame -6 dB version, so the input side reports no clipping...
-    CHECK(engine.inputGainClippedFrames() == 0);
+    CHECK(engine.inputGainClippedSamples() == 0);
 
     // ... while the wire is over full scale, and the only way it stays finite is that the
     // stage counted every one of those samples.
-    CHECK(engine.outputGainClippedFrames() > 0);
+    CHECK(engine.outputGainClippedSamples() > 0);
     CHECK(engine.takeOutputClipIndicator());
 
     for (const float sample : drive.out)
@@ -978,10 +978,10 @@ TEST_CASE("AudioEngine: meters and clipping readouts exist before the pipeline i
     // these from a timer that does not know whether the device started.
     CHECK(engine.inputMeter(0) == nullptr);
     CHECK(engine.outputMeter(0) == nullptr);
-    CHECK(engine.inputClippedFrames() == 0);
-    CHECK(engine.inputGainClippedFrames() == 0);
-    CHECK(engine.outputGainClippedFrames() == 0);
-    CHECK(engine.nonFiniteInputFrames() == 0);
+    CHECK(engine.inputClippedSamples() == 0);
+    CHECK(engine.inputGainClippedSamples() == 0);
+    CHECK(engine.outputGainClippedSamples() == 0);
+    CHECK(engine.nonFiniteInputSamples() == 0);
     CHECK_FALSE(engine.takeInputClipIndicator());
     CHECK_FALSE(engine.takeOutputClipIndicator());
     CHECK(engine.appliedInputGainDb() == 0.0f);
@@ -1052,7 +1052,7 @@ TEST_CASE("AudioLoopback: a ramp written at the input comes back at the output",
     // matters is that the input reappeared at the output, in order and unmodified.
     REQUIRE_FALSE(played.empty());
     CHECK(loopback.transferredFrames() > 0);
-    CHECK(engine.inputFramesForwarded() > 0);
+    CHECK(engine.inputSamplesForwarded() > 0);
 
     for (std::size_t i = 1; i < played.size(); ++i)
         CHECK(played[i] >= played[i - 1]);           // monotone: nothing reordered
@@ -1107,7 +1107,7 @@ TEST_CASE("AudioLoopback: stopping it leaves the output on silence, never stale 
     }
 
     CHECK(heardSilence);
-    CHECK(engine.inputFramesForwarded() == static_cast<std::uint64_t>(40 * kFrames));
+    CHECK(engine.inputSamplesForwarded() == static_cast<std::uint64_t>(40 * kFrames));
 
     engine.deactivate();
 }
@@ -1164,8 +1164,8 @@ TEST_CASE("AudioEngine: stress - device callback and loopback thread against the
     // forwarded into the rings or explicitly dropped. A synthetic burst of 5000 blocks
     // is far faster than a real device, so the ring may legitimately overflow - what
     // must never happen is audio that disappeared without being counted.
-    CHECK(engine.inputFramesCaptured() == engine.inputFramesForwarded() + engine.inputRingDroppedFrames());
+    CHECK(engine.inputSamplesCaptured() == engine.inputSamplesForwarded() + engine.inputRingDroppedSamples());
     CHECK(engine.malformedCallbacks() == 0);
-    CHECK(engine.inputFramesForwarded() > 0);
+    CHECK(engine.inputSamplesForwarded() > 0);
     CHECK(heard > 0);
 }

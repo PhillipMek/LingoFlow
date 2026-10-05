@@ -266,9 +266,9 @@ TEST_CASE("TranslationStreamer: stop joins the worker and detaches the consumer"
 
     // Frames produced after stop are back to "not forwarded" - nobody claimed
     // the consumer role anymore (the engine counts them, never fakes it).
-    const auto before = h.engine.inputFramesNotForwarded();
+    const auto before = h.engine.inputSamplesNotForwarded();
     h.feed(h.engine, ramp);
-    CHECK(h.engine.inputFramesNotForwarded() > before);
+    CHECK(h.engine.inputSamplesNotForwarded() > before);
 
     // Idempotent, and start refuses without a pipeline or twice in a row.
     streamer.stop();

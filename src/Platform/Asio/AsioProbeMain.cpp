@@ -490,7 +490,7 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
                   << " appliedGain=" << engine.appliedInputGainDb() << '/'
                   << engine.appliedOutputGainDb() << " dB"
                   << " blocks=" << engine.blockCount()
-                  << " forwarded=" << engine.inputFramesForwarded()
+                  << " fwdSamples=" << engine.inputSamplesForwarded()
                   << " looped=" << loopback.transferredFrames()
                   << " underruns=" << engine.underrunEvents()
                   << " overruns=" << engine.overrunEvents()
@@ -505,10 +505,10 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
 
     // Read before deactivate() only to prove the point that these belong to the engine
     // and the gain stages: the same numbers are printed again after the shutdown below.
-    const std::uint64_t clippedIn = engine.inputClippedFrames();
-    const std::uint64_t clippedAfterGain = engine.inputGainClippedFrames();
-    const std::uint64_t clippedOut = engine.outputGainClippedFrames();
-    const std::uint64_t nonFinite = engine.nonFiniteInputFrames();
+    const std::uint64_t clippedIn = engine.inputClippedSamples();
+    const std::uint64_t clippedAfterGain = engine.inputGainClippedSamples();
+    const std::uint64_t clippedOut = engine.outputGainClippedSamples();
+    const std::uint64_t nonFinite = engine.nonFiniteInputSamples();
 
     loopback.stop();
     engine.deactivate();
@@ -519,7 +519,7 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
               << " maxOutput=" << static_cast<int>(audio::linearToDb(maxOutputPeak)) << " dBFS"
               << " underruns=" << engine.underrunEvents()
               << " overruns=" << engine.overrunEvents()
-              << " ringDrops=" << engine.inputRingDroppedFrames()
+              << " ringDropSamples=" << engine.inputRingDroppedSamples()
               << " malformed=" << engine.malformedCallbacks()
               << " oversized=" << engine.oversizedCallbacks()
               << " xruns=" << asio::describeXRunCount(xruns)

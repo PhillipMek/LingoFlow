@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 337 tests.
+(task 019), and 338 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-337 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+338 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -320,14 +320,17 @@ without changing what the translator was fed). Behaviour, all covered by tests:
   one that stopped being a number at all (a product that overflowed to infinity becomes
   full scale) - and every such sample is counted.
 * **Clipping is counted three times, because there are three questions.** What arrived at
-  full scale from the device (`inputClippedFrames`), what our own input trim produced on
-  the way to the translator (`inputGainClippedFrames`) and what is heading at the audience
-  (`outputGainClippedFrames`). Turning the gain down cannot hide the first one, which is
+  full scale from the device (`inputClippedSamples`), what our own input trim produced on
+  the way to the translator (`inputGainClippedSamples`) and what is heading at the audience
+  (`outputGainClippedSamples`). These - like every `*Samples` engine counter - sum channel
+  samples, not device frames: identical numbers on the single-channel capture the product
+  translates on, C-times-larger on C channels, which the name says out loud (code review
+  P2, 2026-10-05). Turning the gain down cannot hide the first one, which is
   the whole reason the meters read post-gain audio but the stage also counts pre-gain
   full-scale samples. A latching `takeInputClipIndicator()` / `takeOutputClipIndicator()`
   is what the UI lamp will use.
 * **Non-finite samples become silence, counted.** One NaN from a driver silences one
-  sample (`nonFiniteInputFrames`) instead of poisoning the translation stream or the room.
+  sample (`nonFiniteInputSamples`) instead of poisoning the translation stream or the room.
 * **Levels survive a device restart.** The stages are not released by `deactivate()`, so a
   re-opened ASIO device starts with the same gains, the same mute state and the same
   clipping history.
