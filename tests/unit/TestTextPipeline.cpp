@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <condition_variable>
 #include <mutex>
 #include <set>
 #include <string>
@@ -24,9 +25,16 @@ public:
     {
         pipeline.setListener([this](const TranslationTextEvent& event)
         {
-            const std::lock_guard<std::mutex> lock(mutex_);
-            events_.push_back(event);
+            record(event);
         });
+    }
+
+    /// Also public for listeners that gate first and record later (the
+    /// pressure test wedges the worker before recording).
+    void record(const TranslationTextEvent& event)
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        events_.push_back(event);
     }
 
     std::vector<TranslationTextEvent> events() const
@@ -77,7 +85,10 @@ TEST_CASE("TextPipeline: partials replace the open line, finals own history",
     CHECK(snap.history[0].text == "Good evening!");
 
     // Every emitted event is typed and numbered; the sequence is monotonic
-    // across both kinds and arrival stamps never run backwards.
+    // across both kinds and arrival stamps never run backwards. Delivery is
+    // async since code review P2 - the barrier makes the recorder's view
+    // complete before the first assertion reads it.
+    pipeline.waitForDispatch();
     const auto events = rec.events();
     REQUIRE(events.size() == 3);
     CHECK(events[0].kind == TextKind::partial);
@@ -147,6 +158,7 @@ TEST_CASE("TextPipeline: two honest layers closing the same line produce one ent
     REQUIRE(snap.history.size() == 1);
     CHECK(snap.history[0].text == "the interrupted line");
     CHECK(pipeline.ignoredDuplicates() == 1);
+    pipeline.waitForDispatch();   // async delivery (code review P2)
     CHECK(rec.count() == 2);   // partial + first final; the duplicate emitted nothing
 
     // And the reverse arrival order works identically.
@@ -242,8 +254,12 @@ TEST_CASE("TextPipeline: snapshots are copies; reads and writes race safely",
 {
     // The contract does not serialize sink callbacks: run two ingesting threads
     // against one pipeline (audio would be none of their business - this class
-    // never touches it) and check the invariants the UI depends on.
-    TextPipeline pipeline(16);
+    // never touches it) and check the invariants the UI depends on. The
+    // dispatch queue is deliberately oversized against the ~600 events this
+    // test can emit, so the recorder sees every event (no pressure drops by
+    // construction) while the producer threads still outrun a mutex+push
+    // listener occasionally.
+    TextPipeline pipeline(16, 2048);
     Recorder rec;
     rec.attach(pipeline);
 
@@ -284,9 +300,12 @@ TEST_CASE("TextPipeline: snapshots are copies; reads and writes race safely",
     CHECK(snap.currentLine.empty());
     CHECK(pipeline.evictedLines() + snap.history.size() <= 601);   // sane ceiling
 
-    // Event identity under concurrency: sequences are unique and strictly
-    // increasing in emission order - the listener runs under the lock, so no
-    // two events can share a number or overtake each other.
+    // Event identity under concurrency. Since code review P2 the listener
+    // fires on the pipeline's dispatch worker: the queue is FIFO and drained
+    // by that single consumer, so events arrive strictly increasing in their
+    // sequence numbers, none shared, none overtaken - the same guarantee the
+    // under-lock design gave, now without the lock under the callback.
+    pipeline.waitForDispatch();
     const auto events = rec.events();
     std::set<std::uint64_t> seen;
     std::uint64_t previous = 0;
@@ -308,4 +327,148 @@ TEST_CASE("TextPipeline: nameOf covers both kinds", "[translation][text][pipelin
 {
     CHECK(translation::nameOf(TextKind::partial) == "partial");
     CHECK(translation::nameOf(TextKind::final) == "final");
+}
+
+TEST_CASE("TextPipeline: the listener is not under the pipeline lock",
+          "[translation][text][dispatch]")
+{
+    // Code review P2 (2026-10-05), the regression proof: the old design fired
+    // the listener with mutex_ held, so ANY reentrant call was a self-deadlock
+    // on a non-recursive std::mutex. The barrier returning at all IS the
+    // test - every call below would hang forever on the old shape. The
+    // listener reenters reads AND ingest: the empty final with an open draft
+    // closes it (one more queued event, consumed on the same worker, no
+    // recursion loop because the second pass finds nothing open and is
+    // counted as ignored-empty).
+    TextPipeline pipeline;
+    std::atomic<int> snapshotsFromListener { 0 };
+    std::atomic<int> eventsSeen { 0 };
+
+    pipeline.setListener([&](const TranslationTextEvent&)
+    {
+        eventsSeen.fetch_add(1, std::memory_order_relaxed);
+        const auto snap = pipeline.snapshot();               // would deadlock once
+        pipeline.recentHistory(4);                           // ... every one of these
+        pipeline.partialEvents();
+        if (!snap.currentLine.empty() || !snap.history.empty())
+            snapshotsFromListener.fetch_add(1, std::memory_order_relaxed);
+        pipeline.ingestFinal("");
+    });
+
+    pipeline.ingestPartial("hello");
+    pipeline.waitForDispatch();
+
+    CHECK(snapshotsFromListener.load() >= 1);                // the listener SAW state
+    CHECK(eventsSeen.load() >= 2);                           // partial, then its own final
+    CHECK(pipeline.ignoredEmpty() >= 1);                     // the terminating recursion step
+    CHECK(pipeline.snapshot().history.size() == 1);          // and history stayed sane
+    CHECK(pipeline.droppedEvents() == 0);
+}
+
+TEST_CASE("TextPipeline: dispatch is FIFO - delivery order equals ingestion order",
+          "[translation][text][dispatch]")
+{
+    TextPipeline pipeline;
+    Recorder rec;
+    rec.attach(pipeline);
+
+    for (int i = 0; i < 10; ++i)
+    {
+        pipeline.ingestPartial("line " + std::to_string(i));
+        pipeline.ingestFinal("line " + std::to_string(i));
+    }
+
+    pipeline.waitForDispatch();
+    const auto events = rec.events();
+
+    REQUIRE(events.size() == 20);
+    for (std::size_t i = 0; i < events.size(); ++i)
+        CHECK(events[i].sequence == i + 1);                  // exactly 1..20, in order
+    CHECK(pipeline.deliveredEvents() == 20);
+    CHECK(pipeline.droppedEvents() == 0);
+}
+
+TEST_CASE("TextPipeline: queue pressure drops the OLDEST pending event, counted",
+          "[translation][text][dispatch]")
+{
+    // The bound that keeps "text never stalls anything" structural: while the
+    // listener is wedged mid-delivery of event 1, the queue of capacity 2
+    // accepts events 2 and 3 and evicts the stale 2 when 4 arrives. After the
+    // wedge clears the audience's line 4 still comes (a newest event can only
+    // die if the wedge outlasts the whole queue - counted either way).
+    TextPipeline pipeline(8, 2);                              // history 8, queue 2
+    Recorder rec;
+    std::mutex gateMutex;
+    std::condition_variable gateCv;
+    bool inListener = false;
+    bool gateOpen = false;
+
+    pipeline.setListener([&](const TranslationTextEvent& event)
+    {
+        {
+            const std::lock_guard<std::mutex> lock(gateMutex);
+            inListener = true;
+        }
+        gateCv.notify_all();
+        std::unique_lock<std::mutex> lock(gateMutex);
+        gateCv.wait(lock, [&] { return gateOpen; });          // wedge the worker
+        rec.record(event);                                     // only after release
+    });
+
+    pipeline.ingestPartial("one");                             // seq 1, popped, wedged
+    {
+        std::unique_lock<std::mutex> lock(gateMutex);
+        gateCv.wait(lock, [&] { return inListener; });         // deterministic wedge
+    }
+
+    pipeline.ingestPartial("two");                             // queued
+    pipeline.ingestPartial("three");                           // queued (full)
+    pipeline.ingestPartial("four");                            // evicts "two"
+
+    {
+        const std::lock_guard<std::mutex> lock(gateMutex);
+        gateOpen = true;
+    }
+    gateCv.notify_all();
+
+    pipeline.waitForDispatch();
+
+    const auto events = rec.events();
+    REQUIRE(events.size() == 3);                               // 1 (in flight), 3, 4
+    CHECK(events[0].sequence == 1);
+    CHECK(events[1].text == "three");
+    CHECK(events[2].text == "four");                           // the fresh line survived
+    CHECK(pipeline.droppedEvents() == 1);                      // the stale draft did not
+    CHECK(pipeline.partialEvents() == 4);                      // the STATE still saw all four
+}
+
+TEST_CASE("TextPipeline: stopDispatch drains in order, then ingest queues nothing",
+          "[translation][text][dispatch]")
+{
+    TextPipeline pipeline;
+    Recorder rec;
+    rec.attach(pipeline);
+
+    for (int i = 0; i < 20; ++i)
+        pipeline.ingestFinal("drained " + std::to_string(i));
+
+    pipeline.stopDispatch();          // blocking: delivered everything, joined
+
+    CHECK(rec.count() == 20);
+    CHECK(pipeline.deliveredEvents() == 20);
+    const auto events = rec.events();
+    for (std::size_t i = 0; i < events.size(); ++i)
+        CHECK(events[i].sequence == i + 1);                   // drain kept the order
+
+    // After the stop the pipeline keeps telling the truth about state - it
+    // simply stops promising delivery, because the objects the listener
+    // references are on their way out.
+    pipeline.ingestFinal("after stop");
+    CHECK(pipeline.snapshot().history.size() == 21);
+    CHECK(pipeline.finalEvents() == 21);
+    CHECK(pipeline.deliveredEvents() == 20);
+    CHECK(rec.count() == 20);
+
+    pipeline.stopDispatch();          // idempotent
+    pipeline.waitForDispatch();       // and never hangs after a stop
 }

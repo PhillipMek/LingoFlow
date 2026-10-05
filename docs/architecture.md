@@ -308,7 +308,14 @@ task 009 is written against behaviour that already has proof, not against commen
   snapshot - the backend assembles provider fragments before the seam (the
   OpenAI backend does it under its own mutex, with a settle pause and a
   close-session flush as the two line boundaries; both are documented product
-  policy, not protocol, because the wire has no line-end event).
+  policy, not protocol, because the wire has no line-end event). The listener
+  is NOT fired under the pipeline lock and NOT on the ingesting thread: since
+  code review P2 (2026-10-05) the pipeline queues events and its own dispatch
+  worker delivers them (bounded queue, drop-oldest under stall, counted), so
+  the receiver thread never runs listener code and the listener never holds
+  - or deadlocks on - the lock. `stop()` drains the queue before disabling
+  NDI, which is what "the session's last words reach the audience" means once
+  delivery is async.
 * **Deliberately not here yet**: `getCapabilities()` was task 011's (it exists
   now as the frozen manifest), and a source-language text lane would be a
   contract decision, not an accident - the provider's source transcript stays

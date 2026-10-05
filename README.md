@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-338 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+342 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -514,7 +514,14 @@ ever reaches them (SPEC "Text"):
   line instead of losing it: the words that reached the wire go to history (and NDI -
   the stop order keeps subtitles up until the session's last words are out);
 * text runs on backend worker threads only. It never touches the audio callback: the
-  audio path and this pipeline share no lock, and the realtime audit stays green;
+  audio path and this pipeline share no lock, and the realtime audit stays green.
+  Delivery to the listener rides the pipeline's own dispatch worker (code review P2,
+  2026-10-05): ingest queues typed events under the lock and returns; one worker fires
+  the listener without the lock, in FIFO order, on a bounded queue that drops the
+  oldest pending event under sustained listener stall - counted in
+  `droppedEvents`, exported as `text_events_dispatch_dropped`. A wedged listener
+  stalls subtitles, never the receiver thread, and the listener may reenter the
+  pipeline without deadlock;
 * task 014's UI reads exactly one type here: `TextPipeline::snapshot()` - the open line,
   the bounded history and the counters that say what was ignored and why.
 

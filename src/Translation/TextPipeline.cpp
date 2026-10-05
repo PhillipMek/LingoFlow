@@ -26,9 +26,16 @@ std::string_view nameOf(TextKind kind) noexcept
     return "partial";
 }
 
-TextPipeline::TextPipeline(std::size_t historyCapacity) noexcept
+TextPipeline::TextPipeline(std::size_t historyCapacity, std::size_t dispatchQueueCapacity)
     : capacity_(historyCapacity > 0 ? historyCapacity : 1)
+    , queueCapacity_(dispatchQueueCapacity > 0 ? dispatchQueueCapacity : 1)
 {
+    dispatch_ = std::thread([this] { dispatchLoop(); });
+}
+
+TextPipeline::~TextPipeline()
+{
+    stopDispatch();
 }
 
 void TextPipeline::setListener(Listener listener) noexcept
@@ -145,7 +152,95 @@ std::uint64_t TextPipeline::ignoredEmpty() const noexcept
     return ignoredEmpty_.load(std::memory_order_relaxed);
 }
 
+std::uint64_t TextPipeline::deliveredEvents() const noexcept
+{
+    return deliveredEvents_.load(std::memory_order_relaxed);
+}
+
+std::uint64_t TextPipeline::droppedEvents() const noexcept
+{
+    return droppedEvents_.load(std::memory_order_relaxed);
+}
+
+void TextPipeline::waitForDispatch() const
+{
+    std::uint64_t target;
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        target = queuedEvents_;
+    }
+
+    std::unique_lock<std::mutex> lock(waitMutex_);   // cv::wait relocks - must not be const
+    waitCv_.wait(lock, [this, target]
+    {
+        // Stop releases every waiter: a stopped worker delivers nothing more,
+        // and a barrier that hangs on shutdown would be a defect of its own.
+        return dispatchStopped_.load(std::memory_order_relaxed)
+            || deliveredEvents_.load(std::memory_order_relaxed)
+                 + droppedEvents_.load(std::memory_order_relaxed) >= target;
+    });
+}
+
+void TextPipeline::stopDispatch() noexcept
+{
+    {
+        const std::lock_guard<std::mutex> lock(mutex_);
+        dispatchStopped_.store(true, std::memory_order_relaxed);
+    }
+    dispatchCv_.notify_all();
+
+    {
+        const std::lock_guard<std::mutex> lock(waitMutex_);
+        waitCv_.notify_all();
+    }
+
+    // The worker exits only on stop WITH an empty queue (see dispatchLoop):
+    // everything that was queued before the flag gets delivered, in order,
+    // before this returns. A caller from inside the listener would join
+    // itself - documented against, and the application never does it.
+    if (dispatch_.joinable())
+        dispatch_.join();
+}
+
 // --------------------------------------------------------------------- internals
+
+void TextPipeline::dispatchLoop()
+{
+    for (;;)
+    {
+        TranslationTextEvent event;
+        Listener listener;
+        {
+            std::unique_lock<std::mutex> lock(mutex_);   // cv::wait relocks - must not be const
+            dispatchCv_.wait(lock, [this]
+            {
+                return dispatchStopped_.load(std::memory_order_relaxed) || !outbox_.empty();
+            });
+
+            if (outbox_.empty())
+            {
+                // Only a stop can wake us with nothing to do: drained first,
+                // then out.
+                if (dispatchStopped_.load(std::memory_order_relaxed))
+                    return;
+                continue;
+            }
+
+            event = std::move(outbox_.front());
+            outbox_.pop_front();
+            listener = listener_;  // copy; the callback below runs WITHOUT mutex_
+        }
+
+        if (listener)
+            listener(event);
+
+        {
+            const std::lock_guard<std::mutex> lock(waitMutex_);
+            deliveredEvents_.fetch_add(1, std::memory_order_relaxed);
+        }
+        waitCv_.notify_all();
+    }
+}
 
 TranslationTextEvent TextPipeline::stampLocked(TextKind kind, std::string text)
 {
@@ -162,17 +257,26 @@ TranslationTextEvent TextPipeline::stampLocked(TextKind kind, std::string text)
     else
         finalEvents_.fetch_add(1, std::memory_order_relaxed);
 
-    // Documented: synchronous, under the lock, on the ingesting thread. The
-    // listener must therefore be BOUNDED-COST, and "the audio path never
-    // passes here" is not the safety argument it pretended to be (code review
-    // P1, 2026-10-05): the OpenAI receiver thread is this product's single
-    // consumer of BOTH translated audio and translated text, so a listener
-    // that blocks stalls audio delivery one level up, no matter where the
-    // samples themselves flow. The NDI listener obeys the bound by
-    // construction - NdiDispatch enqueues and returns; the SDK runs on the
-    // dispatch worker thread (AGENTS.md 6).
-    if (listener_)
-        listener_(event);
+    // Queue for the dispatch worker - the listener is NEVER fired here (code
+    // review P2, 2026-10-05): this runs with mutex_ held on an ingesting
+    // thread, which used to be the documented shape and the deadlock the
+    // header describes. Under sustained listener stall the OLDEST pending
+    // event is evicted - a draft the audience never saw is worth less than
+    // the fresh line already in the queue - and the eviction is counted,
+    // never silent. After stopDispatch nothing is queued: state and counters
+    // stay honest while the application winds down, but events must not be
+    // delivered behind the objects their listener references.
+    if (!dispatchStopped_.load(std::memory_order_relaxed))
+    {
+        if (outbox_.size() >= queueCapacity_)
+        {
+            outbox_.pop_front();
+            droppedEvents_.fetch_add(1, std::memory_order_relaxed);
+        }
+        outbox_.push_back(event);
+        ++queuedEvents_;
+        dispatchCv_.notify_one();
+    }
 
     return event;
 }

@@ -30,16 +30,24 @@
 //
 // Threading: ingest*() may be called concurrently from any number of backend
 // threads (the contract does not serialize sink callbacks). snapshot() and the
-// counters are safe from any thread. The listener fires synchronously, on the
-// ingesting thread, while the pipeline's lock is held - it must be
-// bounded-cost. "Audio never traverses this class" is NOT the safety argument
-// it once claimed (code review P1, 2026-10-05): the OpenAI receiver thread
-// consumes both translated audio and translated text from one stream, so a
-// listener that blocks here stalls that thread and starves the jitter buffer
-// downstream. Every product listener honours the bound: the controller's use
-// is a counter plus an NDI publish, and NDI publish only enqueues behind its
-// own dispatch worker (NDI/NdiDispatch.h) - no network call is ever made on
-// the ingesting thread.
+// counters are safe from any thread. The listener is NOT run here any more
+// (code review P2, 2026-10-05): firing user callbacks under mutex_ is one
+// future listener away from the classic deadlock (pipeline lock -> listener ->
+// anything -> pipeline lock), and the P1 lesson stood beside it - the OpenAI
+// receiver thread consumes both translated audio and translated text, so even
+// a "bounded-cost" listener had no business running there. The shape now is
+// the NdiDispatch pattern this file used to rely on one level down: ingest
+// builds and QUEUES the event under the lock and returns; one dispatch worker
+// pops and fires the listener without holding mutex_. Consequences, each
+// pinned by tests: delivery order equals ingestion order (FIFO, single
+// consumer), the listener may call back into the pipeline (snapshot reads,
+// counters, even ingest) without deadlock, a wedged listener stalls subtitles
+// only - the queue is bounded, the OLDEST pending event is dropped under
+// pressure (a stale draft is the cheapest thing here) and counted in
+// droppedEvents(), and ingest never blocks on the listener. waitForDispatch()
+// is the deterministic barrier for shutdown and tests; stopDispatch() drains
+// and joins (the destructor calls it); after the stop, ingest still updates
+// state, history and counters but queues nothing.
 //
 // Sequence: one monotonic counter per pipeline, stamped on every event the
 // pipeline actually emits (duplicates and empty finals it ignores consume no
@@ -53,12 +61,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace liveai {
@@ -95,14 +105,38 @@ public:
     /// per line; the eviction counter tells the operator when it was not enough.
     inline static constexpr std::size_t kDefaultHistoryCapacity = 128;
 
+    /// Bound of the outgoing dispatch queue. Subtitles arrive a few per second;
+    /// 256 pending events means the listener has been wedged for minutes, at
+    /// which point the queue is doing its drop-oldest job, not its transport
+    /// one. Product choice, mirrors NdiDispatch's queue (AGENTS.md 12: a text
+    /// outage must never become a stall on the threads that ingest).
+    inline static constexpr std::size_t kDefaultDispatchQueueCapacity = 256;
+
     using Listener = std::function<void(const TranslationTextEvent& event)>;
 
-    explicit TextPipeline(std::size_t historyCapacity = kDefaultHistoryCapacity) noexcept;
+    /// The dispatch worker starts here, so a pipeline that exists can deliver
+    /// as soon as a listener does. Throws only if the OS refuses the one
+    /// thread (an application that cannot start any worker cannot run the
+    /// network chain either; there is no honest way to swallow it - AGENTS.md
+    /// 19).
+    explicit TextPipeline(std::size_t historyCapacity = kDefaultHistoryCapacity,
+                          std::size_t dispatchQueueCapacity = kDefaultDispatchQueueCapacity);
 
-    /// Fires for every emitted event, synchronously on the ingesting thread
-    /// (see the header: must not block). Set before session start; changing it
-    /// while events flow is not supported and not needed - the controller owns
-    /// this instance for its whole lifetime.
+    /// Stops the dispatch worker (drain, then join). The listener may
+    /// reference application members, so the join must complete before the
+    /// owner goes away.
+    ~TextPipeline();
+
+    TextPipeline(const TextPipeline&) = delete;
+    TextPipeline& operator=(const TextPipeline&) = delete;
+
+    /// Set before session start; changing it while events flow is not
+    /// supported and not needed - the controller owns this instance for its
+    /// whole lifetime. The listener fires on the dispatch worker WITHOUT the
+    /// pipeline lock held (header): it may call back into the pipeline's
+    /// reads and ingest with no deadlock; it must not throw, and it must not
+    /// call waitForDispatch() or stopDispatch() (its own delivery is what
+    /// those wait for).
     void setListener(Listener listener) noexcept;
 
     // ------------------------------------------------------------- ingestion
@@ -161,9 +195,33 @@ public:
     std::uint64_t ignoredDuplicates() const noexcept;  ///< duplicate finals skipped
     std::uint64_t ignoredEmpty() const noexcept;       ///< empty finals with nothing to close
 
+    /// Events the dispatch worker has finished with (listener run or, if none
+    /// is attached, deliberately skipped - counting them keeps the
+    /// waitForDispatch arithmetic "queued == delivered + dropped + queued").
+    std::uint64_t deliveredEvents() const noexcept;
+    std::uint64_t droppedEvents() const noexcept;
+
+    // -------------------------------------------------------------- dispatch
+    // (the threading contract is the header comment of this class)
+
+    /// Deterministic barrier: returns once every event ingested before this
+    /// call has been delivered to the listener or dropped by the bound - or
+    /// the dispatch worker has been stopped. A read-only wait (mutable
+    /// barrier machinery), safe to call through the pipeline's const face on
+    /// the controller. Control/test threads only, never from the listener
+    /// (the listener's own delivery is what this waits on).
+    void waitForDispatch() const;
+
+    /// Drains the queue (delivering in order), then joins the worker.
+    /// Idempotent; the destructor calls it. Afterwards ingest() still updates
+    /// state, history and counters but queues nothing: late events must not
+    /// be delivered behind the objects their listener references.
+    void stopDispatch() noexcept;
+
 private:
-    /// Stamps the next event, updates the counters and fires the listener.
-    /// All callers must hold mutex_.
+    /// Stamps the next event, updates the counters and queues it for the
+    /// dispatch worker (never fires anything itself - see the header). All
+    /// callers must hold mutex_.
     TranslationTextEvent stampLocked(TextKind kind, std::string text);
 
     /// Appends a final line to the bounded history (evicting and counting the
@@ -173,15 +231,32 @@ private:
     /// Drops the oldest lines until the history fits its capacity.
     void trimHistoryLocked() noexcept;
 
+    /// The dispatch worker's body: pop under the lock, listener WITHOUT it.
+    void dispatchLoop();
+
     const std::chrono::steady_clock::time_point start_ = std::chrono::steady_clock::now();
 
     mutable std::mutex mutex_;
     Listener listener_;
+    std::atomic<bool> dispatchStopped_{ false };  ///< guarded by mutex_ for writes
 
     std::string draft_;
     std::deque<TranslationTextEvent> history_;
     std::size_t capacity_;
     std::uint64_t sequence_ = 0;   ///< guarded by mutex_
+
+    std::thread dispatch_;
+    std::condition_variable dispatchCv_;          ///< wakes dispatch_ on queue/stop
+    std::deque<TranslationTextEvent> outbox_;     ///< bounded, guarded by mutex_
+    std::size_t queueCapacity_;
+    std::uint64_t queuedEvents_ = 0;              ///< guarded by mutex_
+
+    // waitForDispatch machinery, deliberately separate from mutex_: waiting
+    // for delivery must never reach into the lock the pipeline's own state
+    // lives behind. Mutable so the barrier is a const read through the
+    // controller's const face of the pipeline.
+    mutable std::mutex waitMutex_;
+    mutable std::condition_variable waitCv_;
 
     // Relaxed counters: written under mutex_ with the state they describe, read
     // lock-free for diagnostics. They never carry ordering meaning.
@@ -190,6 +265,8 @@ private:
     std::atomic<std::uint64_t> evictedLines_{ 0 };
     std::atomic<std::uint64_t> ignoredDuplicates_{ 0 };
     std::atomic<std::uint64_t> ignoredEmpty_{ 0 };
+    std::atomic<std::uint64_t> deliveredEvents_{ 0 };   ///< after the listener returned
+    std::atomic<std::uint64_t> droppedEvents_{ 0 };     ///< queue-pressure evictions
 };
 
 } // namespace translation

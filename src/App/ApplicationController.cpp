@@ -84,16 +84,29 @@ ApplicationController::ApplicationController()
     , ndiOutput_(std::make_unique<ndi::NullNdiOutput>())
     , translationBackend_(std::make_unique<translation::NullTranslationBackend>())
 {
-    // The one route text takes (task 013): sink -> typed pipeline -> listener.
-    // The listener runs on the ingesting (backend worker) thread while the
-    // pipeline's lock is held; publishing to NDI is non-blocking by its own
-    // contract, and this lambda adds nothing that could block. Audio never
-    // passes through here, so text cannot stall it and vice versa.
+    // The one route text takes (task 013): sink -> typed pipeline -> dispatch
+    // worker -> listener. The listener does NOT run on the ingesting (backend
+    // worker/receiver) thread any more (code review P2, 2026-10-05): the
+    // pipeline queues events and its own worker delivers them, so this lambda
+    // can no longer stall the thread that also feeds the jitter buffer. It
+    // still only does bounded work - a counter and an NDI enqueue (NdiDispatch
+    // owns the transport calls) - but that is now a courtesy, not the load-
+    // bearing safety argument it used to be.
     textPipeline_.setListener(
         [this](const translation::TranslationTextEvent& event)
         {
             publishToNdi(event);
         });
+}
+
+ApplicationController::~ApplicationController()
+{
+    // The text dispatch worker publishes through this controller, so it must
+    // be gone - drained and joined - before member destruction starts taking
+    // the objects it references apart. The pipeline's own destructor would
+    // also do it, but at a point where the member order alone decides whether
+    // what the listener touches is still alive; here the whole object is.
+    textPipeline_.stopDispatch();
 }
 
 void ApplicationController::setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend)
@@ -540,6 +553,14 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     translationRows.emplace_back("text_line_evictions", std::to_string(textPipeline_.evictedLines()));
     translationRows.emplace_back("text_duplicate_finals_ignored",
                                  std::to_string(textPipeline_.ignoredDuplicates()));
+    // Text delivery health (code review P2, 2026-10-05): events the dispatch
+    // worker delivered since start, and events its bounded queue dropped
+    // because the listener (NDI enqueue path) was stalled. Delivered+dropped
+    // equals emitted while dispatch runs; a growing drop column is a text
+    // outage, never an audio one.
+    translationRows.emplace_back("text_events_delivered", std::to_string(textPipeline_.deliveredEvents()));
+    translationRows.emplace_back("text_events_dispatch_dropped",
+                                 std::to_string(textPipeline_.droppedEvents()));
     translationRows.emplace_back("reconnects", std::to_string(diag.reconnects));
     translationRows.emplace_back("translation_errors", std::to_string(diag.translationErrors));
     translationRows.emplace_back("translation_fatal_errors", std::to_string(diag.translationFatalErrors));
@@ -713,6 +734,16 @@ void ApplicationController::stop()
     // session teardown joins the streaming worker before the device dies.
     stopSession();
     stopLoopback();
+
+    // Code review P2 (2026-10-05): delivery to the listener became async when
+    // the pipeline grew its dispatch worker, so the guarantee above is no
+    // longer automatic - it is made true again here. Everything ingested so
+    // far (including the closing flush) is handed to the listener BEFORE the
+    // subtitle transport is disabled; otherwise the session's last words race
+    // an output on its way out and are dropped as "feature off". Bounded by
+    // construction: the listener's only work is an enqueue.
+    textPipeline_.waitForDispatch();
+
     stopNdi();
     stopAudio();
 

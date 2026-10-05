@@ -6,7 +6,7 @@
 //
 // The chain that made it necessary: the OpenAI receiver thread is this
 // product's single consumer of BOTH translated audio and translated text.
-// TextPipeline notifies its listener synchronously on that thread; the
+// TextPipeline's listener used to run synchronously on that thread; the
 // controller's listener called INdiOutput::publish; the real output called the
 // NDI SDK under its transport mutex - and stop() from the settings thread held
 // that same mutex across blocking create/destroy calls. Any stall inside the
@@ -14,7 +14,10 @@
 // feeding the jitter buffer, and a subtitle outage could take the translation
 // down with it. INdiOutput always promised "non-blocking publish" and
 // "drop-on-pressure"; this adapter is the structure that makes those promises
-// true regardless of what the SDK decides to do.
+// true regardless of what the SDK decides to do. (TextPipeline later moved its
+// listener off the ingesting thread as well - code review P2, 2026-10-05, with
+// its own dispatch worker - but the SDK-blocking argument never depended on
+// which caller thread arrives, only on this queue being in front of the SDK.)
 //
 // Shape:
 //   * publish() on a caller thread: enqueue into a bounded queue and return.

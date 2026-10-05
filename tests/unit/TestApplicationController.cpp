@@ -327,6 +327,9 @@ TEST_CASE("ApplicationController: text events reach NDI and diagnostics", "[app]
     controller.onPartialText("good evening");
     controller.onFinalText("good evening, welcome");
 
+    // Async delivery (code review P2): the pipeline hands its listener to a
+    // dispatch worker, so the barrier replaces the old synchronous fire.
+    controller.textPipeline().waitForDispatch();
     CHECK(ndiRef->publishedFrames() == 2);
     CHECK(ndiRef->state() == OutputState::publishing);
 

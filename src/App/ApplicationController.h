@@ -77,6 +77,12 @@ class ApplicationController : public translation::ITranslationSink
 public:
     ApplicationController();
 
+    /// Stops the text pipeline's dispatch worker before any member dies: the
+    /// listener publishes through ndiOutput_ and records into diagnostics_, so
+    /// the join must happen while both are alive (the pipeline destructor's
+    /// own stop is then an idempotent no-op).
+    ~ApplicationController();
+
     // ------------------------------------------------------------- dependencies
     /// Injected for tests and Developer/Mock mode (task 019). Ownership moves to
     /// the controller; must be called while stopped.

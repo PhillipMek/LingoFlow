@@ -219,6 +219,7 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
         { "underruns", formatCount(diag.underruns) },
         { "overruns", formatCount(diag.overruns) },
         { "ring dropped (samples)", formatCount(engine.inputRingDroppedSamples()) },
+        { "text dispatch dropped", formatCount(controller.textPipeline().droppedEvents()) },
         { "capture submitted", formatCount(diag.translationSubmittedFrames) },
         { "capture gap-refused", formatCount(diag.translationGapFrames) },
         { "translated audio frames", formatCount(diag.translatedAudioFrames) },
