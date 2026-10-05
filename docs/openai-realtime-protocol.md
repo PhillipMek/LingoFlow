@@ -168,7 +168,12 @@ No `*.done` events exist in the reference. Do not wait for one; do not invent on
 **Output (what we can expect back)**:
 
 - `session.output_audio.delta` carries PCM16 whose "length can vary"; clients must decode
-  and queue the whole delta, never assume a fixed size [R3];
+  and queue the whole delta, never assume a fixed size [R3]; that trust is bounded by
+  the client (code review P1, 2026-10-05): a reassembled WebSocket message must fit the
+  16 MiB transport budget (larger severs the connection as a transport fault, which the
+  supervisor recovers), and a decoded audio delta must fit 256 KiB (larger is dropped as
+  a section-7 shape anomaly, session untouched) - both margins are 13x-250x the live
+  measured 19200-byte chunk of section 15;
 - the cookbook states translated audio is emitted as **base64 24 kHz mono PCM16 in
   200 ms chunks** [R8]; the event's `format` field enum is `"pcm16"` [R3]. Measured
   live (section 15): the server delivered fixed 19200-byte (400 ms) deltas while

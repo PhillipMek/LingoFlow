@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Network/Base64.h"
+#include "Network/NetworkLimits.h"
 #include "Security/ISecretStore.h"
 #include "Translation/LanguageRegistry.h"
 #include "Utils/Log.h"
@@ -988,8 +989,19 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
             return EventResult::keepGoing;
         }
 
+        // Payload budget (code review P1): a base64 string that cannot possibly
+        // decode inside the audio budget is refused before decoding - the
+        // decode itself must not be the allocation that hurts. The
+        // authoritative size check runs on the decoded bytes.
+        const std::string& encoded = parsed["delta"].get<std::string>();
+        if (encoded.size() > kMaxAudioDeltaBytes * 4 / 3 + 8)
+        {
+            reportError(TranslationErrorCategory::protocol,
+                        "openai: audio delta is oversized before decoding; block dropped", false);
+            return EventResult::keepGoing;
+        }
         std::vector<std::uint8_t> bytes;
-        if (!base64Decode(parsed["delta"].get<std::string>(), bytes))
+        if (!base64Decode(encoded, bytes))
         {
             reportError(TranslationErrorCategory::protocol,
                         "openai: audio delta payload is not valid base64; block dropped", false);
@@ -1081,6 +1093,20 @@ void OpenAIRealtimeBackend::deliverAudioDelta(const std::vector<std::uint8_t>& p
 {
     if (pcm16Bytes.empty())
         return;
+
+    // Authoritative payload bound (code review P1, Network/NetworkLimits.h):
+    // the decoded PCM16 must fit the audio budget no matter which path handed
+    // it over. One oversized block is a section-7 shape anomaly - dropped,
+    // reported non-fatal, session kept: ending the show because one event was
+    // mis-sized would trade a bounded bug for an unbounded one.
+    if (pcm16Bytes.size() > kMaxAudioDeltaBytes)
+    {
+        reportError(TranslationErrorCategory::protocol,
+                    "openai: audio delta exceeds the " + std::to_string(kMaxAudioDeltaBytes)
+                        + " byte client budget; block dropped",
+                    false);
+        return;
+    }
 
     if (pcm16Bytes.size() % 2 != 0)
     {

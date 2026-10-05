@@ -163,6 +163,7 @@ if(WIN32)
         Network/Base64.h
         Network/PcmResampler.cpp
         Network/PcmResampler.h
+        Network/NetworkLimits.h
         Network/OpenAIRealtimeBackend.cpp
         Network/OpenAIRealtimeBackend.h
         Network/WinHttpTransport.cpp

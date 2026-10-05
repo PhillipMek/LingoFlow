@@ -111,6 +111,7 @@ ConnectResult WinHttpTransport::connect(const std::string& host,
     releaseHandles();
     peerClosed_.store(false);
     partialMessage_.clear();
+    inboundBudget_.reset();   // a new connection reassembles from zero
 
     const HINTERNET session = WinHttpOpen(L"LingoFlow/0.1", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
@@ -289,28 +290,51 @@ ReceiveEvent WinHttpTransport::receive()
             return event;
         }
 
+        // One reassembly budget covers the whole message (all fragments plus
+        // the final buffer). Accepting each chunk before appending bounds the
+        // accumulated size; on refusal the connection is failed once and the
+        // supervisor recovers - the stream cannot grow the process (code
+        // review P1, Network/NetworkLimits.h).
+        const auto admit = [&](DWORD bytes) -> bool {
+            if (inboundBudget_.accept(static_cast<std::size_t>(bytes)))
+                return true;
+            partialMessage_.clear();
+            inboundBudget_.reset();
+            event.kind = ReceiveKind::error;
+            event.transportError = "inbound WebSocket message exceeded the reassembly budget";
+            return false;
+        };
+
         switch (bufferType)
         {
             case WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE:
             {
+                if (!admit(transferred))
+                    return event;
                 partialMessage_.append(recvBuffer_.data(), transferred);
                 event.kind = ReceiveKind::message;
                 event.text = std::move(partialMessage_);
                 partialMessage_.clear();
+                inboundBudget_.reset();   // message complete: the next starts fresh
                 return event;
             }
             case WINHTTP_WEB_SOCKET_UTF8_FRAGMENT_BUFFER_TYPE:
             case WINHTTP_WEB_SOCKET_BINARY_FRAGMENT_BUFFER_TYPE:
+                if (!admit(transferred))
+                    return event;
                 partialMessage_.append(recvBuffer_.data(), transferred);
                 continue; // stay inside this receive() call until the message completes
             case WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE:
                 // Binary payloads are not part of this protocol (all events are
                 // JSON text, docs/openai-realtime-protocol.md section 6). Hand
                 // the bytes to the parser and let it report the shape break.
+                if (!admit(transferred))
+                    return event;
                 partialMessage_.append(recvBuffer_.data(), transferred);
                 event.kind = ReceiveKind::message;
                 event.text = std::move(partialMessage_);
                 partialMessage_.clear();
+                inboundBudget_.reset();   // message complete: the next starts fresh
                 return event;
             case WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE:
             {

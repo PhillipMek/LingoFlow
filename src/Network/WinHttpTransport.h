@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "Network/IWebSocketTransport.h"
+#include "Network/NetworkLimits.h"
 
 namespace liveai {
 namespace network {
@@ -61,6 +62,7 @@ private:
     // Receive-thread-only state (never touched by sendText).
     std::vector<char> recvBuffer_;
     std::string partialMessage_;
+    InboundMessageBudget inboundBudget_;   ///< bounds reassembly (code review P1)
     std::atomic<bool> peerClosed_ { false };
 };
 

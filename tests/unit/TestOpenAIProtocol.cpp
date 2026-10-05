@@ -1488,3 +1488,84 @@ TEST_CASE("OpenAI protocol: closing the session clears the announcement (rule 6)
     s.backend->closeSession();
     s.sink.armAfterCloseExpectation();
 }
+
+// ----------------------------------------------- audio payload budget (P1)
+
+namespace {
+std::string largeDeltaEvent(int samples)
+{
+    std::vector<std::int16_t> pcm (static_cast<std::size_t>(samples), 100);
+    return audioDeltaEvent(pcm);
+}
+} // namespace
+
+TEST_CASE("OpenAI backend: an oversized audio delta is dropped as a protocol error, session kept",
+          "[openai][audio][limits]")
+{
+    // 131073 samples = 262146 bytes, two over the 256 KiB budget. Its base64
+    // fits the message ceiling, so the pre-decode estimate passes and the
+    // authoritative check in deliverAudioDelta is the one that refuses: proof
+    // the two bounds are complementary, not redundant.
+    Scenario s;
+    REQUIRE(s.openDefault());
+
+    s.fake->queueMessage(largeDeltaEvent(131073));
+    REQUIRE(Scenario::waitFor([&] { return !s.sink.errors().empty(); }));
+
+    const auto errors = s.sink.errors();
+    CHECK(errors.back().category == TranslationErrorCategory::protocol);
+    CHECK_FALSE(errors.back().fatal);                 // a shape anomaly, not a death sentence
+    CHECK(errors.back().message.find("budget") != std::string::npos);
+    CHECK(s.sink.audio().empty());                    // nothing oversized reached the sink
+    CHECK(s.backend->state() == SessionState::connected);
+
+    // The session survives and the NEXT normal delta still plays: proof the
+    // drop was block-scoped, not session-scoped.
+    s.fake->queueMessage(audioDeltaEvent({ 4000, -4000, 4000, -4000 }));
+    REQUIRE(Scenario::waitFor([&] { return !s.sink.audio().empty(); }));
+    CHECK(s.sink.audio().front().samples.size() == 4);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: a huge delta is refused before its base64 is decoded",
+          "[openai][audio][limits]")
+{
+    Scenario s;
+    REQUIRE(s.openDefault());
+
+    // 400k samples = 800 KB decoded, far past the pre-decode estimate (base64
+    // length ~1 MB). The guard rejects on the string length without ever
+    // building the byte vector - the allocation that must not happen is
+    // skipped, not just dropped later.
+    s.fake->queueMessage(largeDeltaEvent(400000));
+    REQUIRE(Scenario::waitFor([&] { return !s.sink.errors().empty(); }));
+    const auto errors = s.sink.errors();
+    CHECK(errors.back().category == TranslationErrorCategory::protocol);
+    CHECK_FALSE(errors.back().fatal);
+    CHECK(errors.back().message.find("oversized before decoding") != std::string::npos);
+    CHECK(s.sink.audio().empty());
+    CHECK(s.backend->state() == SessionState::connected);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: a delta exactly at the budget is delivered, not refused",
+          "[openai][audio][limits]")
+{
+    Scenario s;
+    REQUIRE(s.openDefault());
+
+    // 131072 samples = exactly 262144 bytes = the budget. Boundary inclusive:
+    // the refusal is strictly-greater, so this one must fully land.
+    s.fake->queueMessage(largeDeltaEvent(131072));
+    REQUIRE(Scenario::waitFor([&] { return !s.sink.audio().empty(); }));
+    const auto blocks = s.sink.audio();
+    CHECK(blocks.front().samples.size() == 131072);
+    CHECK(s.sink.errors().empty());
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}

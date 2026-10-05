@@ -25,6 +25,10 @@
 //     requested.
 //
 // Blocking contract surface (documented, bounded):
+//   * Sizes: every inbound byte is budgeted before it is allocated - 16 MiB
+//     reassembled WebSocket message (transport severs the connection beyond it),
+//     256 KiB decoded audio delta (block dropped, session kept). The bounds and
+//     their margins live in Network/NetworkLimits.h (code review P1, 2026-10-05).
 //   * openSession() connects, handshakes and returns only when the session is
 //     usable or over - bounded by handshakeTimeoutMs;
 //   * closeSession() asks the sender to stop, sends session.close, waits the
