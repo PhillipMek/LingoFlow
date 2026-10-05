@@ -55,19 +55,17 @@ public:
         if (inputChannelData == nullptr)
         {
             // A driver that breaks its own input promise must still not hear the
-            // previous block played back as if audio were flowing: the engine is
-            // never reached, so the callback owes the outputs their silence.
-            // Vendored JUCE hands out non-null arrays (it jasserts), which makes
-            // this a defensive path, not an expected one.
+            // previous block played back as if audio were flowing - and it must
+            // not vanish from the record either. Code review P2 (2026-10-05):
+            // the engine is still reached, with the violation instead of audio;
+            // processAudio(nullptr, ...) owns the malformed count and the
+            // every-output fill (IAudioProcessor contract), so this shows up on
+            // the operator's band and in the export rather than only as the
+            // absence of evidence. Vendored JUCE hands out non-null arrays (it
+            // jasserts), which makes this a defensive path, not an expected one.
             asio::forwardActiveChannels(outputChannelData, numOutputChannels,
                                         outputPhysical_, outputViews_);
-
-            for (float* destination : outputViews_)
-            {
-                if (destination != nullptr)
-                    std::memset(destination, 0, static_cast<std::size_t>(numSamples) * sizeof(float));
-            }
-
+            processor_.processAudio(nullptr, outputViews_.data(), numSamples);
             return;
         }
 

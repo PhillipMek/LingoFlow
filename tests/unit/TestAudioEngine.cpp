@@ -221,6 +221,91 @@ TEST_CASE("AudioEngine: null entries among outputs are skipped, the rest go sile
     engine.deactivate();
 }
 
+TEST_CASE("AudioEngine: a null among promised inputs is a malformed callback, not a skipped channel",
+          "[audio][engine][realtime]")
+{
+    // Code review P2 (2026-10-05): the old input loop did `if (source ==
+    // nullptr) continue;` - a selected channel that vanished mid-show kept
+    // the block counters looking healthy while the mix quietly lost it, and
+    // partial audio is indistinguishable from quiet audio at the audience
+    // end. The strict rule: refuse the whole block - one count, silence on
+    // every writable output, nothing from a lying block reaches the rings.
+    DeviceCapabilities caps = mono48k();
+    caps.inputChannels = 2;
+
+    AudioEngine engine;
+    NullAudioBackend backend(caps);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    REQUIRE(engine.inputChannels() == 2);
+
+    std::array<float, static_cast<std::size_t>(kFrames)> inBuf{};
+    std::array<float, static_cast<std::size_t>(kFrames)> outBuf{};
+    inBuf.fill(0.5f);
+    outBuf.fill(0.25f);   // stale show audio
+
+    const float* in[] = { inBuf.data(), nullptr };  // channel 1 has vanished
+    float* out[] = { outBuf.data() };
+
+    engine.processAudio(in, out, kFrames);
+
+    CHECK(engine.malformedCallbacks() == 1);
+    CHECK(engine.blockCount() == 0);
+    CHECK(engine.inputFramesCaptured() == 0);   // the surviving channel is NOT mixed alone
+    CHECK(engine.frameCount() == 0);            // and the block is not in the processed total
+
+    for (int i = 0; i < kFrames; ++i)
+        REQUIRE(outBuf[static_cast<std::size_t>(i)] == 0.0f);
+
+    // Strict per block, not a latched fault: the next healthy block is
+    // processed and counted normally.
+    const float* inOk[] = { inBuf.data(), inBuf.data() };
+    outBuf.fill(0.25f);
+    engine.processAudio(inOk, out, kFrames);
+    CHECK(engine.blockCount() == 1);
+    CHECK(engine.malformedCallbacks() == 1);
+
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: a null among promised outputs refuses the whole block",
+          "[audio][engine][realtime]")
+{
+    // The output mirror of the same decision: a promised destination that
+    // vanished means we can no longer honour the fill obligation on that
+    // channel, so no audio goes out at all - the writable siblings get the
+    // silence we still owe them, and the counters tell the operator that the
+    // callback was malformed rather than that the show is quiet tonight.
+    DeviceCapabilities caps = mono48k();
+    caps.outputChannels = 2;
+
+    AudioEngine engine;
+    NullAudioBackend backend(caps);
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    REQUIRE(engine.outputChannels() == 2);
+
+    std::array<float, static_cast<std::size_t>(kFrames)> inBuf{};
+    std::array<float, static_cast<std::size_t>(kFrames)> outBuf0{};
+    inBuf.fill(0.5f);
+    outBuf0.fill(0.25f);
+
+    const float* in[] = { inBuf.data() };
+    float* out[] = { outBuf0.data(), nullptr };
+
+    engine.processAudio(in, out, kFrames);
+
+    CHECK(engine.malformedCallbacks() == 1);
+    CHECK(engine.blockCount() == 0);
+
+    for (int i = 0; i < kFrames; ++i)
+        REQUIRE(outBuf0[static_cast<std::size_t>(i)] == 0.0f);
+
+    engine.deactivate();
+}
+
 TEST_CASE("AudioEngine: null diagnostics pointer is tolerated", "[audio][engine]")
 {
     AudioEngine engine;   // no DiagnosticsManager

@@ -51,6 +51,12 @@ public:
     /// partial fill is stale audio (or uninitialised memory) reaching the
     /// audience; AudioEngine::processAudio honours this on every path including
     /// the malformed ones (code review P0, 2026-10-05, pinned by tests).
+    /// The pointer arrays are checked per channel, not just as wholes: ANY
+    /// null among the promised channels is a malformed callback - one count,
+    /// silence on every writable output, and the block never joins the
+    /// processed total (code review P2, 2026-10-05). A backend that loses a
+    /// selected channel's buffer mid-show must read as that in the operator's
+    /// counters, never as quiet-but-healthy audio.
     /// Realtime-safe by contract: the implementation must not allocate, block,
     /// log or touch the network/UI.
     virtual void processAudio(const float* const* input,

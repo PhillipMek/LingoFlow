@@ -49,8 +49,11 @@ enum class ChannelArrayShape
 /// where the two rules could disagree is a physically indexed array that omits
 /// inactive channels - which means every physical channel up to the last active
 /// one IS active, and then physical[k] == k and both rules select the same
-/// entry. Null entries pass through as null: the engine reads a null view as
-/// "this channel has no data" (AudioEngine::processAudio), which is honest.
+/// entry. Null entries pass through as null - and they are NOT silence to mix:
+/// AudioEngine::processAudio counts any null among the promised views as a
+/// malformed callback (code review P2, 2026-10-05), so a selected channel that
+/// vanished mid-show is reported in the operator's counters, never quietly
+/// dropped from the mix.
 template <typename ChannelPtr>
 ChannelArrayShape forwardActiveChannels(ChannelPtr* const* driverData,
                                         int driverChannelCount,

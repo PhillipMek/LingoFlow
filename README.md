@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 335 tests.
+(task 019), and 337 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-335 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+337 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry

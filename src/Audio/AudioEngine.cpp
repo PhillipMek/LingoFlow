@@ -528,24 +528,39 @@ void AudioEngine::processAudio(const float* const* input,
 
     const std::size_t frames = static_cast<std::size_t>(frameCount);
 
-    // Anything below this point is the backend breaking its contract: the interface
-    // promises `inputChannels` readable input pointers and `outputChannels` writable
-    // output pointers for frameCount frames. The engine reports it instead of
-    // pretending it processed audio, and still leaves silence on the wire.
-    if (output == nullptr)
+    // The contract (IAudioBackend.h): `input` holds inputChannels_ readable
+    // pointers and `output` outputChannels_ writable ones, each to frameCount
+    // frames. Any null among the promised channels - whole array or single
+    // entry - is the backend breaking it. Code review P2 (2026-10-05) made
+    // the check per-channel on purpose: a driver that keeps calling back
+    // while a selected channel's buffer vanishes used to look healthy,
+    // because the old input loop quietly dropped the null from the mix and
+    // counted the block as processed. Partial audio is worse than honest
+    // silence: nobody downstream can tell "channel 8 disappeared" from
+    // "channel 8 was quiet", and block counters cannot tell it either. So a
+    // malformed block is refused whole: ONE count per block, silence on
+    // every output that can still be written (the P0 fill obligation), the
+    // block counter untouched, and nothing from a block that lied about its
+    // geometry reaching the rings or the meters.
+    const int inChannels = inputChannels_.load(std::memory_order_relaxed);
+    const int outChannels = outputChannels_.load(std::memory_order_relaxed);
+
+    bool malformed = (input == nullptr) || (output == nullptr);
+    for (int channel = 0; !malformed && channel < inChannels; ++channel)
+        malformed = (input[channel] == nullptr);
+    for (int channel = 0; !malformed && channel < outChannels; ++channel)
+        malformed = (output[channel] == nullptr);
+
+    if (malformed)
     {
         malformedCallbacks_.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
 
-    if (input == nullptr)
-    {
-        malformedCallbacks_.fetch_add(1, std::memory_order_relaxed);
-
-        // Every promised output channel goes silent, not just the first: a
-        // multi-output geometry leaving stale bytes on channel 1 is exactly how
-        // "looks connected, plays something else" reaches the audience.
-        silenceOutputs(output, outputChannels_.load(std::memory_order_relaxed), frames);
+        // Every promised and writable output goes silent: a multi-output
+        // geometry leaving stale bytes on the channels that DID arrive is
+        // exactly how "looks connected, plays something else" reaches the
+        // audience.
+        if (output != nullptr)
+            silenceOutputs(output, outChannels, frames);
 
         return;
     }
@@ -561,15 +576,11 @@ void AudioEngine::processAudio(const float* const* input,
     // ------------------------------------------------------------- input side
     if (ready)
     {
-        const int channels = inputChannels_.load(std::memory_order_relaxed);
         const bool forwarding = consumerAttached_.load(std::memory_order_relaxed);
 
-        for (int channel = 0; channel < channels; ++channel)
+        for (int channel = 0; channel < inChannels; ++channel)
         {
-            const float* source = input[channel];
-
-            if (source == nullptr)
-                continue;
+            const float* source = input[channel]; // non-null: the pre-scan enforced it
 
             // SPEC "Audio Ring Buffer" puts Input Gain between the callback and the ring,
             // so the translator is handed the level the operator chose rather than the
@@ -637,14 +648,9 @@ void AudioEngine::processAudio(const float* const* input,
     // ------------------------------------------------------------ output side
     if (ready)
     {
-        const int outChannels = outputChannels_.load(std::memory_order_relaxed);
-
         for (int channel = 0; channel < outChannels; ++channel)
         {
-            float* destination = output[channel];
-
-            if (destination == nullptr)
-                continue;
+            float* destination = output[channel]; // non-null: the pre-scan enforced it
 
             // The jitter buffer is the ONLY source of output audio, which is what makes
             // it impossible for the microphone to reach the audience by accident.
