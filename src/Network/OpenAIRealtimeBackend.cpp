@@ -1118,9 +1118,29 @@ void OpenAIRealtimeBackend::deliverAudioDelta(const std::vector<std::uint8_t>& p
 
     const int wireFrames = static_cast<int>(pcm16Bytes.size() / 2);
     std::vector<float> floats (static_cast<std::size_t>(wireFrames));
-    const std::int16_t* pcm = reinterpret_cast<const std::int16_t*>(pcm16Bytes.data());
+
+    // Explicit little-endian assembly (protocol docs section 7: raw PCM16,
+    // little-endian; code review P1, 2026-10-05). The byte vector is NOT
+    // reinterpreted as int16_t*: a std::vector<std::uint8_t> makes no alignment
+    // promise, and dereferencing a cast pointer whose alignment requirement is
+    // unmet is undefined behavior no matter that an x64 host rarely notices.
+    // Assembling the two bytes by hand also drops the implicit "this process
+    // runs on a little-endian machine" assumption: the decode reads the wire
+    // order, whatever the host. Two byte loads and an or compile to one load
+    // on any compiler worth using - the same machine code memcpy would give,
+    // with the byte order stated out loud instead of assumed.
+    const std::uint8_t* bytes = pcm16Bytes.data();
     for (int i = 0; i < wireFrames; ++i)
-        floats[static_cast<std::size_t>(i)] = static_cast<float>(pcm[i]) / 32768.0f;
+    {
+        const std::size_t at = static_cast<std::size_t>(i) * 2u;
+        const std::uint16_t raw = static_cast<std::uint16_t>(
+            bytes[at] | (static_cast<unsigned>(bytes[at + 1]) << 8));
+        floats[static_cast<std::size_t>(i)] =
+            static_cast<float>(static_cast<std::int16_t>(raw)) / 32768.0f;
+        // The uint16 -> int16 cast is the modulo conversion C++20 defines:
+        // raw 0x8000 is exactly the -32768 the wire carries, pinned by the
+        // existing delta test's { 32767, -32768 } pair.
+    }
 
     std::vector<float> out (static_cast<std::size_t>(
         PcmResampler::maxOutputFor(wireFrames)));
