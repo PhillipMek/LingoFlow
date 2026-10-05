@@ -57,7 +57,13 @@ local process behind the credential store, task 015).
 - Header on the WebSocket upgrade request: `Authorization: Bearer <API key>` [R1][R6][R8].
 - `OpenAI-Safety-Identifier` header: optional, recommended by OpenAI, "doesn't require
   them"; value should be a stable privacy-preserving hash, not an identity [R5][R6].
-  Note for task 021: any identifier we invent must not be re-identifiable operator data.
+  Implemented 2026-10-05 (code review P2): the product value is the lowercase SHA-256
+  hex digest of the Windows installation GUID (`HKLM\SOFTWARE\Microsoft\Cryptography\
+  MachineGuid`) derived once at the composition root - the wire carries neither the
+  GUID, nor a username, nor a hostname, and no plaintext personal or operator
+  identifier is ever sent [R12]. Any derivation failure or malformed option value
+  omits the optional header (with a warning in the malformed case); the header never
+  blocks a session. `src/Network/SafetyIdentifier.h` owns the primitives.
 - Do **not** send `OpenAI-Beta: realtime=v1`. The Realtime API **Beta was deprecated and
   removed from the API on May 12, 2026** [R5][R7]. Any assumption based on the 2024-2025
   beta protocol (event names like `response.audio.delta`, `input_audio_buffer.append`,
@@ -613,10 +619,17 @@ server sends at expiry - 010/024).
   `https://developers.openai.com/api/reference/resources/realtime`
   ("`expires_at`: optional number - Expiration timestamp for the session, in seconds
   since epoch"; session object re-carried in `session.updated`).
-- [R11] Realtime conversations guide (fetched 2026-10-05) —
+- [R11] Realtime conversations guide (fetched 2026-10-05) -
   `https://developers.openai.com/api/docs/guides/realtime-conversations`
   ("The maximum duration of a Realtime session is 60 minutes"; `session.created`
   on connect, `session.updated` answers configuration updates).
+- [R12] Safety identifiers (fetched 2026-10-05) -
+  `https://developers.openai.com/api/docs/guides/realtime` ("Safety identifiers")
+  and `https://developers.openai.com/api/docs/guides/safety-best-practices`
+  ("OpenAI recommends safety identifiers but doesn't require them"; "Use a stable,
+  privacy-preserving value, such as a hashed internal user ID"; "Hash user email or
+  internal user IDs to avoid passing any personal information"; for direct WebSocket
+  connections from a trusted backend "set the header on the connection request").
 - [R-doc] `docs/device-defaults.md` (this repo): engine dev rate 48 kHz — context for
   section 7, not an OpenAI source.
 

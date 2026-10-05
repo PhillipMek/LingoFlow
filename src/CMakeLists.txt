@@ -166,6 +166,8 @@ if(WIN32)
         Network/NetworkLimits.h
         Network/OpenAIRealtimeBackend.cpp
         Network/OpenAIRealtimeBackend.h
+        Network/SafetyIdentifier.cpp
+        Network/SafetyIdentifier.h
         Network/WinHttpTransport.cpp
         Network/WinHttpTransport.h)
 
@@ -174,7 +176,12 @@ if(WIN32)
             lingoflow::core
             winhttp
         PRIVATE
-            nlohmann_json::nlohmann_json)
+            nlohmann_json::nlohmann_json
+            # SafetyIdentifier.cpp: CryptAcquireContext/CryptCreateHash and the
+            # registry view of the installation GUID (advapi32, already in the
+            # final link for the credential store - named here per the rule
+            # that each target lists what its own sources call).
+            advapi32)
 
     if(MSVC)
         target_compile_options(lingoflow_network PRIVATE /W4 /utf-8 /MP8)

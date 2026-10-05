@@ -513,6 +513,60 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
     }
 }
 
+TEST_CASE("OpenAI backend: the optional safety identifier rides the upgrade request",
+          "[openai][protocol]")
+{
+    // Docs section 3 (code review P2, 2026-10-05): the three states of one
+    // optional header. A sendable value is attached verbatim; an unset value
+    // sends nothing; a malformed value is dropped while THE SESSION STILL
+    // OPENS - an identifier the provider does not require never decides
+    // whether the show has a translation. Authorization is the invariant in
+    // every case.
+    const std::string digest(64, 'd');
+
+    struct Case
+    {
+        std::string configured;
+        bool expectHeader;
+    };
+    const Case cases[] = {
+        { digest, true },
+        { "", false },
+        { "bad value\r\nX-Injected: yes", false },
+    };
+
+    for (const Case& c : cases)
+    {
+        Scenario s;
+        s.options.safetyIdentifier = c.configured;
+        s.backend = std::make_unique<network::OpenAIRealtimeBackend>(s.secrets, s.options,
+                                                                     s.fakeFactory);
+        s.backend->setSink(s.sink);
+        REQUIRE(s.openDefault());
+
+        bool sawSafety = false;
+        bool sawAuth = false;
+        for (const auto& h : s.fake->lastHeaders())
+        {
+            if (h.rfind("OpenAI-Safety-Identifier", 0) == 0)
+            {
+                sawSafety = true;
+                CHECK(h == "OpenAI-Safety-Identifier: " + c.configured);
+            }
+            else if (h.rfind("Authorization", 0) == 0)
+            {
+                sawAuth = true;
+                CHECK(h == "Authorization: Bearer test-api-key");
+            }
+        }
+        CHECK(sawSafety == c.expectHeader);
+        CHECK(sawAuth);
+
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
+}
+
 TEST_CASE("OpenAI backend: unsupported language pairs are refused offline before any network",
           "[openai][contract][faults]")
 {

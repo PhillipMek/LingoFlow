@@ -66,6 +66,7 @@ if(WIN32)
             support/FakeWebSocketTransport.h
             unit/TestBase64.cpp
             unit/TestPcmResampler.cpp
+            unit/TestSafetyIdentifier.cpp
             unit/TestOpenAIProtocol.cpp)
 endif()
 

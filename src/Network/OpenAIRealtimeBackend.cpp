@@ -10,6 +10,7 @@
 
 #include "Network/Base64.h"
 #include "Network/NetworkLimits.h"
+#include "Network/SafetyIdentifier.h"
 #include "Security/ISecretStore.h"
 #include "Translation/LanguageRegistry.h"
 #include "Utils/Log.h"
@@ -311,8 +312,23 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     transport_ = factory_();
     const std::string path = "/v1/realtime/translations?model=" + model; // protocol section 2
-    const ConnectResult cr = transport_->connect(options_.host, kWirePort, path,
-                                                 { "Authorization: Bearer " + *apiKey });
+
+    // Docs section 3: Authorization is the one required header; the
+    // recommended optional OpenAI-Safety-Identifier rides with it when the
+    // composition root supplied a sendable value. A malformed configured
+    // value drops the OPTIONAL header and its warning travels to the log -
+    // an identifier the provider does not require never decides whether the
+    // show has a translation (AGENTS.md 12).
+    std::vector<std::string> headers { "Authorization: Bearer " + *apiKey };
+    if (!options_.safetyIdentifier.empty())
+    {
+        if (isSendableSafetyIdentifier(options_.safetyIdentifier))
+            headers.push_back("OpenAI-Safety-Identifier: " + options_.safetyIdentifier);
+        else
+            log::warning(kLogComponent,
+                         "configured safety identifier is not a sendable header value; header omitted");
+    }
+    const ConnectResult cr = transport_->connect(options_.host, kWirePort, path, headers);
     if (!cr.upgraded)
     {
         auto category = categoryForHttpStatus(cr.httpStatus);

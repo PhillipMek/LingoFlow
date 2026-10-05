@@ -69,6 +69,7 @@
 #include <vector>
 
 #include "Network/OpenAIRealtimeBackend.h"
+#include "Network/SafetyIdentifier.h"
 #include "Security/ChainedSecretStore.h"
 #include "Security/ISecretStore.h"
 #include "Security/WindowsCredentialStore.h"
@@ -427,6 +428,19 @@ private:
         const auto& cfg = controller_.config().current().translation;
 
         liveai::network::OpenAIRealtimeOptions options; // documented defaults, no invented overrides
+
+        // Docs section 3 (code review P2, 2026-10-05): send the recommended
+        // OpenAI-Safety-Identifier when this machine exposes an installation
+        // identity - the SHA-256 digest of the Windows installation GUID, so
+        // the wire carries neither a username, nor a hostname, nor the GUID
+        // itself. An unavailable identity simply means the optional header is
+        // not sent; this is an identifier, not a credential (AGENTS.md 10).
+        options.safetyIdentifier = liveai::network::deriveInstallationIdentifier();
+        liveai::log::info(kLogComponent,
+                          "translation: safety identifier "
+                          + (options.safetyIdentifier.empty()
+                                 ? std::string("unavailable - optional header omitted")
+                                 : std::string("derived (installation digest)")));
 
         auto backend = std::make_unique<liveai::network::OpenAIRealtimeBackend>(*secretStore_, options);
 

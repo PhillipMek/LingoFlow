@@ -86,6 +86,13 @@ struct OpenAIRealtimeOptions
     /// docs say otherwise. Any other value in SessionRequest::model is a
     /// rejectedRequest-style refusal.
     std::string defaultModel = "gpt-realtime-translate";
+    /// The optional OpenAI-Safety-Identifier value (docs section 3, code
+    /// review P2 2026-10-05): the composition root places the installation
+    /// digest here (Network/SafetyIdentifier.h). Empty means the header is
+    /// not sent; a non-empty but unsendable value is dropped at connect with
+    /// a warning - the provider recommends this header and never requires it,
+    /// so nothing about it may take a show down.
+    std::string safetyIdentifier;
     int handshakeTimeoutMs = 15000;
     /// Measured live drain after session.close ran ~5.5 s (protocol section 15);
     /// 10 s bounds it with headroom.
