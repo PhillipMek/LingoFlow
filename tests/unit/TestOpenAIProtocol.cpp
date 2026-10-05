@@ -212,9 +212,30 @@ private:
 
 // --------------------------------------------------------------- event scripts
 
+long long epochNowSeconds()
+{
+    return static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
+/// The live fixture speaks like the server of the docs: the session object of
+/// session.created carries `expires_at` (protocol docs section 4bis), one hour
+/// ahead - the documented ceiling, and a plausible announcement. Dedicated
+/// tests below cover absent, refreshed, past and absurd announcements; the
+/// machine's answer to those is what the supervisor's policy fallback is for.
 std::string createdEvent()
 {
-    return R"({"type":"session.created","session":{"id":"sess_fake","type":"translation","model":"gpt-realtime-translate","expires_at":4000000000,"audio":{"input":{"noise_reduction":null,"transcription":null},"output":{"language":"es"}}}})";
+    return std::string(R"({"type":"session.created","session":{"id":"sess_fake","type":"translation","model":"gpt-realtime-translate","expires_at":)")
+         + std::to_string(epochNowSeconds() + 3600)
+         + R"(}})";
+}
+
+/// Same event shape with an explicit expiry the test controls.
+std::string sessionEventWithExpiry(const std::string& type, long long expiresAtEpochSeconds)
+{
+    return std::string(R"({"type":")") + type +
+           R"(","session":{"id":"sess_fake","type":"translation","model":"gpt-realtime-translate","expires_at":)"
+         + std::to_string(expiresAtEpochSeconds) + R"(}})";
 }
 
 std::string updatedEvent(const std::string& language = "ru")
@@ -1258,6 +1279,134 @@ TEST_CASE("OpenAI backend: send failure while streaming faults the session", "[o
     const auto errors = s.sink.errors();
     CHECK(errors.back().category == TranslationErrorCategory::connection);
     CHECK(errors.back().fatal);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+// --------------------------------------------------- session expiry (review P1)
+
+TEST_CASE("OpenAI protocol: a plausible expires_at becomes a visible deadline",
+          "[network][openai][expiry]")
+{
+    Scenario s;
+    // The live fixture announces now + 3600 s (protocol docs section 4bis).
+    REQUIRE(s.openDefault());
+
+    long long remainingMs = 0;
+    REQUIRE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+    // The wall->steady projection loses at most the test's own runtime.
+    CHECK(remainingMs <= 3600LL * 1000LL);
+    CHECK(remainingMs > 3500LL * 1000LL);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI protocol: a later update refreshes the announced deadline",
+          "[network][openai][expiry]")
+{
+    Scenario s;
+    s.handshakeScript = { sessionEventWithExpiry("session.created", epochNowSeconds() + 3600),
+                          sessionEventWithExpiry("session.updated", epochNowSeconds() + 120) };
+
+    REQUIRE(s.openDefault());
+
+    long long remainingMs = 0;
+    REQUIRE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+    CHECK(remainingMs <= 120LL * 1000LL);
+    CHECK(remainingMs > 60LL * 1000LL);   // the refresh, not the original, rules
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI protocol: an update without the field keeps the session's deadline",
+          "[network][openai][expiry]")
+{
+    // The deadline belongs to the session, not to the event carrying it - and
+    // the event that completes our handshake is exactly such a fieldless
+    // session.updated. Clearing on absence would blind the supervisor at the
+    // very moment it arms the deadline.
+    Scenario s;
+    s.handshakeScript = { sessionEventWithExpiry("session.created", epochNowSeconds() + 3600),
+                          updatedEvent() };   // no expires_at at all
+
+    REQUIRE(s.openDefault());
+
+    long long remainingMs = 0;
+    REQUIRE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+    CHECK(remainingMs > 3500LL * 1000LL);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI protocol: unusable expiry announcements are refused, never trusted",
+          "[network][openai][expiry]")
+{
+    long long remainingMs = 0;
+
+    SECTION("absent altogether - the honest default")
+    {
+        Scenario s;
+        s.handshakeScript = {
+            R"({"type":"session.created","session":{"id":"sess_fake","model":"gpt-realtime-translate"}})",
+            updatedEvent() };
+        REQUIRE(s.openDefault());
+        CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+        s.backend->closeSession();
+        s.sink.armAfterCloseExpectation();
+    }
+    SECTION("epoch in the far future - the delta is outside any plausible session")
+    {
+        Scenario s;
+        s.handshakeScript = { sessionEventWithExpiry("session.created", 4000000000LL), updatedEvent() };
+        REQUIRE(s.openDefault());
+        CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+        s.backend->closeSession();
+        s.sink.armAfterCloseExpectation();
+    }
+    SECTION("epoch already past - 'it expired a minute ago' is not a future deadline")
+    {
+        Scenario s;
+        s.handshakeScript = { sessionEventWithExpiry("session.created", epochNowSeconds() - 60), updatedEvent() };
+        REQUIRE(s.openDefault());
+        CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+        s.backend->closeSession();
+        s.sink.armAfterCloseExpectation();
+    }
+    SECTION("an explicit zero revokes what was announced")
+    {
+        Scenario s;
+        s.handshakeScript = { sessionEventWithExpiry("session.created", epochNowSeconds() + 3600),
+                              sessionEventWithExpiry("session.updated", 0) };
+        REQUIRE(s.openDefault());
+        CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+        s.backend->closeSession();
+        s.sink.armAfterCloseExpectation();
+    }
+}
+
+TEST_CASE("OpenAI protocol: closing the session clears the announcement (rule 6)",
+          "[network][openai][expiry]")
+{
+    Scenario s;
+    REQUIRE(s.openDefault());
+
+    long long remainingMs = 0;
+    REQUIRE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+
+    s.backend->closeSession();
+    CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
+
+    // Reopen with a script that announces nothing: the fresh session starts
+    // unannounced, not under the previous session's deadline.
+    s.handshakeScript = {
+        R"({"type":"session.created","session":{"id":"sess_fake","model":"gpt-realtime-translate"}})",
+        updatedEvent() };
+    REQUIRE(s.openDefault());
+    CHECK_FALSE(s.backend->serverSessionExpiryRemainingMs(remainingMs));
 
     s.backend->closeSession();
     s.sink.armAfterCloseExpectation();

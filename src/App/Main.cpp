@@ -435,6 +435,7 @@ private:
         policy.initialBackoffMs = cfg.reconnectInitialBackoffMs;
         policy.maxBackoffMs = cfg.reconnectMaxBackoffMs;
         policy.sessionMaxAgeMs = cfg.sessionMaxAgeSeconds > 0 ? cfg.sessionMaxAgeSeconds * 1000 : 0;
+        policy.expirySafetyMarginMs = cfg.expirySafetyMarginSeconds > 0 ? cfg.expirySafetyMarginSeconds * 1000 : 0;
 
         controller_.setTranslationBackend(
             std::make_unique<liveai::translation::ReconnectSupervisor>(std::move(backend), policy));

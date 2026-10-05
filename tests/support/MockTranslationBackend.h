@@ -104,6 +104,16 @@ public:
     std::vector<TextCue> textCues;
     std::vector<ErrorCue> errorCues;
 
+    // ---------------------------------------------------------------- expiration
+    /// The review-P1 knob: announce a server-side expiry. The accessor returns
+    /// this remaining value verbatim while set (ms, -1 = "not announced"), so
+    /// the mock keeps its determinism rule - it reads no clock of its own; the
+    /// supervisor turns "remaining" into its own deadline exactly as it does
+    /// for the real backend's steady-clock projection.
+    void announceServerExpiry(long long remainingMs);
+
+    bool serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept override;
+
     // ------------------------------------------------------------------ contract
     std::string_view name() const noexcept override { return "Mock"; }
 
@@ -163,6 +173,7 @@ private:
     int errorEvents_ = 0;
     int sessionsOpened_ = 0;
     int sessionSubmits_ = 0;
+    long long expiryRemainingMs_ = -1;   ///< -1: no announcement (see announceServerExpiry)
 };
 
 } // namespace test

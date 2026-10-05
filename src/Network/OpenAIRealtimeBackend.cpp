@@ -33,6 +33,24 @@ long long steadyNowMs()
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+/// Sanity bound for a server expiry announcement (protocol docs section 4bis):
+/// the documented ceiling is 60 minutes, and anything beyond this window is
+/// either a broken epoch, a milliseconds-vs-seconds confusion, or a local clock
+/// skewed so badly that the announcement cannot be trusted. An announcement
+/// outside the window is refused - the machine keeps its local age policy -
+/// never silently obeyed.
+constexpr long long kExpirySanityMaxMs = 24LL * 60LL * 60LL * 1000LL;
+
+/// The calendar clock enters at exactly one point: deriving the single delta
+/// `expires_at - now` at arrival. Ongoing measurement then rides the steady
+/// clock, so a later time adjustment (NTP, the user, a DST rewrite) can neither
+/// move up nor push out the deadline the show relies on.
+long long wallNowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 /// Protocol section 9 connection-level table: HTTP status before the upgrade
 /// maps to product categories; nothing provider-named crosses the sink seam.
 translation::TranslationErrorCategory categoryForHttpStatus(int status)
@@ -266,6 +284,12 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
         transcriptLine_.clear();
         lastTranscriptMs_ = steadyNowMs();
     }
+
+    // Contract rule 6: a new session is unrelated to the old one. An expiry
+    // announcement belonged to the session that carried it; a server that does
+    // not repeat it must not find the previous deadline still armed here.
+    expiryAnnounced_.store(false, std::memory_order_relaxed);
+
     {
         const std::lock_guard<std::mutex> lock (lifeMutex_);
         handshakeDone_ = false;
@@ -535,6 +559,7 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
+    expiryAnnounced_.store(false, std::memory_order_relaxed);   // rule 6 again: nothing survives the session
     {
         const std::lock_guard<std::mutex> lock (lifeMutex_);
         handshakeDone_ = false;
@@ -544,7 +569,59 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     }
 }
 
+bool OpenAIRealtimeBackend::serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept
+{
+    if (!expiryAnnounced_.load(std::memory_order_acquire))
+    {
+        remainingMsOut = 0;
+        return false;
+    }
+    remainingMsOut = expiryDeadlineSteadyMs_.load(std::memory_order_relaxed) - steadyNowMs();
+    return true;
+}
+
 // ---------------------------------------------------------------- event loops
+
+void OpenAIRealtimeBackend::noteSessionExpiry(const std::string& eventText)
+{
+    json parsed = json::parse(eventText, nullptr, false);
+    if (parsed.is_discarded() || !parsed.contains("session") || !parsed["session"].is_object())
+        return;   // nothing this event can teach us about the deadline
+
+    const json& session = parsed["session"];
+    if (!session.contains("expires_at") || !session["expires_at"].is_number())
+    {
+        // Absent is documented behavior (section 4bis: the field is optional)
+        // and says NOTHING about the deadline - least of all "revoked": the
+        // very event that completes our handshake is a session.updated that may
+        // omit the field, while the session.created of the same session
+        // announced it. So an absent field keeps the last known announcement;
+        // only the SESSION's end clears it (contract rule 6, in closeSession).
+        return;
+    }
+
+    const long long expiresAtEpochSeconds = session["expires_at"].get<long long>();
+    const long long remainingMs = expiresAtEpochSeconds * 1000LL - wallNowMs();
+
+    if (remainingMs > 0 && remainingMs <= kExpirySanityMaxMs)
+    {
+        // Value first, flag with release after it: a reader that acquires the
+        // flag is guaranteed to see this deadline, never a stale pairing.
+        expiryDeadlineSteadyMs_.store(steadyNowMs() + remainingMs, std::memory_order_relaxed);
+        expiryAnnounced_.store(true, std::memory_order_release);
+        log::info(kLogComponent, "server announced session expiry in " + std::to_string(remainingMs / 1000)
+                                     + " s (session.expires_at, protocol docs section 4bis)");
+    }
+    else
+    {
+        const bool hadAnnouncement = expiryAnnounced_.exchange(false, std::memory_order_relaxed);
+        log::warning(kLogComponent, "session.expires_at announced an unusable value ("
+                                         + std::to_string(expiresAtEpochSeconds)
+                                         + " epoch s; the delta against our clock must land in (0, 24 h]"
+                                         + (hadAnnouncement ? ", previous announcement dropped" : "")
+                                         + ") - local age policy applies");
+    }
+}
 
 void OpenAIRealtimeBackend::receiverLoop()
 {
@@ -699,6 +776,9 @@ bool OpenAIRealtimeBackend::handshake()
                 const std::string type = stringField(parsed, "type");
                 if (type == (phase == Phase::created ? "session.created" : "session.updated"))
                 {
+                    // Both handshake events carry the session object; the expiry
+                    // announcement is recorded from whichever arrived (section 4bis).
+                    noteSessionExpiry(ev.text);
                     if (phase == Phase::created)
                     {
                         phase = Phase::updated;
@@ -852,12 +932,14 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
     if (type == "session.created")
     {
         log::warning(kLogComponent, "unexpected repeat of the session-created event");
+        noteSessionExpiry(text);   // even unexpected, the session object's word counts
         return EventResult::keepGoing;
     }
 
     if (type == "session.updated")
     {
         log::debug(kLogComponent, "session configuration confirmed/changed");
+        noteSessionExpiry(text);   // the full object is re-carried; the deadline refreshes
         return EventResult::keepGoing;
     }
 

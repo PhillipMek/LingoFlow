@@ -28,6 +28,10 @@ constexpr int kMaxJitterBufferMs = 1000;
 constexpr int kMinReconnectBackoffMs = 100;
 constexpr int kMaxReconnectBackoffMs = 120000;
 constexpr int kMaxSessionAgeSeconds = 7200;  ///< two measured one-hour ceilings
+/// The safety margin for a server-announced expiry (protocol docs section 4bis)
+/// is bounded by half the age ceiling: a margin of over 30 minutes against a
+/// 60-minute session would reopen before the previous reopen made sense.
+constexpr int kMaxExpiryMarginSeconds = 1800;
 constexpr std::size_t kMaxInstructionsLength = 4000;
 constexpr std::size_t kMaxIdentifierLength = 64;
 constexpr std::size_t kMaxDeviceIdLength = 256;
@@ -212,6 +216,11 @@ std::pair<int, int> sessionMaxAgeRange() noexcept
     return { 0, kMaxSessionAgeSeconds };
 }
 
+std::pair<int, int> expiryMarginRange() noexcept
+{
+    return { 0, kMaxExpiryMarginSeconds };
+}
+
 std::pair<int, int> mockLatencyRange() noexcept
 {
     return { 0, kMaxMockLatencyMs };
@@ -328,6 +337,11 @@ ConfigProblems validate(const AppConfig& candidate)
                                           "must be between 0 (disabled) and "
                                               + std::to_string(kMaxSessionAgeSeconds) + " s" });
 
+    if (translation.expirySafetyMarginSeconds < 0 || translation.expirySafetyMarginSeconds > kMaxExpiryMarginSeconds)
+        problems.push_back(ConfigProblem{ "translation.expirySafetyMarginSeconds",
+                                          "must be between 0 (reopen at the announced instant; not recommended) and "
+                                              + std::to_string(kMaxExpiryMarginSeconds) + " s" });
+
     if (candidate.ndi.enabled && (candidate.ndi.streamName.empty() || candidate.ndi.streamName.size() > kMaxIdentifierLength
                                   || hasControlCharacter(candidate.ndi.streamName)))
         problems.push_back(ConfigProblem{ "ndi.streamName", "NDI is enabled but the stream name is invalid" });
@@ -434,7 +448,8 @@ std::string toJsonText(const AppConfig& settings)
             { "reconnectEnabled", settings.translation.reconnectEnabled },
             { "reconnectInitialBackoffMs", settings.translation.reconnectInitialBackoffMs },
             { "reconnectMaxBackoffMs", settings.translation.reconnectMaxBackoffMs },
-            { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds } } },
+            { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds },
+            { "expirySafetyMarginSeconds", settings.translation.expirySafetyMarginSeconds } } },
         { "ndi", { { "enabled", settings.ndi.enabled }, { "streamName", settings.ndi.streamName } } },
         { "diagnostics", { { "logLevel", settings.diagnostics.logLevel }, { "writeLogFile", settings.diagnostics.writeLogFile } } },
         { "developer",
@@ -531,7 +546,8 @@ bool fromJsonText(std::string_view text,
         static const std::set<std::string> kKeys{ "inputLanguage", "outputLanguage", "instructions",
                                                   "modelHint",     "jitterBufferMs",
                                                   "reconnectEnabled", "reconnectInitialBackoffMs",
-                                                  "reconnectMaxBackoffMs", "sessionMaxAgeSeconds" };
+                                                  "reconnectMaxBackoffMs", "sessionMaxAgeSeconds",
+                                                  "expirySafetyMarginSeconds" };
         reportUnknownKeys(*section, "translation", kKeys, problems);
 
         auto& translation = out.translation;
@@ -547,6 +563,8 @@ bool fromJsonText(std::string_view text,
                         translation.reconnectMaxBackoffMs, problems);
         readNumber<int>(*section, "sessionMaxAgeSeconds", "translation.sessionMaxAgeSeconds",
                         translation.sessionMaxAgeSeconds, problems);
+        readNumber<int>(*section, "expirySafetyMarginSeconds", "translation.expirySafetyMarginSeconds",
+                        translation.expirySafetyMarginSeconds, problems);
     }
 
     if (const auto* section = findSection(root, "ndi", problems); section != nullptr)
@@ -641,6 +659,8 @@ bool fromJsonText(std::string_view text,
           [](AppConfig& c, const AppConfig& d) { c.translation.reconnectMaxBackoffMs = d.translation.reconnectMaxBackoffMs; } },
         { "translation.sessionMaxAgeSeconds",
           [](AppConfig& c, const AppConfig& d) { c.translation.sessionMaxAgeSeconds = d.translation.sessionMaxAgeSeconds; } },
+        { "translation.expirySafetyMarginSeconds",
+          [](AppConfig& c, const AppConfig& d) { c.translation.expirySafetyMarginSeconds = d.translation.expirySafetyMarginSeconds; } },
         { "ndi.streamName",
           [](AppConfig& c, const AppConfig& d)
           {

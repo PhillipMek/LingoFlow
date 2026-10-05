@@ -32,7 +32,10 @@
 //     replayed - that would let the translation drift behind the room by the
 //     length of every outage (owner decision, 2026-10-02; docs section 10
 //     deliberately left the choice to us).
-//   * proactive reopen: sessionMaxAgeMs before the one-hour provider ceiling
+//   * proactive reopen: the server-announced session expiry (docs section 4bis)
+//     minus a safety margin when present, else sessionMaxAgeMs before the
+//     one-hour provider ceiling - whichever deadline is EARLIER; the provider's
+//     own word about this session outranks our prediction about the service
 //     measured live (docs section 15) so a long event never hits the expiry at
 //     all; the reopen is an ordinary close→open cycle, its gap is counted.
 //
@@ -69,6 +72,13 @@ public:
         int initialBackoffMs = 1000;     ///< first retry delay
         int maxBackoffMs = 15000;        ///< exponential backoff cap (doubling)
         int sessionMaxAgeMs = 3300000;   ///< proactive reopen before the provider ceiling; 0 = off
+        /// Safety margin applied to a SERVER-announced expiry before reopening
+        /// (protocol docs section 4bis; code review P1, 2026-10-05): reopen
+        /// starts this far ahead of the announced deadline, so the controlled
+        /// close→reopen lands before the provider cuts the session mid-sentence.
+        /// 0 means "reopen exactly at the announced instant" - permitted, not
+        /// recommended; the announcement never delays an earlier policy age.
+        int expirySafetyMarginMs = 300000;
     };
 
     /// Recovery metrics (SPEC "Diagnostics": reconnect count, session
@@ -104,6 +114,10 @@ public:
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
+    /// Delegation, so a consumer of the mounted chain learns what the provider
+    /// really announced rather than what a generic wrapper defaults to.
+    bool serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept override;
+
     // ------------------------------------------- ITranslationSink (wrapped side)
     void onTranslatedAudio(const float* samples, int frameCount, int sampleRate) override;
     void onPartialText(std::string_view text) override;
@@ -134,6 +148,11 @@ private:
     void runAttempt();
     /// Enter the recovering mode and schedule the first attempt. Lock must be held.
     void enterRecoveringLocked(bool proactive);
+    /// Arm ageDeadline_ from both voices about the session's end: the policy
+    /// age and the wrapped backend's server-announced expiry (docs section 4bis).
+    /// The earlier deadline wins; deadlineActive_ tells the worker whether to
+    /// watch it at all. Lock must be held.
+    void applySessionDeadlineLocked(clock::time_point now);
     /// Book a session leaving the live state (its duration; recovery clock start).
     void leaveLiveLocked();
     /// Tell the worker that something it computes its wake-up from has
@@ -159,7 +178,8 @@ private:
     clock::time_point nextAttemptAt_ {};
     clock::time_point recoverStarted_ {};
     clock::time_point connectedSince_ {};
-    clock::time_point ageDeadline_ {};    ///< valid while live && policy_.sessionMaxAgeMs > 0
+    clock::time_point ageDeadline_ {};    ///< valid while live && deadlineActive_
+    bool deadlineActive_ = false;         ///< some deadline source armed ageDeadline_
     int nextBackoffMs_ = 0;               ///< doubles per failed attempt, capped
     int pendingRetryAfterMs_ = 0;         ///< service hint consumed by the next wait
     bool recoveryWasProactive_ = false;   ///< classifies the next successful recovery

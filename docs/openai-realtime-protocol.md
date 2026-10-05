@@ -86,6 +86,32 @@ Mapping to the task 007 contract (our six lifecycle rules in `ITranslationBacken
 The `session.close` client event is "only supported for translation sessions" [R1] -
 another reason the voice-agent docs must not be copied into our backend.
 
+### 4bis. Session expiry - the server's own deadline (recheck 2026-10-05, code review P1)
+
+The realtime session object carries `expires_at`: "Expiration timestamp for the
+session, in seconds since epoch" [R10]. It is documented OPTIONAL - a server that
+fills `session.updated` without it is behaving as documented, not failing - and the
+conversations guide separately states "the maximum duration of a Realtime session is
+60 minutes" [R11], the fact task 010's `sessionMaxAgeMs` policy was built to predict.
+
+Decision (supervisor policy): where the server announces a concrete expiry, that
+announcement is authoritative, and a controlled reopen is started at
+`expires_at - expirySafetyMarginMs` (default 5 minutes, operator-tunable); the local
+age policy remains as cap and fallback - when both are known the EARLIER deadline
+wins, because the earlier one is the one that will actually cut the audio.
+
+Clock handling, stated honestly: `expires_at` is the server's wall clock, our only
+comparison point is ours, so the backend converts at arrival:
+`remaining = expires_at*1000 - local_wall_now_ms`, projected onto the steady clock.
+An announcement computing to a non-positive or absurd (over 24 h) remaining interval
+is refused as unusable - which catches both a badly skewed local clock and a server
+sending milliseconds where the docs say seconds - is logged as such, and leaves the
+machine on the local age policy. A later `session.updated` that carries the field
+refreshes the announcement; one that does NOT carry it keeps the last known value
+(the deadline belongs to the session, not to the event, and the event completing our
+handshake is exactly such an update). Only closing the session clears the state
+(contract rule 6).
+
 ## 5. Client events - the complete list
 
 The reference page for translation client events contains exactly three [R2]. Anything
@@ -509,7 +535,7 @@ Remaining open items from section 14: 14.5 (silence/ducking behavior needs real 
 in the target language - 012), and the long-run semantics of `expires_at` (what the
 server sends at expiry - 010/024).
 
-## 16. References (all fetched 2026-10-02, official OpenAI properties)
+## 16. References (R1-R9 fetched 2026-10-02, R10-R11 fetched 2026-10-05; official OpenAI properties)
 
 - [R1] Realtime translation guide — `https://developers.openai.com/api/docs/guides/realtime-translation`
   (endpoint vs voice-agent table, transports, WS examples, `session.close` flush semantics,
@@ -542,6 +568,14 @@ server sends at expiry - 010/024).
   patterns). Official OpenAI cookbook (`github.com/openai/openai-cookbook`).
 - [R9] Error codes guide — `https://developers.openai.com/api/docs/guides/error-codes`
   (HTTP status table incl. 401/403/429/500/503 semantics and retry advice).
+- [R10] Realtime API reference, session object (fetched 2026-10-05) —
+  `https://developers.openai.com/api/reference/resources/realtime`
+  ("`expires_at`: optional number - Expiration timestamp for the session, in seconds
+  since epoch"; session object re-carried in `session.updated`).
+- [R11] Realtime conversations guide (fetched 2026-10-05) —
+  `https://developers.openai.com/api/docs/guides/realtime-conversations`
+  ("The maximum duration of a Realtime session is 60 minutes"; `session.created`
+  on connect, `session.updated` answers configuration updates).
 - [R-doc] `docs/device-defaults.md` (this repo): engine dev rate 48 kHz — context for
   section 7, not an OpenAI source.
 

@@ -464,6 +464,90 @@ TEST_CASE("ReconnectSupervisor: sessions reopen proactively before the provider 
     CHECK(supervisor->stats().sessionAgeMs < 5000);
 }
 
+TEST_CASE("ReconnectSupervisor: a server-announced expiry reopens even with the policy age off",
+          "[translation][reconnect][expiry]")
+{
+    // Code review P1 (2026-10-05): sessionMaxAgeMs is the operator's prediction;
+    // expires_at is the provider's own word. With the prediction switched off
+    // entirely (maxAge 0), the announcement alone must still drive the
+    // controlled reopen.
+    RecordingSink sink;
+    MockTranslationBackend* m = nullptr;
+    ReconnectSupervisor::Policy policy = fastPolicy(20, 40, /*maxAgeMs=*/0);
+    policy.expirySafetyMarginMs = 20;
+
+    auto mock = std::make_unique<MockTranslationBackend>();
+    auto* raw = mock.get();
+    raw->announceServerExpiry(150);   // the provider says: 150 ms to live
+    auto supervisor = makeSupervisor(std::move(mock), policy, m, sink);
+
+    openAndRequire(*supervisor);
+    REQUIRE(supervisor->state() == SessionState::connected);
+
+    // Deadline = 150 - 20 margin: the reopen must come long before "never".
+    REQUIRE(waitUntil([&] { return supervisor->stats().proactiveReopens >= 2; }, 3000));
+    CHECK(m->sessionsOpened() >= 3);
+    CHECK(supervisor->state() == SessionState::connected);
+
+    // The announcement is visible through the mounted chain, not just inside.
+    long long remainingMs = 0;
+    CHECK(supervisor->serverSessionExpiryRemainingMs(remainingMs));
+    CHECK(remainingMs == 150);   // the mock's static knob, verbatim
+
+    CHECK(supervisor->stats().recoveries == 0);   // an expiry reopen is not an error recovery
+}
+
+TEST_CASE("ReconnectSupervisor: the earlier of server expiry and policy age wins",
+          "[translation][reconnect][expiry]")
+{
+    RecordingSink sink;
+
+    SECTION("long policy, near expiry: the announcement rules")
+    {
+        MockTranslationBackend* m = nullptr;
+        ReconnectSupervisor::Policy policy = fastPolicy(20, 40, 600000);   // ten minutes
+        policy.expirySafetyMarginMs = 0;
+        auto mock = std::make_unique<MockTranslationBackend>();
+        mock->announceServerExpiry(120);
+        auto supervisor = makeSupervisor(std::move(mock), policy, m, sink);
+        openAndRequire(*supervisor);
+        // Ten-minute policy would wait; the announced 120 ms must not.
+        REQUIRE(waitUntil([&] { return supervisor->stats().proactiveReopens >= 1; }, 2000));
+    }
+    SECTION("short policy, far expiry: the policy cap rules")
+    {
+        MockTranslationBackend* m = nullptr;
+        ReconnectSupervisor::Policy policy = fastPolicy(20, 40, 120);
+        policy.expirySafetyMarginMs = 1000;   // would push any real deadline far out
+        auto mock = std::make_unique<MockTranslationBackend>();
+        mock->announceServerExpiry(120000);   // two hours announced - no reason to wait two hours
+        auto supervisor = makeSupervisor(std::move(mock), policy, m, sink);
+        openAndRequire(*supervisor);
+        REQUIRE(waitUntil([&] { return supervisor->stats().proactiveReopens >= 1; }, 2000));
+    }
+}
+
+TEST_CASE("ReconnectSupervisor: no announcement and no policy age arms no deadline",
+          "[translation][reconnect][expiry]")
+{
+    // The pre-review behavior is preserved exactly: maxAge 0 plus a backend
+    // that announces nothing (the interface default, the honest Null/Mock
+    // answer) means a session that runs until something actually breaks.
+    RecordingSink sink;
+    MockTranslationBackend* m = nullptr;
+    auto supervisor = makeSupervisor(std::make_unique<MockTranslationBackend>(),
+                                     fastPolicy(20, 40, 0), m, sink);
+
+    openAndRequire(*supervisor);
+    long long remainingMs = 0;
+    CHECK_FALSE(supervisor->serverSessionExpiryRemainingMs(remainingMs));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(supervisor->stats().proactiveReopens == 0);
+    CHECK(supervisor->stats().attempts == 0);
+    CHECK(supervisor->state() == SessionState::connected);
+}
+
 TEST_CASE("ReconnectSupervisor: session duration is measurable", "[translation][reconnect]")
 {
     RecordingSink sink;

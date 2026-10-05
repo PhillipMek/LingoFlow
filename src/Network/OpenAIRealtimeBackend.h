@@ -136,6 +136,11 @@ public:
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
+    /// The server's own words about when this session ends, recorded from
+    /// session.created/session.updated (protocol docs section 4bis). Read by the
+    /// reconnect supervisor when it arms its session deadline.
+    bool serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept override;
+
 private:
     enum class EventResult
     {
@@ -171,6 +176,16 @@ private:
                      bool fatal,
                      int retryAfterMs = 0);
 
+    /// Read `session.expires_at` out of a session.created/session.updated event
+    /// text and project it onto the steady clock (protocol docs section 4bis:
+    /// server wall clock vs ours, one delta at arrival; non-positive or >24 h
+    /// answers are refused as unusable with a log line, never trusted). An
+    /// absent field keeps the last known announcement - the session still has
+    /// whatever deadline it declared; only closing the session clears it.
+    /// Written by the receiver thread; the atomics make every other thread's
+    /// read safe.
+    void noteSessionExpiry(const std::string& eventText);
+
     OpenAIRealtimeOptions options_;
     security::ISecretStore& secrets_;
     TransportFactory factory_;
@@ -192,6 +207,13 @@ private:
     std::atomic<bool> closeSent_ { false };   ///< sender delivered session.close
     std::atomic<bool> drainForced_ { false }; ///< last socket close was our cancel
     std::atomic<std::uint64_t> eventCounter_ { 0 };
+
+    /// Server-announced session expiry (protocol docs section 4bis): deadline in
+    /// steady-clock milliseconds, valid only while expiryAnnounced_ is true. The
+    /// deadline is stored before the flag (release/acquire pairing) so a reader
+    /// that sees the flag also sees the value.
+    std::atomic<bool> expiryAnnounced_ { false };
+    std::atomic<long long> expiryDeadlineSteadyMs_ { 0 };
 
     // ---- rendezvous flags (guarded by lifeMutex_/lifeCv_) ----
     std::mutex lifeMutex_;

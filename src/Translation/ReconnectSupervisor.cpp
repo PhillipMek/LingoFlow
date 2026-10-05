@@ -115,6 +115,7 @@ bool ReconnectSupervisor::openSession(const SessionRequest& request, std::string
         attemptDue_ = false;
         connectedSince_ = {};
         ageDeadline_ = {};
+        deadlineActive_ = false;
         touchLocked();
     }
 
@@ -186,6 +187,14 @@ void ReconnectSupervisor::closeSession() noexcept
         if (app != nullptr)
             app->onSessionStateChanged(SessionState::closed);
     }
+}
+
+bool ReconnectSupervisor::serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept
+{
+    // The supervisor is the product's mounted ITranslationBackend; delegation
+    // is what keeps the provider's own word visible one level up (tests, the
+    // task 017 export, and any future consumer see the truth, not a default).
+    return backend_ != nullptr && backend_->serverSessionExpiryRemainingMs(remainingMsOut);
 }
 
 ReconnectSupervisor::Stats ReconnectSupervisor::stats() const noexcept
@@ -262,16 +271,14 @@ void ReconnectSupervisor::onSessionStateChanged(SessionState state)
                 nextBackoffMs_ = policy_.initialBackoffMs;
                 pendingRetryAfterMs_ = 0;
                 connectedSince_ = now;
-                if (policy_.sessionMaxAgeMs > 0)
-                    ageDeadline_ = connectedSince_ + ms(policy_.sessionMaxAgeMs);
+                applySessionDeadlineLocked(now);
                 log::info(kLogComponent, "translation session recovered");
                 touchLocked();
             }
             else if (mode_ == Mode::live)
             {
                 connectedSince_ = now;
-                if (policy_.sessionMaxAgeMs > 0)
-                    ageDeadline_ = connectedSince_ + ms(policy_.sessionMaxAgeMs);
+                applySessionDeadlineLocked(now);
                 touchLocked();
             }
             forward = true; // connected always reaches the application
@@ -381,6 +388,49 @@ void ReconnectSupervisor::touchLocked()
     wakeCv_.notify_all();
 }
 
+/// Arm the session deadline from the two voices about when this session may
+/// still be alive (docs section 4bis): the operator's policy age and the
+/// provider's own `expires_at` announcement. The EARLIER deadline wins,
+/// because the earlier one is the one that actually cuts the audio: a provider
+/// that announced expiry in three minutes does not care that our policy allows
+/// fifty-five. With no announcement and no policy age, nothing is armed - the
+/// pre-review behavior for maxAge=0 is preserved exactly.
+void ReconnectSupervisor::applySessionDeadlineLocked(clock::time_point now)
+{
+    ageDeadline_ = {};
+    deadlineActive_ = false;
+    if (policy_.sessionMaxAgeMs > 0)
+    {
+        ageDeadline_ = connectedSince_ + ms(policy_.sessionMaxAgeMs);
+        deadlineActive_ = true;
+    }
+
+    long long remainingMs = 0;
+    if (backend_ != nullptr && backend_->serverSessionExpiryRemainingMs(remainingMs))
+    {
+        std::chrono::milliseconds adjusted(remainingMs - policy_.expirySafetyMarginMs);
+        const clock::time_point serverDeadline = now + adjusted;
+        if (!deadlineActive_ || serverDeadline < ageDeadline_)
+        {
+            ageDeadline_ = serverDeadline;
+            log::info(kLogComponent, "session deadline: server-announced expiry in " + std::to_string(remainingMs)
+                                         + " ms minus " + std::to_string(policy_.expirySafetyMarginMs)
+                                         + " ms safety margin (policy age " + std::to_string(policy_.sessionMaxAgeMs) + " ms)");
+        }
+        else
+        {
+            log::info(kLogComponent, "session deadline: policy age " + std::to_string(policy_.sessionMaxAgeMs)
+                                         + " ms (the server announced a later expiry)");
+        }
+        deadlineActive_ = true;
+    }
+    else if (deadlineActive_)
+    {
+        log::info(kLogComponent, "session deadline: policy age " + std::to_string(policy_.sessionMaxAgeMs)
+                                     + " ms (backend announced no expiry)");
+    }
+}
+
 void ReconnectSupervisor::enterRecoveringLocked(bool proactive)
 {
     leaveLiveLocked();
@@ -474,7 +524,7 @@ void ReconnectSupervisor::workerLoop()
             // attemptDue_ alone means "a recovery is scheduled", not "run".)
             doAttempt = true;
         }
-        else if (mode_ == Mode::live && policy_.sessionMaxAgeMs > 0
+        else if (mode_ == Mode::live && deadlineActive_
                  && connectedSince_ != clock::time_point {} && now >= ageDeadline_)
         {
             enterRecoveringLocked(/*proactive=*/true);
@@ -509,7 +559,7 @@ void ReconnectSupervisor::workerLoop()
             hasWake = true;
             wakeAt = nextAttemptAt_;
         }
-        else if (mode_ == Mode::live && policy_.sessionMaxAgeMs > 0
+        else if (mode_ == Mode::live && deadlineActive_
                  && connectedSince_ != clock::time_point {})
         {
             hasWake = true;

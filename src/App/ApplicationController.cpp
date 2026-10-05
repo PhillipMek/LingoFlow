@@ -503,10 +503,23 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                                  std::to_string(cfg.translation.reconnectMaxBackoffMs));
     translationRows.emplace_back("session_max_age_seconds",
                                  std::to_string(cfg.translation.sessionMaxAgeSeconds));
+    translationRows.emplace_back("expiry_safety_margin_seconds",
+                                 std::to_string(cfg.translation.expirySafetyMarginSeconds));
     translationRows.emplace_back("capture_submitted_frames",
                                  std::to_string(diag.translationSubmittedFrames));
     translationRows.emplace_back("capture_gap_refused_frames", std::to_string(diag.translationGapFrames));
     translationRows.emplace_back("translated_audio_frames", std::to_string(diag.translatedAudioFrames));
+    {
+        // Live provider fact (protocol docs section 4bis): when the server
+        // announced a concrete expiry, the export carries its remaining time at
+        // export instant; when it did not, the export says "not announced" in
+        // so many words - a reader never has to distinguish absent from zero.
+        long long remainingMs = 0;
+        translationRows.emplace_back("server_session_expiry",
+                                     translationBackend_ != nullptr && translationBackend_->serverSessionExpiryRemainingMs(remainingMs)
+                                         ? std::to_string(remainingMs) + " ms remaining"
+                                         : std::string("not announced"));
+    }
     translationRows.emplace_back("rejected_audio_frames", std::to_string(diag.rejectedAudioFrames));
     translationRows.emplace_back("dropped_audio_frames",
                                  std::to_string(diag.translatedAudioDroppedFrames));

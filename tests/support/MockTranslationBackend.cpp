@@ -28,6 +28,24 @@ void drain(Emit& emit)
 
 } // namespace
 
+void MockTranslationBackend::announceServerExpiry(long long remainingMs)
+{
+    const std::lock_guard lock(mutex_);
+    expiryRemainingMs_ = remainingMs;
+}
+
+bool MockTranslationBackend::serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept
+{
+    const std::lock_guard lock(mutex_);
+    if (expiryRemainingMs_ < 0)
+    {
+        remainingMsOut = 0;
+        return false;
+    }
+    remainingMsOut = expiryRemainingMs_;
+    return true;
+}
+
 translation::SessionState MockTranslationBackend::state() const noexcept
 {
     std::lock_guard lock(mutex_);

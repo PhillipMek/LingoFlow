@@ -237,6 +237,20 @@ public:
     /// Ends the session and releases resources. Idempotent; no sink callbacks
     /// after it returns (rule 5).
     virtual void closeSession() noexcept = 0;
+
+    /// Does the provider know when this session actually ends? True with
+    /// `remainingMsOut` = milliseconds until the server-announced expiry,
+    /// measured on this machine's steady clock from the moment the announcement
+    /// arrived (code review P1, 2026-10-05; protocol docs section 4bis). The
+    /// value may already be non-positive - a server that says "it ended" says
+    /// "act now". The default says "this backend announces nothing", which is
+    /// the honest answer for Null, Mock and any provider omitting the optional
+    /// field; callers then run on their local age policy alone.
+    virtual bool serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept
+    {
+        remainingMsOut = 0;
+        return false;
+    }
 };
 
 } // namespace translation

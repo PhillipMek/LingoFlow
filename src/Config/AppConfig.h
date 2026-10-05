@@ -78,8 +78,18 @@ struct TranslationSettings
     /// Proactively reopen the session before the one-hour ceiling measured
     /// live (protocol doc section 15); 0 disables the timer. The provider
     /// session restarts fresh either way - the gap is counted, audio during it
-    /// is refused and dropped (task 010's gap policy).
+    /// is refused and dropped (task 010's gap policy). Where the server
+    /// announces a concrete expiry (session.expires_at, protocol docs section
+    /// 4bis), that announcement minus expirySafetyMarginSeconds is the deadline
+    /// whenever it is EARLIER - this field then acts as the cap and the
+    /// fallback, exactly the operator-policy role the provider's own word
+    /// outranks.
     int sessionMaxAgeSeconds = 3300;
+    /// How far ahead of a server-announced session expiry the controlled
+    /// reopen starts (protocol docs section 4bis; code review P1, 2026-10-05).
+    /// 0 means "reopen exactly at the announced instant" - allowed, not
+    /// recommended: the reopen itself takes time and the provider does not wait.
+    int expirySafetyMarginSeconds = 300;
 
     friend constexpr bool operator==(const TranslationSettings&, const TranslationSettings&) = default;
 };

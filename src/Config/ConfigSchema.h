@@ -52,6 +52,11 @@ namespace config {
     /// (0 disables the proactive reopen).
     std::pair<int, int> sessionMaxAgeRange() noexcept;
 
+    /// Inclusive bounds validate() accepts for
+    /// translation.expirySafetyMarginSeconds (0 = reopen at the announced
+    /// instant; protocol docs section 4bis).
+    std::pair<int, int> expiryMarginRange() noexcept;
+
     /// Bounds validate() accepts for the task 019 developer fields: the mock
     /// echo delay (ms), the test-tone frequency (Hz) and level (dBFS).
     std::pair<int, int> mockLatencyRange() noexcept;

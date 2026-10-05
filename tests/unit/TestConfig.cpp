@@ -35,6 +35,7 @@ AppConfig makeConfig()
     cfg.translation.reconnectInitialBackoffMs = 500;
     cfg.translation.reconnectMaxBackoffMs = 9000;
     cfg.translation.sessionMaxAgeSeconds = 1800;
+    cfg.translation.expirySafetyMarginSeconds = 420;
     cfg.ndi.enabled = true;
     cfg.ndi.streamName = "LingoFlow EN->RU";
     cfg.diagnostics.logLevel = "warning";
@@ -118,6 +119,7 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.translation.reconnectInitialBackoffMs == original.translation.reconnectInitialBackoffMs);
     CHECK(restored.translation.reconnectMaxBackoffMs == original.translation.reconnectMaxBackoffMs);
     CHECK(restored.translation.sessionMaxAgeSeconds == original.translation.sessionMaxAgeSeconds);
+    CHECK(restored.translation.expirySafetyMarginSeconds == original.translation.expirySafetyMarginSeconds);
     CHECK(restored.ndi.enabled == original.ndi.enabled);
     CHECK(restored.ndi.streamName == original.ndi.streamName);
     CHECK(restored.diagnostics.logLevel == original.diagnostics.logLevel);
@@ -264,6 +266,34 @@ TEST_CASE("ConfigSchema: recovery policy fields validate and repair per field",
     CHECK_FALSE(config::validate(broken).empty());
     broken.translation.sessionMaxAgeSeconds = 0; // 0 = the age reopen disabled, valid
     CHECK(config::validate(broken).empty());
+
+    // Review P1 (2026-10-05): the safety margin for a server-announced expiry
+    // (protocol docs section 4bis). Default five minutes; a value beyond the
+    // half-ceiling boundary is a problem; 0 is valid-but-not-recommended; and
+    // a config file written before this field existed must load on the
+    // default, exactly as old installations keep working unchanged.
+    CHECK(config::defaults().translation.expirySafetyMarginSeconds == 300);
+
+    broken.translation.expirySafetyMarginSeconds = 3601;
+    CHECK_FALSE(config::validate(broken).empty());
+    broken.translation.expirySafetyMarginSeconds = 0;
+    CHECK(config::validate(broken).empty());
+
+    AppConfig preReview;
+    ConfigProblems preProblems;
+    std::string preError;
+    REQUIRE(config::fromJsonText(R"({"translation":{"sessionMaxAgeSeconds":3600}})",
+                                 preReview, preProblems, preError));
+    CHECK(preProblems.empty());
+    CHECK(preReview.translation.sessionMaxAgeSeconds == 3600);
+    CHECK(preReview.translation.expirySafetyMarginSeconds == 300);   // the default answers
+
+    AppConfig marginSet;
+    ConfigProblems marginProblems;
+    REQUIRE(config::fromJsonText(R"({"translation":{"expirySafetyMarginSeconds":600}})",
+                                 marginSet, marginProblems, preError));
+    CHECK(marginProblems.empty());
+    CHECK(marginSet.translation.expirySafetyMarginSeconds == 600);
 }
 
 TEST_CASE("ConfigSchema: absent sections and fields keep the defaults", "[config][schema]")
