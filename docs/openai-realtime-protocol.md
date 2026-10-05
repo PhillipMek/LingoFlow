@@ -179,6 +179,22 @@ No `*.done` events exist in the reference. Do not wait for one; do not invent on
   treat them as authoritative when present and validate against what it assumed; the
   value the real API sends must be observed at the human checkpoint (14.2).
 
+**Device-rate envelope (code review P1, 2026-10-05)**: this backend accepts on
+either side exactly the product's config set - 24000, 44100, 48000, 88200, 96000 Hz -
+against the 24 kHz wire, and nothing else (AGENTS.md 8: no invented rates, 32000 Hz
+stays a refusal). 44.1/88.2 were legal in `ConfigSchema` while the backend rejected
+them, so a lawful operator choice used to die at Start Translation. Power-of-two
+relations run through the halfband cascade; 24 <-> 44.1 (147/80) and 24 <-> 88.2
+(147/40) run through an exact-periodic 49-tap Blackman polyphase - integer phase
+table, zero timing drift across a show. Its quality is what the tests measure
+(TestPcmResampler "[rational]" cases, 2026-10-05): 1 kHz passes within a 5 % RMS
+window in every direction, tones above the new Nyquist are gone (16 kHz through
+44.1->24 and 20 kHz through 88.2->24: output RMS < 0.02 from a 0.9-amplitude
+input), a 6 kHz tone's interpolation image measures below 5e-3 at 18 kHz (in
+range, and nothing legitimate can live there - pure leakage), every
+polyphase row is DC-normalised to unity, and chunked streaming equals one-shot
+bit for bit.
+
 **Sample-rate consequences for task 009** (contract mapping, section 13): the engine
 runs at its device rate (48 kHz in dev defaults [R-doc]); the provider speaks 24 kHz in
 both directions. A resampler is therefore mandatory **inside the backend**, on the

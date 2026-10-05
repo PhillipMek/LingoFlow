@@ -42,8 +42,10 @@
 // Rates (protocol section 7): the wire speaks 24 kHz PCM16 mono in both
 // directions; inputSampleRate/outputSampleRate from the request define the
 // conversion done HERE on the worker threads by PcmResampler. The backend
-// accepts 24/48/96 kHz on either side - a pair outside that set is refused at
-// openSession(), never guessed at.
+// accepts 24/44.1/48/88.2/96 kHz on either side - exactly the config's device
+// set plus the wire rate itself, so no device choice the operator may legally
+// save can die at Start Translation (code review P1, 2026-10-05). A pair
+// outside that set is refused at openSession(), never guessed at.
 
 #include <atomic>
 #include <condition_variable>

@@ -83,24 +83,32 @@ TEST_CASE("PcmResampler: only the documented rate pairs are supported", "[audio]
     CHECK(PcmResampler::isSupportedPair(48000, 96000));
     CHECK(PcmResampler::isSupportedPair(96000, 48000));
 
-    // 44.1k and nonsense pairs are refused at configuration; the backend then
-    // refuses the session instead of guessing (AGENTS.md 8).
-    CHECK_FALSE(PcmResampler::isSupportedPair(44100, 24000));
-    CHECK_FALSE(PcmResampler::isSupportedPair(24000, 44100));
+    // 44.1k/88.2k device rates against the wire ARE supported - the rational
+    // stage exists for them since code review P1 (2026-10-05), because the
+    // config always allowed those device rates while the backend refused them.
+    // The REFUSAL examples moved outside the device envelope: guessing what
+    // 32000 Hz or 22050<->24000 should mean is still forbidden (AGENTS.md 8).
+    CHECK(PcmResampler::isSupportedPair(44100, 24000));
+    CHECK(PcmResampler::isSupportedPair(24000, 44100));
+    CHECK(PcmResampler::isSupportedPair(88200, 24000));
+    CHECK(PcmResampler::isSupportedPair(24000, 88200));
+    CHECK(PcmResampler::isSupportedPair(44100, 88200));   // 2:1 - the cascade answers free
+    CHECK_FALSE(PcmResampler::isSupportedPair(32000, 24000));
     CHECK_FALSE(PcmResampler::isSupportedPair(48000, 20000));
     CHECK_FALSE(PcmResampler::isSupportedPair(0, 24000));
     CHECK_FALSE(PcmResampler::isSupportedPair(24000, 0));
     CHECK_FALSE(PcmResampler::isSupportedPair(-48000, 24000));
 
     PcmResampler r;
-    CHECK_FALSE(r.configure(44100, 24000));
-    CHECK_FALSE(r.configure(24000, 44100));
+    CHECK_FALSE(r.configure(32000, 24000));
     CHECK(r.inputRate() == 0); // a refused configure leaves the object untouched
     REQUIRE(r.configure(24000, 24000));
     CHECK(r.configure(48000, 24000)); // a supported pair replaces the cascade
-    CHECK(r.configure(24000, 48000));
+    CHECK(r.configure(44100, 24000)); // and so does a rational pair
+    CHECK(r.inputRate() == 44100);
+    CHECK(r.configure(24000, 88200)); // switching direction replaces the phase table
     CHECK(r.inputRate() == 24000);
-    CHECK(r.outputRate() == 48000);
+    CHECK(r.outputRate() == 88200);
     CHECK_FALSE(r.configure(48000, 22050));
     CHECK(r.inputRate() == 24000); // still the last valid pair
 }
@@ -235,4 +243,134 @@ TEST_CASE("PcmResampler: undersized output capacity is refused, not overrun",
 
     std::vector<float> tiny (1);
     CHECK(r.process(nullptr, 0, tiny.data(), 1) == 0); // zero input is zero output
+}
+
+// ------------------------------------------------- rational stage (review P1)
+//
+// 44.1 <-> 24 (147/80) and 88.2 <-> 24 (147/40): the pairs that make a 44.1
+// kHz venue legal. These tests MEASURE what the filter does and assert it -
+// the documented quality claims in protocol docs section 7 are the numbers
+// proven here, not aspirations.
+
+TEST_CASE("PcmResampler: 44.1k->24k passes the speech band at unity", "[audio][resampler][rational]")
+{
+    PcmResampler r;
+    REQUIRE(r.configure(44100, 24000));
+
+    const auto in = makeSine(44100, 44100.0, 1000.0); // one second
+    std::vector<float> out;
+    const int n = runAll(r, in, out);
+    CHECK(n >= 23900);            // ~80/147 of the input, minus the bounded lookahead
+    CHECK(n <= 24050);
+    CHECK(rms(out, 600) == Catch::Approx(0.7071).epsilon(0.05));
+    CHECK(goertzel(out, 24000.0, 1000.0) > 0.45);
+}
+
+TEST_CASE("PcmResampler: 44.1k->24k suppresses the band that would alias", "[audio][resampler][rational]")
+{
+    PcmResampler r;
+    REQUIRE(r.configure(44100, 24000));
+
+    // A 16 kHz tone at the 44.1k input sits above the new Nyquist; unfiltered,
+    // decimation would land it near 8.7 kHz in the 24k view. It must not survive.
+    const auto in = makeSine(44100, 44100.0, 16000.0, 0.9);
+    std::vector<float> out;
+    runAll(r, in, out);
+    CHECK(goertzel(out, 24000.0, 8707.0) < 5e-3);
+    CHECK(rms(out, 200) < 0.02);
+}
+
+TEST_CASE("PcmResampler: 24k->44.1k keeps DC and rejects images", "[audio][resampler][rational]")
+{
+    PcmResampler r;
+    REQUIRE(r.configure(24000, 44100));
+
+    { // DC: every polyphase row is normalised to unity, so a held value holds.
+        std::vector<float> in (2400, 0.25f);
+        std::vector<float> out;
+        const int n = runAll(r, in, out);
+        REQUIRE(n > 4000);
+        CHECK(out[static_cast<std::size_t>(n) - 10] == Catch::Approx(0.25f).epsilon(0.01));
+    }
+
+    { // 6 kHz fundamental at unity; its upsample image at 18 kHz (24k - 6k) must
+        // die. 18 kHz is in range at 44.1 kHz (below Nyquist 22.05) and NOTHING
+        // legitimate can live there: the input had nothing above 12 kHz, so any
+        // energy at 18 kHz is image leakage from the interpolation.
+        r.reset();
+        const auto in = makeSine(24000, 24000.0, 6000.0); // one second
+        std::vector<float> out;
+        const int n = runAll(r, in, out);
+        CHECK(n >= 43900);
+        CHECK(n <= 44200);
+        CHECK(goertzel(out, 44100.0, 6000.0) > 0.3);   // Blackman roll-off at half the cutoff edge
+        CHECK(goertzel(out, 44100.0, 18000.0) < 5e-3); // the image
+    }
+}
+
+TEST_CASE("PcmResampler: 88.2k->24k keeps 1 kHz and stops 20 kHz", "[audio][resampler][rational]")
+{
+    PcmResampler r;
+    REQUIRE(r.configure(88200, 24000));   // the 147/40 ratio
+
+    const auto pass = makeSine(88200, 88200.0, 1000.0);
+    std::vector<float> out;
+    const int n = runAll(r, pass, out);
+    CHECK(n >= 23900);
+    CHECK(n <= 24050);
+    CHECK(rms(out, 600) == Catch::Approx(0.7071).epsilon(0.05));
+
+    PcmResampler r2;
+    REQUIRE(r2.configure(88200, 24000));
+    const auto stop = makeSine(88200, 88200.0, 20000.0, 0.9);
+    std::vector<float> out2;
+    runAll(r2, stop, out2);
+    CHECK(rms(out2, 200) < 0.02);
+}
+
+TEST_CASE("PcmResampler: rational chunked streaming equals one-shot, and reset restarts cleanly",
+          "[audio][resampler][rational]")
+{
+    // The backend feeds engine blocks and late deltas in uneven chunks; the
+    // rational stage must agree with itself chunk by chunk, bit for bit, and
+    // reset() must leave no tail of the old stream behind.
+    for (const auto pair : std::vector<std::pair<int, int>> { { 44100, 24000 }, { 24000, 88200 } })
+    {
+        PcmResampler whole;
+        REQUIRE(whole.configure(pair.first, pair.second));
+        const auto in = makeSine(9000, static_cast<double>(pair.first), 1000.0);
+        std::vector<float> outWhole;
+        const int nWhole = runAll(whole, in, outWhole);
+        REQUIRE(nWhole > 0);
+
+        PcmResampler chunked;
+        REQUIRE(chunked.configure(pair.first, pair.second));
+        std::vector<float> outChunked;
+        int offset = 0;
+        const int sizes[] = { 777, 512, 1613, 480, 2048, 3721, 48, 841 };
+        for (const int sz : sizes)
+        {
+            const int n = std::min(sz, static_cast<int>(in.size()) - offset);
+            if (n <= 0)
+                break;
+            std::vector<float> piece(static_cast<std::size_t>(PcmResampler::maxOutputFor(n)));
+            const int produced = chunked.process(in.data() + offset, n, piece.data(),
+                                                 static_cast<int>(piece.size()));
+            REQUIRE(produced >= 0);
+            outChunked.insert(outChunked.end(), piece.begin(), piece.begin() + produced);
+            offset += n;
+        }
+        REQUIRE(offset == static_cast<int>(in.size()));
+
+        // Chunked runs may hold back the final lookahead-bound frames; the
+        // prefix must be identical, sample for sample, and then it stops.
+        REQUIRE(outChunked.size() <= outWhole.size());
+        CHECK(std::equal(outChunked.begin(), outChunked.end(), outWhole.begin()));
+
+        // reset() mid-stream replays from cold: same input, same one-shot answer.
+        chunked.reset();
+        std::vector<float> replay;
+        REQUIRE(runAll(chunked, in, replay) == nWhole);
+        CHECK(replay == outWhole);
+    }
 }

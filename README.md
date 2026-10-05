@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 317 tests.
+(task 019), and 324 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-317 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+324 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -125,9 +125,11 @@ a WAV file in, the mock echo, and a WAV file out through the real controller wit
 device and no key; plus the code-review suites of 2026-10-05 - ASIO channel forwarding
 pinned under BOTH driver-array conventions, engine defensive paths silencing every
 promised output channel against poisoned buffers, the NDI dispatch worker proven
-producer-non-blocking against a transport frozen mid-publish, and the server-announced
+producer-non-blocking against a transport frozen mid-publish, the server-announced
 session expiry outranking the local age policy (protocol docs section 4bis, refused
-when implausible)), the
+when implausible), and the rational polyphase stage that makes the config's own
+44.1/88.2 kHz device entries actually open a session with measured, pinned filter
+quality), the
 end-to-end integration suite that now drives the whole pipeline through the real streaming
 worker (with a supervisor-mounted outage case and a full interrupted-subtitle-line case
 verified against the typed model), the realtime allocation suite in its own

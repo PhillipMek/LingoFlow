@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 
 namespace liveai {
 namespace network {
@@ -12,6 +13,12 @@ namespace {
 
 constexpr int kTaps = 15;
 constexpr double kPi = 3.14159265358979323846;
+
+/// The rational stage: 49 taps (half-length 24), Blackman windowed-sinc. The
+/// lookahead bound L is also the zero-padding the stream starts with - the
+/// same way every filter begins - and it is what maxOutputFor's slack covers.
+constexpr int kRationalHalf = 24;
+constexpr int kRationalTaps = 2 * kRationalHalf + 1;
 
 /// Windowed-sinc halfband lowpass at the /2 cutoff, hamming-windowed, DC gain
 /// normalised to exactly 1. Odd-offset-from-center taps vanish by construction
@@ -51,8 +58,71 @@ bool PcmResampler::isSupportedPair(int inputRate, int outputRate) noexcept
     if (inputRate <= 0 || outputRate <= 0)
         return false;
 
-    return inputRate == outputRate || inputRate == 2 * outputRate || inputRate == 4 * outputRate ||
-           2 * inputRate == outputRate || 4 * inputRate == outputRate;
+    const bool cascade =
+        inputRate == outputRate || inputRate == 2 * outputRate || inputRate == 4 * outputRate ||
+        2 * inputRate == outputRate || 4 * inputRate == outputRate;
+    if (cascade)
+        return true;
+
+    // The rational stage's whole duty: the wire rate against the config's
+    // 44.1/88.2 device entries (review P1, 2026-10-05). Not an arbitrary-ratio
+    // license - 32000 Hz and 22050<->24000 stay refused, by design.
+    return (inputRate == 24000 && (outputRate == 44100 || outputRate == 88200))
+        || (outputRate == 24000 && (inputRate == 44100 || inputRate == 88200));
+}
+
+bool PcmResampler::configureRational(int inputRate, int outputRate)
+{
+    const long long g = std::gcd(static_cast<long long>(inputRate), static_cast<long long>(outputRate));
+    inSpan_ = static_cast<long long>(inputRate) / g;   // 147 for 44.1 <-> 24
+    outSpan_ = static_cast<long long>(outputRate) / g; //  80 for 44.1 -> 24, 147 for 24 -> 44.1
+
+    // Cutoff at half of the smaller rate, in cycles per INPUT sample: the band
+    // that survives is min(Nyquist_in, Nyquist_out) in absolute Hz, which is
+    // exactly what keeps the down direction alias-free and the up direction
+    // image-free in the speech band.
+    const double ratio = static_cast<double>(outputRate) / static_cast<double>(inputRate);
+    const double fc = 0.5 * std::min(1.0, ratio);
+
+    coeffs_.assign(static_cast<std::size_t>(outSpan_ * kRationalTaps), 0.0f);
+    for (long long k = 0; k < outSpan_; ++k)
+    {
+        // Output k of the period sits at continuous input position
+        // k*inSpan_/outSpan_; phase and fractional offset are EXACT integers -
+        // the pattern repeats every period, so a two-hour show accumulates no
+        // timing drift whatsoever. Tap j of this phase lands at input index
+        // (floor of that position) - L + j, so its distance from the output
+        // position is (j - L) - frac: the integer part cancels, the row only
+        // needs the fraction.
+        const long long num = k * inSpan_;
+        const double frac = static_cast<double>(num % outSpan_) / static_cast<double>(outSpan_);
+
+        float* row = coeffs_.data() + static_cast<std::size_t>(k * kRationalTaps);
+        double sum = 0.0;
+        for (int j = 0; j < kRationalTaps; ++j)
+        {
+            const double x = static_cast<double>(j - kRationalHalf) - frac;
+            const double t = x / kRationalHalf;
+            const double w = 0.42 + 0.5 * std::cos(kPi * t) + 0.08 * std::cos(2.0 * kPi * t);
+            const double u = 2.0 * fc * x;
+            const double s = std::fabs(u) < 1e-12 ? 1.0 : std::sin(kPi * u) / (kPi * u);
+            const double c = 2.0 * fc * s * w;
+            row[j] = static_cast<float>(c);
+            sum += c;
+        }
+        for (int j = 0; j < kRationalTaps; ++j)
+            row[j] = static_cast<float>(row[j] / sum);   // every phase is DC-unity
+    }
+    return true;
+}
+
+void PcmResampler::resetRationalStream()
+{
+    // The filter begins the way every filter begins: with silence behind it.
+    xin_.assign(static_cast<std::size_t>(kRationalHalf), 0.0f);
+    baseAbs_ = -kRationalHalf;
+    absIn_ = 0;
+    absOut_ = 0;
 }
 
 bool PcmResampler::configure(int inputRate, int outputRate)
@@ -74,8 +144,13 @@ bool PcmResampler::configure(int inputRate, int outputRate)
     else if (2 * inputRate == outputRate)
         upStages_ = 1;
 
+    rational_ = downStages_ == 0 && upStages_ == 0 && inputRate != outputRate;
+    if (rational_)
+        configureRational(inputRate, outputRate);
+
     downs_.assign(static_cast<std::size_t>(downStages_), DownState {});
     ups_.assign(static_cast<std::size_t>(upStages_), UpState {});
+    resetRationalStream();
     return true;
 }
 
@@ -85,13 +160,15 @@ void PcmResampler::reset() noexcept
         s = DownState {};
     for (UpState& s : ups_)
         s = UpState {};
+    resetRationalStream();   // a reopened session must not inherit the old stream's tail
 }
 
 int PcmResampler::maxOutputFor(int inFrames) noexcept
 {
-    // Worst case is the up4 cascade; every other ratio needs less. +16 covers
-    // the stage transients of chained passes.
-    return inFrames * 4 + 16;
+    // Worst case is the up4 cascade or the rational 24k->88.2k (3.675 per
+    // input frame, plus the filter's bounded lookahead/transients). Every
+    // supported ratio fits under this ceiling; process() may not exceed it.
+    return inFrames * 4 + 64;
 }
 
 int PcmResampler::runDown(const float* in, int n, float* out, DownState& st) noexcept
@@ -147,6 +224,46 @@ int PcmResampler::runUp(const float* in, int n, float* out, UpState& st) noexcep
     return written;
 }
 
+int PcmResampler::runRational(const float* in, int n, float* out) noexcept
+{
+    xin_.insert(xin_.end(), in, in + n);
+    absIn_ += n;
+
+    int produced = 0;
+
+    for (;;)
+    {
+        const long long num = absOut_ * inSpan_;
+        const long long first = num / outSpan_ - kRationalHalf;
+        if (first + kRationalTaps > absIn_)
+            break;   // this output's lookahead is not on the wire yet - wait, do not guess
+
+        const float* taps = xin_.data() + static_cast<std::size_t>(first - baseAbs_);
+        const float* row = coeffs_.data()
+                         + static_cast<std::size_t>((absOut_ % outSpan_) * kRationalTaps);
+
+        double acc = 0.0;
+        for (int j = 0; j < kRationalTaps; ++j)
+            acc += static_cast<double>(taps[j]) * static_cast<double>(row[j]);
+        out[produced++] = static_cast<float>(acc);
+        ++absOut_;
+    }
+
+    // Keep precisely the history the next output needs, and nothing more:
+    // the window stays bounded (a few taps) no matter how long the show runs.
+    const long long nextFirst = ((absOut_ * inSpan_) / outSpan_) - kRationalHalf;
+    long long keepFrom = nextFirst > absIn_ ? absIn_ : nextFirst;
+    if (keepFrom < baseAbs_)
+        keepFrom = baseAbs_;   // the zero-padding in front is part of the stream's start
+    if (keepFrom > baseAbs_)
+    {
+        xin_.erase(xin_.begin(),
+                   xin_.begin() + static_cast<std::ptrdiff_t>(keepFrom - baseAbs_));
+        baseAbs_ = keepFrom;
+    }
+    return produced;
+}
+
 int PcmResampler::process(const float* in, int inFrames, float* out, int outCapacity) noexcept
 {
     if (inFrames == 0)
@@ -155,6 +272,9 @@ int PcmResampler::process(const float* in, int inFrames, float* out, int outCapa
         return -1;
     if (outCapacity < maxOutputFor(inFrames))
         return -1;
+
+    if (rational_)
+        return runRational(in, inFrames, out);
 
     int produced = inFrames;
 

@@ -230,13 +230,13 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     if (!PcmResampler::isSupportedPair(request.inputSampleRate, kWireSampleRate))
     {
         error = "openai: unsupported input sample rate " + std::to_string(request.inputSampleRate)
-              + "; backend resamples 24000/48000/96000 Hz to the 24 kHz wire";
+              + "; backend resamples 24000/44100/48000/88200/96000 Hz to the 24 kHz wire";
         return false;
     }
     if (!PcmResampler::isSupportedPair(kWireSampleRate, request.outputSampleRate))
     {
         error = "openai: unsupported output sample rate " + std::to_string(request.outputSampleRate)
-              + "; backend resamples the 24 kHz wire to 24000/48000/96000 Hz";
+              + "; backend resamples the 24 kHz wire to 24000/44100/48000/88200/96000 Hz";
         return false;
     }
 

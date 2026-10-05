@@ -630,9 +630,12 @@ TEST_CASE("OpenAI backend: local validation rejects, reporting nothing (rule 3)"
     CHECK(error.find("language") != std::string::npos);
 
     // 4. Rates outside the documented conversion envelope: refused, not guessed.
+    //    (44.1/88.2 used to live here as refusals - code review P1, 2026-10-05
+    //    turned them into supported device rates; 32000 Hz is outside the
+    //    config's own device set, and it still must not be invented.)
     req = s.Request();
     req.pair.output = "ru";
-    req.inputSampleRate = 44100;
+    req.inputSampleRate = 32000;
     error = s.open(req);
     CHECK_FALSE(s.opened);
     CHECK(error.find("input sample rate") != std::string::npos);
@@ -830,6 +833,80 @@ TEST_CASE("OpenAI backend: 48 kHz input is decimated to the 24 kHz wire", "[open
     });
     INFO("no appended chunk carried the expected 24 kHz decimated tail");
     CHECK(found);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: 44.1 kHz input is decimated to the 24 kHz wire",
+          "[openai][audio][resampler][rational]")
+{
+    // Code review P1 (2026-10-05): the config has always offered 44.1 kHz; the
+    // session must now OPEN and stream, not die at Start Translation.
+    Scenario s;
+    auto req = s.Request();
+    req.inputSampleRate = 44100;
+    s.options.cadenceMs = 40; // chunk = 1764 input frames -> ~960 wire frames
+    REQUIRE(s.open(req).empty());
+
+    const auto block = constantBlock(1764, 0.5f);
+    std::string error;
+    REQUIRE(s.backend->submitAudio(block.data(), 1764, error));
+
+    // Scan all appends for a chunk carrying the decimated DC tail; the rational
+    // window bounds the frame count around 960 (1920 PCM16 bytes) - the exact
+    // split across appends is a streaming detail, the level is not.
+    const bool found = Scenario::waitFor([&] {
+        for (const std::string& frame : s.fake->sent())
+        {
+            if (frame.find("session.input_audio_buffer.append") == std::string::npos)
+                continue;
+            std::vector<std::uint8_t> decoded;
+            if (!network::base64Decode(Scenario::audioField(frame), decoded))
+                continue;
+            if (decoded.size() < 1800 || decoded.size() > 2100)
+                continue;
+            bool tailOk = true;
+            for (std::size_t i = decoded.size() - 400; i < decoded.size(); i += 2)
+            {
+                const std::int16_t v = static_cast<std::int16_t>(decoded[i] | (decoded[i + 1] << 8));
+                if (v < 16284 || v > 16484)
+                {
+                    tailOk = false;
+                    break;
+                }
+            }
+            if (tailOk)
+                return true;
+        }
+        return false;
+    });
+    INFO("no appended chunk carried the expected 24 kHz decimated tail from a 44.1 kHz input");
+    CHECK(found);
+
+    s.backend->closeSession();
+    s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: translated audio is delivered at an 88.2 kHz playback rate",
+          "[openai][audio][resampler][rational]")
+{
+    Scenario s;
+    auto req = s.Request();
+    req.outputSampleRate = 88200;   // the second rational pair, upward
+    REQUIRE(s.open(req).empty());
+
+    // 10 ms of a steady 4000 run - long enough to clear the filter's leading
+    // window (the first ~24 outputs straddle the zero pad at stream start).
+    const std::vector<std::int16_t> samples (240, 4000);
+    s.fake->queueMessage(audioDeltaEvent(samples));
+
+    REQUIRE(Scenario::waitFor([&] { return !s.sink.audio().empty(); }));
+    const auto block = s.sink.audio().front();
+    CHECK(block.sampleRate == 88200);
+    CHECK(block.samples.size() >= 780);    // (240 - the filter window) * 147/40 ≈ 790
+    CHECK(block.samples.size() <= 900);
+    CHECK(block.samples.back() == Catch::Approx(4000.0f / 32768.0f).epsilon(0.02));
 
     s.backend->closeSession();
     s.sink.armAfterCloseExpectation();
