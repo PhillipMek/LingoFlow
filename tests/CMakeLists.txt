@@ -68,7 +68,8 @@ if(WIN32)
             unit/TestBase64.cpp
             unit/TestPcmResampler.cpp
             unit/TestSafetyIdentifier.cpp
-            unit/TestOpenAIProtocol.cpp)
+            unit/TestOpenAIProtocol.cpp
+            performance/TestCallbackPerf.cpp)
 endif()
 
 # The test tree is its own include root: tests include "support/..." by path,
