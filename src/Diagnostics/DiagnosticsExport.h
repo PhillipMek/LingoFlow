@@ -13,12 +13,16 @@
 //     the engine, the session or the credential store - the controller (App
 //     layer) gathers and hands over, so this file stays unit-testable and no
 //     secret can sneak in through a dependency the format does not control.
-//   * "no secrets" is enforced twice: by structure (an API key never enters
-//     AppConfig and the gatherer passes presence, not values - AGENTS.md 10),
-//     and here by a redaction pass: any value containing a substring that looks
-//     like credential material is replaced by [redacted] and counted. Defense
-//     in depth is not a claim of cleverness; it is the task's FAIL criterion
-//     ("secret leakage") taken seriously in code.
+//   * "no secrets" is enforced three times: by structure (an API key never
+//     enters AppConfig and the gatherer passes presence, not values - AGENTS.md
+//     10), by a redaction pass at render time (a value under a key that looks
+//     like a credential never ships, whatever gathered it), and by a value-side
+//     last net (task 021): the controller hands redactSecretValues the values
+//     the credential store actually holds, and any occurrence of them - pasted
+//     into "instructions", "model_hint", an NDI stream name, anywhere in the
+//     text - is erased and counted. Defense in depth is not a claim of
+//     cleverness; it is the task's FAIL criterion ("secret leakage") taken
+//     seriously in code.
 //   * Writing is tmp-file + rename. A half-written report is worse than no
 //     report, and a venue operator must never wonder which lines survived.
 //
@@ -71,6 +75,20 @@ RenderedExport renderExport(const std::string& appVersion,
                             const std::vector<DiagnosticsManager::DiagnosticEvent>& events,
                             std::uint64_t evictedEvents,
                             SecretKeyPredicate isSecretKey);
+
+/// The value-side last net (task 021). Free-form config fields ship their text
+/// verbatim, so a credential an operator pasted into one of them travels to a
+/// venue inside a receipt whose KEY name looks harmless - invisible to the
+/// key-shaped redactor above. This pass erases every occurrence of a value the
+/// credential store actually holds and counts them. Values shorter than
+/// kMinRedactableValueLength are ignored: a short "secret" is a normal word's
+/// substring, and redacting it would corrupt receipts without proving
+/// anything. Being handed the values is the one place outside a session where
+/// the product is allowed to hold a secret - and the only thing it does with
+/// it is delete it. Pure text function: this module still does not know a
+/// store exists; the controller reads the store and calls.
+inline constexpr std::size_t kMinRedactableValueLength = 8;
+std::uint64_t redactSecretValues(std::string& text, const std::vector<std::string>& secretValues);
 
 /// Writes `text` to `file` atomically (same-directory tmp + rename). Parent
 /// directories are created. On failure, returns false with the reason - no

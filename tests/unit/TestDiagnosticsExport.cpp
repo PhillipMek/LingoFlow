@@ -283,6 +283,73 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     std::filesystem::remove_all(tempDir);
 }
 
+TEST_CASE("DiagnosticsExport: redactSecretValues erases every held value, counts it, and ignores short ones",
+          "[diagnostics][export][security]")
+{
+    QuietLog quiet;
+    const std::string secret = "sk-VALUE-SHAPE-LAST-NET-0123456789";
+    std::string text = "instructions=hello " + secret + " and again " + secret
+                       + "\nstream_name=" + secret + "\nmodel_hint=gpt-realtime\nshort=ab\n";
+
+    const auto hits = diagnostics::redactSecretValues(text, { secret, "", "ab", std::string(7, 'x') });
+
+    CHECK(hits == 3);                                   // every occurrence, counted, not swallowed
+    CHECK(text.find(secret) == std::string::npos);      // nowhere any more
+    CHECK(text.find("[redacted]") != std::string::npos);
+    CHECK(text.find("model_hint=gpt-realtime") != std::string::npos);   // innocent lines untouched
+    CHECK(text.find("short=ab") != std::string::npos);  // below the threshold: no redaction, no corruption
+}
+
+TEST_CASE("ApplicationController: a credential pasted into a harmless field does not ride the receipt",
+          "[diagnostics][app][export][security]")
+{
+    QuietLog quiet;
+    const auto tempDir = std::filesystem::temp_directory_path() / "lingoflow-021-paste";
+    std::filesystem::remove_all(tempDir);
+    std::filesystem::create_directories(tempDir);
+
+    ApplicationController controller;
+    controller.setApplicationVersion("0.1.0-unittest");
+
+    std::string loadNote;
+    REQUIRE(controller.loadSettings(tempDir / "config.json", loadNote));
+
+    MapStore store;
+    controller.setSecretStore(store);
+
+    const std::string canary = "sk-CANARY-PASTED-INTO-A-HARMLESS-FIELD";
+    std::string note;
+    REQUIRE(controller.storeApiSecret(canary, note));
+
+    // The operator's own mistake this net catches (task 021): the key pasted
+    // into the free-form instructions field and the NDI stream name. Both ship
+    // under key names the secret-SHAPED redactor cannot flag - the value-side
+    // pass is the only thing standing between the paste and the venue.
+    auto candidate = controller.config().current();
+    candidate.translation.instructions = "translate calmly. key: " + canary;
+    candidate.ndi.streamName = "LingoFlow " + canary;
+    REQUIRE(controller.updateSettings(candidate, note));
+
+    REQUIRE(controller.start());
+
+    std::filesystem::path written;
+    REQUIRE(controller.exportDiagnostics(tempDir, written, note));
+    const std::string report = readWhole(written);
+
+    // The receipt is clean: the value appears nowhere in it.
+    CHECK(report.find(canary) == std::string::npos);
+    // The fields still say what they held, minus the secret.
+    CHECK(report.find("instructions=translate calmly. key: [redacted]") != std::string::npos);
+    CHECK(report.find("stream_name=LingoFlow [redacted]") != std::string::npos);
+    // Paired honesty: the instructions truth line still ships.
+    CHECK(report.find("instructions_effect=ignored") != std::string::npos);
+    // And the operator is told that something was erased, not left guessing.
+    CHECK(note.find("redacted") != std::string::npos);
+
+    controller.stop();
+    std::filesystem::remove_all(tempDir);
+}
+
 TEST_CASE("ApplicationController: the export event lands in the ring after the file - next one has it",
           "[diagnostics][app][export]")
 {

@@ -97,6 +97,24 @@ RenderedExport renderExport(const std::string& appVersion,
     return rendered;
 }
 
+std::uint64_t redactSecretValues(std::string& text, const std::vector<std::string>& secretValues)
+{
+    static constexpr std::string_view kToken = "[redacted]";
+    std::uint64_t replaced = 0;
+    for (const auto& value : secretValues)
+    {
+        if (value.size() < kMinRedactableValueLength)
+            continue;
+        for (std::string::size_type at = text.find(value); at != std::string::npos;
+             at = text.find(value, at + kToken.size()))
+        {
+            text.replace(at, value.size(), kToken);
+            ++replaced;
+        }
+    }
+    return replaced;
+}
+
 bool writeExportFile(const std::filesystem::path& file, const std::string& text, std::string& error)
 {
     std::error_code ec;

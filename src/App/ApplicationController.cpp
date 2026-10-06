@@ -641,9 +641,27 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     sections.push_back({ "settings", std::move(settingRows) });
 
     const auto events = diagnostics_.events();
-    const auto rendered = diagnostics::renderExport(appVersion_, sections, events,
-                                                    diagnostics_.evictedEvents(),
-                                                    &config::isSecretFieldName);
+    auto rendered = diagnostics::renderExport(appVersion_, sections, events,
+                                              diagnostics_.evictedEvents(),
+                                              &config::isSecretFieldName);
+
+    // Task 021's value-side last net: a key an operator pasted into a free-form
+    // field ("instructions", "model_hint", an NDI name) ships under a harmless
+    // key name, so the key-shaped pass above cannot see it. Erase every
+    // occurrence of a value the store actually holds before the receipt can
+    // leave the machine. Reading the value here is the one sanctioned place
+    // outside a session where a secret enters this process - and its only use
+    // is its own deletion; neither the loaded list nor a survivor of it is ever
+    // logged.
+    {
+        std::vector<std::string> held;
+        for (const auto& identifier : secrets_->identifiers())
+        {
+            if (const auto value = secrets_->load(identifier); value.has_value())
+                held.push_back(*value);
+        }
+        rendered.redactions += diagnostics::redactSecretValues(rendered.text, held);
+    }
 
     const auto targetDir = directory.empty() ? diagnosticsDirectory() : directory;
 
