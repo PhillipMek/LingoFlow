@@ -156,7 +156,15 @@ rt_expect("rt-selftest/gain-db-to-linear" FAIL "RT_AUDIT_FORBIDDEN"
     "Audio/GainStage.cpp" "float GainStage::dbToLinear" "    return std::exp2(gainDb * kLog2TenOverTwenty);"
     "std::this_thread::sleep_for(std::chrono::milliseconds(1));")
 
-# 11. A function that vanishes must fail the gate, not shrink it silently.
+# 11. Task 022: the table now covers the helpers that grew onto the callback path
+# later - including inline functions in HEADERS. A lock injected into the counter
+# processAudio calls every block must stop the gate.
+rt_expect("rt-selftest/diag-counter" FAIL "RT_AUDIT_FORBIDDEN"
+    "Diagnostics/DiagnosticsManager.h" "void countAudioBlock"
+    "        audioBlocks_.fetch_add(1, std::memory_order_relaxed);"
+    "std::lock_guard<std::mutex> guard(mutex_);")
+
+# 12. A function that vanishes must fail the gate, not shrink it silently.
 file(REMOVE_RECURSE "${RT_AUDIT_WORK_DIR}")
 file(COPY "${RT_AUDIT_SRC_DIR}" DESTINATION "${RT_AUDIT_WORK_DIR}")
 file(READ "${RT_AUDIT_WORK_DIR}/src/${engine}" content)

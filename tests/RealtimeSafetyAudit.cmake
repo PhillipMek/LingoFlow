@@ -34,19 +34,31 @@ endif()
 
 # Rows are "file|marker". The marker is a regex matched against one line of the file:
 # the line that opens (or wholly contains) the function body. It never contains a '|'.
+#
+# Task 022's hostile pass: the callback's reachable set had grown past this table -
+# the in-place GainStage wrapper, its targetLinear(), the DiagnosticsManager counters
+# processAudio calls every block, and the readable() the jitter policy decides on.
+# All of them are rows now, so the gate - not only this file's comment - vouches for
+# every function the audio thread can enter.
 set(rt_audit_rows
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::write"
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::read\\("
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::readOrSilence"
+    "Audio/AudioRingBuffer.cpp|AudioRingBuffer::readable"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::write"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::readOrSilence"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::setTargetFrames"
     "Audio/LevelMeter.cpp|LevelMeter::measure"
     "Audio/GainStage.cpp|float GainStage::dbToLinear"
+    "Audio/GainStage.cpp|float GainStage::targetLinear"
+    "Audio/GainStage.cpp|void GainStage::process\\(float\\* data"
     "Audio/GainStage.cpp|void GainStage::process\\(const float\\* input"
     "Audio/AudioEngine.cpp|AudioEngine::processAudio"
     "Audio/AudioEngine.cpp|void silenceOutputs"
     "Audio/Asio/AsioChannelForwarding.h|ChannelArrayShape forwardActiveChannels"
+    "Diagnostics/DiagnosticsManager.h|void countAudioBlock"
+    "Diagnostics/DiagnosticsManager.h|void countUnderrun"
+    "Diagnostics/DiagnosticsManager.h|void countOverrun"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceIOCallbackWithContext"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceError")
 
