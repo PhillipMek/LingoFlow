@@ -54,6 +54,10 @@ public:
     void setLevels(const UiMeterView& view);
     void paint(juce::Graphics& g) override;
 
+    /// Natural height of the card column for the current width - the
+    /// viewport's scroll extent (see resized()).
+    int preferredHeight() const;
+
 private:
     static float positionForDb(float db) noexcept;   ///< -60..0 dBFS across the bar
 
@@ -71,6 +75,10 @@ public:
     ~OperatorContent() override;   ///< defined where SettingsWindow is complete
 
     void paint(juce::Graphics& g) override;
+
+    /// Natural height of the card column for the current width - the
+    /// viewport's scroll extent (see resized()).
+    int preferredHeight() const;
     void resized() override;
 
 private:
@@ -106,7 +114,7 @@ private:
     static juce::Colour stateColour(std::string_view state) noexcept;
     static juce::String stateGlyph(std::string_view state) noexcept;
 
-    /// One status row: "Audio  в—Џ Running" - dot and word share the state's
+    /// One status row: "Audio  РІвЂ”РЏ Running" - dot and word share the state's
     /// colour, the caption stays neutral. Painted as two labels per row.
     void layoutStatusRow(juce::Rectangle<int>& area, juce::Label& caption,
                          juce::Label& value) const;
@@ -132,7 +140,7 @@ private:
     juce::Label deviceCaption_, deviceNoteLabel_;
     juce::ComboBox deviceChoice_;
     juce::TextButton refreshDevicesButton_ { "Refresh" };
-    /// Discrete by nature (UI-01 В§4): channel is an index, so it gets a list,
+    /// Discrete by nature (UI-01 Р’В§4): channel is an index, so it gets a list,
     /// not a fader - and a visibly different control from the gain slider.
     juce::Label inputChannelCaption_, outputChannelCaption_, channelNoteLabel_;
     juce::ComboBox inputChannelChoice_, outputChannelChoice_;

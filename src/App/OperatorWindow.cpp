@@ -13,7 +13,7 @@ namespace liveai {
 namespace {
 
 // ---------------------------------------------------------------- the palette
-// Colour communicates state and nothing else (UI-02 §12): surfaces stay
+// Colour communicates state and nothing else (UI-02 Р В РІР‚в„ўР вЂ™Р’В§12): surfaces stay
 // neutral, the four state colours appear only on dots, words and the buttons
 // that mean them.
 
@@ -34,7 +34,7 @@ const juce::Colour control       { 0xff30363du };
 } // namespace ink
 
 // ------------------------------------------------------------- the spacing grid
-// 4 / 8 / 12 / 16 / 24 / 32 (UI-02 §11). Component heights are constants, not
+// 4 / 8 / 12 / 16 / 24 / 32 (UI-02 Р В РІР‚в„ўР вЂ™Р’В§11). Component heights are constants, not
 // per-widget negotiations.
 
 constexpr int kMargin    = 16;   // window edge -> card
@@ -104,6 +104,26 @@ void styleQuietButton(juce::TextButton& button)
     button.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
 }
 
+/// The viewport pattern JUCE expects for a width-fitting, height-deciding
+/// child: on every resize the viewport offers the width of its content
+/// holder (getMaximumVisibleWidth - deliberately not getViewWidth, which
+/// mirrors the child's own width and would deadlock at zero), and the child's
+/// resized() then decides the scrollable height - see OperatorContent::resized.
+/// Without this nudge the child would never hear about window resizes: a
+/// Viewport does not touch its content's bounds.
+class OperatorViewport final : public juce::Viewport
+{
+public:
+    using juce::Viewport::Viewport;
+
+    void resized() override
+    {
+        juce::Viewport::resized();
+
+        if (auto* content = getViewedComponent())
+            content->setSize(getMaximumVisibleWidth(), content->getHeight());
+    }
+};
 /// How many history lines this screen shows: a tail, not a transcript - the
 /// full bounded history stays in the model (and readable in Diagnostics).
 constexpr int kOperatorHistoryTail = 3;
@@ -180,7 +200,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
                         juce::NotificationType::dontSendNotification);
     addAndMakeVisible(titleLabel_);
 
-    // UI-02 §4: developer mode is a compact, unmistakable chip - not the red
+    // UI-02 Р В РІР‚в„ўР вЂ™Р’В§4: developer mode is a compact, unmistakable chip - not the red
     // banner that used to make a rehearsal look like an incident. The plan's
     // full sentence stays readable below the status rows (devDetailLabel_).
     devBadge_.setFont(uiFont(11.0f, true));
@@ -352,7 +372,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(noteLabel_);
 
     // ------------------------------------------------------------ command bar
-    // The two tallest, widest controls on the screen (UI-02 §10). Start is
+    // The two tallest, widest controls on the screen (UI-02 Р В РІР‚в„ўР вЂ™Р’В§10). Start is
     // green when it means "go", Stop stays blue-strong: ending a show is an
     // action, not an error. Retry (faulted) borrows amber - it asks attention.
     startButton_.onClick = [this] { startPressed(); };
@@ -619,7 +639,7 @@ void OperatorContent::rebuild()
     sessionValue_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
     ndiValue_.setColour(juce::Label::textColourId, stateColour(panel.ndiState));
 
-    // Warnings only when they ask something (UI-02 §9): "ok" paints nothing.
+    // Warnings only when they ask something (UI-02 Р В РІР‚в„ўР вЂ™Р’В§9): "ok" paints nothing.
     detailLabel_.setText(panel.detail == "ok" ? juce::String() : juce::String(panel.detail),
                          juce::NotificationType::dontSendNotification);
     detailLabel_.setColour(juce::Label::textColourId,
@@ -635,7 +655,7 @@ void OperatorContent::rebuild()
                                    ? ink::textMuted
                                    : ink::amber);
 
-    // Task 019 + UI-02 §4: the chip is the compact, unmistakable flag; the
+    // Task 019 + UI-02 Р В РІР‚в„ўР вЂ™Р’В§4: the chip is the compact, unmistakable flag; the
     // plan's full sentence rides below the rows, muted. Production: empty,
     // both invisible.
     const bool dev = !panel.developerBadge.empty();
@@ -678,7 +698,7 @@ void OperatorContent::rebuild()
     }
 
     // The caption carries the requested number (the slider's own value); the
-    // technical "applying ... (gliding)" line moved to Diagnostics (UI-02 §6).
+    // technical "applying ... (gliding)" line moved to Diagnostics (UI-02 Р В РІР‚в„ўР вЂ™Р’В§6).
     inputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.inputGainDb)),
                               juce::NotificationType::dontSendNotification);
     outputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.outputGainDb)),
@@ -696,7 +716,7 @@ void OperatorContent::rebuild()
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);
 
-    // Numeric readout beside the bar (UI-02 §6): level and peak from the same
+    // Numeric readout beside the bar (UI-02 Р В РІР‚в„ўР вЂ™Р’В§6): level and peak from the same
     // view the bar draws - existing telemetry, no new processing.
     inputLevelLabel_.setText(juce::String(std::format("{:.1f} dB   peak {:.1f} dB",
                                                       panel.inputMeter.rmsDb,
@@ -758,6 +778,7 @@ void OperatorContent::rebuild()
                              : ink::textMuted);
 
     updatingWidgets_ = false;
+    resized();   // the developer row changes the content height mid-run
     repaint();
 }
 
@@ -780,7 +801,7 @@ void OperatorContent::paint(juce::Graphics& g)
 
 namespace {
 
-/// One AUDIO column laid out inside its rectangle (UI-02 §5: the same block on
+/// One AUDIO column laid out inside its rectangle (UI-02 Р В РІР‚в„ўР вЂ™Р’В§5: the same block on
 /// both sides - device is shared above them, channel/meter/gain/mute are not).
 void layoutAudioColumn(juce::Rectangle<int>& col,
                        juce::Label& channelCaption, juce::ComboBox& channelBox,
@@ -803,8 +824,45 @@ void layoutAudioColumn(juce::Rectangle<int>& col,
 
 } // namespace
 
+int OperatorContent::preferredHeight() const
+{
+    // The natural height of the card column: the same constants resized()
+    // consumes, summed (kept in sync by construction - both read the stacked
+    // flag off the same width rule). Inside the window's viewport this is the
+    // scrollable content height: the window can be shorter than the screen
+    // while every card keeps its size.
+    const bool stacked = getWidth() - 2 * kMargin < 760;
+
+    const int status = kCardPad * 2 + 16 + kRowGap + 4 * kStatusRowH + kRowGap + 18 + 16
+                     + (devBadge_.isVisible() ? 16 : 0);
+    const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
+    const int audio = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
+                    + columnsHeight + 14;
+    const int translation = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 12
+                          + 18 + kRowGap + 30 + 3 * 16;
+    const int health = kCardPad * 2 + 16 + kRowGap + 4 * kHealthRowH + kRowGap + kSmallBtnH;
+
+    return 2 * kMargin + 36 + kCardGap + status + kCardGap + audio + kCardGap
+         + translation + kCardGap + health + kRowGap + 18 + kRowGap + kCommandH;
+}
+
 void OperatorContent::resized()
 {
+    // Inside the window's viewport the rule is the documented one: the
+    // viewport offers a width (its visible track), the viewed component
+    // decides its own height. Both are applied only when they changed -
+    // setSize from resized would otherwise recurse.
+    auto* viewport = findParentComponentOfClass<juce::Viewport>();
+    const int wantedWidth = viewport != nullptr
+                                ? viewport->getMaximumVisibleWidth()
+                                : getWidth();
+    const int needed = preferredHeight();
+    if (getWidth() != wantedWidth || getHeight() != needed)
+    {
+        setSize(wantedWidth, needed);
+        return;   // the resize re-enters with final bounds; lay out then
+    }
+
     auto bounds = getLocalBounds().reduced(kMargin);
 
     // 1. Header: identity left, the compact developer chip, Settings right.
@@ -843,7 +901,7 @@ void OperatorContent::resized()
     {
         const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
         const int height = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
-                         + columnsHeight + 14;
+                         + columnsHeight + 14;   // preferredHeight() mirrors this
         audioCard_ = bounds.removeFromTop(height);
         bounds.removeFromTop(kCardGap);
 
@@ -962,13 +1020,23 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
                            juce::DocumentWindow::closeButton)
 {
     setUsingNativeTitleBar(true);
-    setContentOwned(new OperatorContent(controller), true);
+
+    // UI-03 follow-up: the card column is taller than some venue laptops are
+    // wide-tall, so the content lives in a vertical viewport - the window
+    // itself fits any screen and the operator scrolls between sections.
+    // Nothing about the layout changed: the same cards, the same sizes.
+    auto* viewport = new OperatorViewport("OperatorScroll");
+    viewport->setScrollBarsShown(true, false);            // vertical only
+    viewport->setViewedComponent(new OperatorContent(controller), false);
+    setContentOwned(viewport, true);
+
     setResizable(true, true);
-    // UI-02: the card column wants vertical room (measured: ~1100 content
-    // height with the developer rows visible); below ~760 content width the
-    // audio pair stacks and stays usable.
-    setResizeLimits(720, 1020, 4000, 4000);
-    setSize(980, 1140);
+    // UI-04: the minimum stays a sane operator width; the height may now be
+    // smaller than the content because the viewport scrolls. The default
+    // 980x700 (outer ~731) fits the 1366x768 work area, the 620 floor fits
+    // 1280x720.
+    setResizeLimits(720, 620, 4000, 4000);
+    setSize(980, 700);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }
