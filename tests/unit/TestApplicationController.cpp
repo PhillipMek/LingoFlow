@@ -172,6 +172,42 @@ TEST_CASE("ApplicationController: audio failure faults the application", "[app][
     CHECK(controller.faultReason().empty());
 }
 
+TEST_CASE("ApplicationController: a cleared fault can be retried into a running show",
+          "[app][faults]")
+{
+    // The recovery path the windowed startup now depends on (fix 2026-10-06):
+    // Main.cpp shows the window even when this start() fails, so the operator
+    // can press Retry (OperatorContent::startPressed: clearFault + start) and
+    // reach running without a relaunch. The UI half is pinned by TestUiModel's
+    // retry case; this pins the controller half end to end.
+    QuietLog quiet;
+    ApplicationController controller;
+    controller.setAudioBackend(std::make_unique<FailingAudioBackend>());
+
+    // The busy-device startup: failure recorded as a fault, reason kept alive
+    // for the status line (the log said it when it happened - nothing hidden).
+    CHECK_FALSE(controller.start());
+    CHECK(controller.state() == ApplicationState::faulted);
+    CHECK(controller.status().detail.find("SoundGrid server not reachable") != std::string::npos);
+
+    // Retry step one: the operator's clearFault. stopped, not haunted.
+    controller.clearFault();
+    CHECK(controller.state() == ApplicationState::stopped);
+    CHECK(controller.faultReason().empty());
+    CHECK(controller.status().detail.empty());
+
+    // Retry step two: the external cause is gone (here: a device that opens).
+    // The same controller object reaches running - no second state machine.
+    controller.setAudioBackend(std::make_unique<liveai::audio::NullAudioBackend>());
+    REQUIRE(controller.start());
+    CHECK(controller.state() == ApplicationState::running);
+    CHECK(controller.isRunning());
+    CHECK(controller.status().detail.empty());   // the old failure must not haunt the new status
+
+    controller.stop();
+    CHECK(controller.state() == ApplicationState::stopped);
+}
+
 TEST_CASE("ApplicationController: translation failure does not stop audio", "[app][faults]")
 {
     QuietLog quiet;

@@ -34,15 +34,20 @@
 // instructions, recovery policy, NDI and diagnostics fields, and the masked
 // API-key entry that is stored in the Windows Credential Manager (the value
 // never touches settings, logs or the screen after a successful store). It
-// starts the subsystems exactly like --smoke does; a start that fails exits
-// with code 2 as documented below, and everything the operator changes
+// starts the subsystems exactly like --smoke does - but a runtime start that
+// fails no longer ends the process (fix 2026-10-06): the window opens in the
+// controller's faulted state, shows the reason and the Retry button, and the
+// operator recovers without a relaunch. Everything the operator changes
 // afterwards goes through the controller - the UI itself owns no logic
 // (App/UiModel is the tested half).
 //
 // Exit codes:
-//   0   started (and, with --smoke, shut down) normally
-//   2   a subsystem refused to start (e.g. the selected ASIO device is unavailable).
-//       The reason is in the log and in the status detail.
+//   0   started (and, with --smoke, shut down) normally; a windowed run that
+//       opens its window in a faulted state and is later closed by the
+//       operator also exits 0 - a runtime problem is not a startup problem.
+//   2   --smoke only: a subsystem refused to start (e.g. the selected ASIO
+//       device is unavailable). The reason is in the log and in the status
+//       detail; the same failure in a windowed run is shown, not exited on.
 
 #include <JuceHeader.h>
 
@@ -341,27 +346,37 @@ public:
             installProductionNdi();
 #endif
 
-        if (!controller_.start())
-        {
-            liveai::log::error(kLogComponent, "application failed to start: " + controller_.status().detail);
+        const bool started = controller_.start();
 
-            // A start that failed must not look like a successful run: --smoke is used
-            // as evidence in CI and by the operator, so it reports the failure in the
-            // exit code as well as in the log.
-            setApplicationReturnValue(kExitStartupFailure);
-
-            juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
-            return;
-        }
+        if (!started)
+            liveai::log::error(kLogComponent, "runtime start failed: " + controller_.status().detail);
 
         if (smoke)
         {
-            liveai::log::info(kLogComponent, "smoke mode status: " + statusText(controller_.status()).toStdString());
+            // A start that failed must not look like a successful run: --smoke is
+            // evidence in CI and by the operator, so it reports the failure in the
+            // exit code as well as in the log. The windowed fix below deliberately
+            // did not move this contract: for a startup check, runtime failure IS
+            // startup failure.
+            if (!started)
+                setApplicationReturnValue(kExitStartupFailure);
+            else
+                liveai::log::info(kLogComponent, "smoke mode status: " + statusText(controller_.status()).toStdString());
+
             liveai::log::info(kLogComponent, "smoke mode: shutting down without UI");
             juce::MessageManager::callAsync([] { juce::JUCEApplicationBase::quit(); });
             return;
         }
 
+        // The windowed run shows the operator screen even when the runtime
+        // refused to start (fix 2026-10-06): a desktop application that
+        // vanishes on a busy ASIO device gives the operator neither the
+        // reason nor a way forward. The controller has just recorded the
+        // failure as a fault with the reason in the status detail - the
+        // window shows exactly that (red faulted line, the reason, an amber
+        // Retry), the log keeps the original error, and the operator can fix
+        // the external cause and retry without a relaunch. Closing this
+        // window later is a normal exit, not a startup failure.
         window_ = std::make_unique<liveai::OperatorWindow>(controller_);
     }
 
@@ -373,7 +388,19 @@ public:
     }
 
     void systemRequestedQuit() override { quit(); }
-    void anotherInstanceStarted(const juce::String&) override {}
+
+    void anotherInstanceStarted(const juce::String&) override
+    {
+        // A second double-click on the exe must not vanish silently (JUCE's
+        // single-instance guard hands the event here, in the instance that is
+        // already running): surface the existing window instead of doing
+        // nothing. Smoke has no window, so this stays a no-op there.
+        if (window_ != nullptr)
+        {
+            window_->setMinimised(false);
+            window_->toFront(true);
+        }
+    }
 
     void suspended() override {}
     void resumed() override {}
