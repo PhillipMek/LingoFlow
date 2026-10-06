@@ -12,6 +12,17 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Task 026 (release): the shipped executable must start on a clean Windows
+# machine with no developer dependencies (the task's FAIL criterion). The
+# dependency scan of the old dynamic-CRT build measured imports of MSVCP140.dll,
+# VCRUNTIME140.dll and VCRUNTIME140_1.dll - the Visual C++ redistributable, i.e.
+# exactly such a developer dependency. Static linkage removes it: the Release
+# exe then imports system DLLs only (verified by dumpbin after the change, and
+# pinned as a check in packaging/release-package.ps1).
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
 endif()
