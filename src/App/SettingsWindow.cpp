@@ -653,10 +653,12 @@ void SettingsContent::resized()
 {
     auto bounds = getLocalBounds().reduced(kPad);
 
-    auto bottom = bounds.removeFromBottom(kButtonH + kRowGap + 18);
+    // Breathing room between the tab content and the command row: the tabs
+    // end, then the gap, then Apply - the first cut had them sharing an edge.
+    auto bottom = bounds.removeFromBottom(kRowGap + kButtonH + kRowGap + 18);
+    bottom.removeFromTop(kRowGap);
     applyButton_.setBounds(bottom.removeFromTop(kButtonH).withWidth(180));
     noteLabel_.setBounds(bottom.withHeight(18));
-    bounds.removeFromTop(0);
 
     tabs_->setBounds(bounds);
 
@@ -774,7 +776,9 @@ void SettingsContent::layoutCredentialsPage()
     {
         auto row = b.removeFromTop(kControlH + 2);
         removeKeyButton_.setBounds(row.removeFromRight(130));
-        saveKeyButton_.setBounds(row.removeFromRight(110).withTrimmedLeft(kRowGap));
+        saveKeyButton_.setBounds(row.removeFromRight(110 + 2 * kRowGap)
+                                    .withTrimmedLeft(kRowGap)
+                                    .withTrimmedRight(kRowGap));
         apiKeyEditor_.setBounds(row.removeFromRight(320).withTrimmedLeft(kRowGap));
     }
     b.removeFromTop(kRowGap);

@@ -30,6 +30,7 @@ const juce::Colour control     { 0xff30363du };
 constexpr int kMargin = 16;
 constexpr int kCardPad = 14;
 constexpr int kCardGap = 12;
+constexpr int kSectionGap = 24;   // between groups of cards, not just cards
 constexpr int kRowH = 20;
 constexpr int kLatencyRowH = 30;
 constexpr int kHeaderH = 22;
@@ -268,13 +269,13 @@ void DiagnosticsContent::resized()
     if (showRaw_)
     {
         const int rawHeight = kHeaderH + kCardPad + 8 * 16 + kCardPad / 2;   // a window into the ring
-        bounds.removeFromBottom(kCardGap);
+        bounds.removeFromBottom(kSectionGap);
         rawCard_ = bounds.removeFromBottom(rawHeight);
     }
 
     const int latencyHeight = kHeaderH + kCardPad
                             + static_cast<int>(panel_.latency.size()) * kLatencyRowH + kCardPad / 2;
-    bounds.removeFromBottom(kCardGap);
+    bounds.removeFromBottom(kSectionGap);
     latencyCard_ = bounds.removeFromBottom(latencyHeight);
 
     // The four metric cards in two columns; each column stacks two cards,
