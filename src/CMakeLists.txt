@@ -284,6 +284,15 @@ target_sources(LingoFlow
         App/DiagnosticsWindow.h
         App/UiWidgets.h)
 
+# Windows application icon: assets/LingoFlow.rc embeds the committed
+# multi-resolution assets/LingoFlow.ico (16/24/32/48/64/128/256, generated
+# once from the master PNG - see the .rc's comment for why this is not
+# JUCE's ICON_BIG/ICON_SMALL path). Same source for Debug and Release; the
+# path travels with the repository, never with a developer's machine.
+if(WIN32)
+    target_sources(LingoFlow PRIVATE ${CMAKE_SOURCE_DIR}/assets/LingoFlow.rc)
+endif()
+
 target_compile_definitions(LingoFlow
     PRIVATE
         JUCE_WEB_BROWSER=0

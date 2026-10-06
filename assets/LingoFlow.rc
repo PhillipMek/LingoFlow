@@ -1,0 +1,19 @@
+// LingoFlow - Windows application icon resource.
+//
+// The single line below is the whole file on purpose: JUCE's own generated
+// <target>_resources.rc already carries the VERSIONINFO block, and ICON_BIG/
+// ICON_SMALL are deliberately NOT set on the juce_add_gui_app target (JUCE's
+// winicon would emit a second, smaller icon group - 16/32/48/256 resampled
+// at build time). The committed assets/LingoFlow.ico is instead generated
+// once from assets/LingoFlow.png (the master artwork) and carries the full
+// recommended size set: 16/24/32/48/64/128/256, PNG-encoded entries (valid
+// since Vista; this product targets Windows 10/11).
+//
+// The path is relative to this .rc file, so a clean checkout needs nothing
+// but the repository itself. Windows takes the executable's icon (Explorer,
+// taskbar, and - with the native title bar JUCE uses - the window caption)
+// from this one icon group.
+
+#include <windows.h>
+
+LINGOFLOW_APP_ICON ICON "LingoFlow.ico"

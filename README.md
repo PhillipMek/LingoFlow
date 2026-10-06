@@ -1,6 +1,14 @@
+<img src="assets/LingoFlow.png" alt="LingoFlow icon" width="96" height="96" align="left" hspace="16">
+
 # LingoFlow
 
-Windows desktop application for simultaneous speech translation at live events:
+**Live AI Interpreter.** LingoFlow is a Windows desktop application for real-time
+simultaneous interpretation using digital audio input, OpenAI Realtime Translation
+and translated audio output.
+
+<br clear="left">
+
+The pipeline, end to end:
 
 ```text
 SoundGrid/ASIO in  ->  audio engine  ->  OpenAI Realtime translation  ->  audio engine  ->  SoundGrid/ASIO out
