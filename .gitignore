@@ -6,6 +6,9 @@
 /out/
 Testing/
 CMakeLists.txt.user
+# CI FetchContent download cache (pinned Catch2/nlohmann sources; see
+# .github/workflows/ci.yml) - machine state, never repo state.
+/.fc-cache/
 
 # IDE / tooling
 .vs/

@@ -6,6 +6,8 @@
 simultaneous interpretation using digital audio input, OpenAI Realtime Translation
 and translated audio output.
 
+[![CI](https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml)
+
 <br clear="left">
 
 The pipeline, end to end:

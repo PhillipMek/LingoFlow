@@ -1,0 +1,227 @@
+name: CI
+
+# LingoFlow CI (task: production-grade GitHub Actions CI, AGENTS.md 13).
+#
+# What this pipeline is:
+#   Debug + Release builds, the FULL registered ctest suite (Catch2 unit and
+#   integration tests, realtime-safety and architecture gates with their
+#   self-tests, ASIO discovery verification, protocol/transport tests against
+#   scripted fakes, allocation gates), and the hardware-independent smoke modes.
+#
+# What this pipeline is NOT (docs/CI.md repeats this in both directions):
+#   Waves SoundGrid / physical ASIO, real OpenAI (no API key exists here by
+#   design - the protocol tests run against FakeWebSocketTransport), a real NDI
+#   receiver, long-run stability, clean-machine install. Those remain the
+#   manual production checkpoints (docs/rig-checklist.md, docs/release.md).
+#   Green CI does not mean the venue check happened.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+# One PR: a newer push cancels the older run of the same ref. The trunk
+# (main/master) runs are never cancelled once started.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+permissions:
+  contents: read
+
+env:
+  # FetchContent downloads (pinned Catch2/nlohmann tags) live OUTSIDE the build
+  # trees so the trees are disposable while the download cache is reusable.
+  # Cache correctness: the key hashes the CMakeLists files that declare the
+  # pinned versions - changing a version changes the key. Build products are
+  # never cached between runs: every run compiles every project source, so a
+  # stale binary cannot hide a compilation failure.
+  FETCH_BASE: ${{ github.workspace }}/.fc-cache
+
+jobs:
+  ci:
+    name: Windows - Debug + Release + tests + smoke
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@v4
+        with:
+          path: .fc-cache
+          key: fc-v1-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+          restore-keys: |
+            fc-v1-${{ runner.os }}-
+
+      # ------------------------------------------------------------- Debug
+      - name: Configure (Debug)
+        id: cfg-debug
+        shell: pwsh
+        run: cmake -S . -B build-debug -DFETCHCONTENT_BASE_DIR="$env:FETCH_BASE"
+
+      - name: Build (Debug)
+        id: build-debug
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force ci-logs | Out-Null
+          cmake --build build-debug --config Debug --parallel *>&1 |
+              Tee-Object -FilePath ci-logs/build-debug.log
+          exit $LASTEXITCODE
+
+      - name: Count compiler warnings (Debug)
+        if: always()
+        id: warn-debug
+        shell: pwsh
+        run: |
+          # The project policy is /W4 and zero warnings, but warnings are not
+          # errors here - the task's rule is to surface them, not to silently
+          # raise the bar. The count lands in the job summary.
+          $n = 0
+          if (Test-Path ci-logs/build-debug.log) {
+              $n = @(Select-String -Path ci-logs/build-debug.log -Pattern 'warning [CD][0-9]+').Count
+          }
+          "count=$n" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Tests (Debug - full registered suite)
+        id: tests-debug
+        shell: pwsh
+        run: |
+          $discovery = cmake --test-dir build-debug -C Debug -N *>&1 |
+              Tee-Object -FilePath ci-logs/ctest-discovery-debug.log
+          $discovered = @($discovery | Select-String -Pattern '^\s*Test\s+#\d+:').Count
+          "discovered=$discovered" | Out-File -Append $env:GITHUB_OUTPUT
+          cmake --test-dir build-debug -C Debug --output-on-failure *>&1 |
+              Tee-Object -FilePath ci-logs/ctest-debug.log
+          exit $LASTEXITCODE
+
+      # ----------------------------------------------------------- Release
+      - name: Configure (Release)
+        id: cfg-release
+        shell: pwsh
+        run: cmake -S . -B build-release -DFETCHCONTENT_BASE_DIR="$env:FETCH_BASE"
+
+      - name: Build (Release)
+        id: build-release
+        shell: pwsh
+        run: |
+          cmake --build build-release --config Release --parallel *>&1 |
+              Tee-Object -FilePath ci-logs/build-release.log
+          exit $LASTEXITCODE
+
+      - name: Count compiler warnings (Release)
+        if: always()
+        id: warn-release
+        shell: pwsh
+        run: |
+          $n = 0
+          if (Test-Path ci-logs/build-release.log) {
+              $n = @(Select-String -Path ci-logs/build-release.log -Pattern 'warning [CD][0-9]+').Count
+          }
+          "count=$n" | Out-File -Append $env:GITHUB_OUTPUT
+
+      - name: Tests (Release - full registered suite)
+        id: tests-release
+        shell: pwsh
+        run: |
+          $discovery = cmake --test-dir build-release -C Release -N *>&1 |
+              Tee-Object -FilePath ci-logs/ctest-discovery-release.log
+          $discovered = @($discovery | Select-String -Pattern '^\s*Test\s+#\d+:').Count
+          "discovered=$discovered" | Out-File -Append $env:GITHUB_OUTPUT
+          cmake --test-dir build-release -C Release --output-on-failure *>&1 |
+              Tee-Object -FilePath ci-logs/ctest-release.log
+          exit $LASTEXITCODE
+
+      # ------------------------------------------------------- smoke modes
+      # Semantics (src/App/Main.cpp header - unchanged by this workflow):
+      #   --dev --smoke  -> 0 on any machine: the tone+mock chain needs no
+      #                     device, no key, no network (AGENTS.md 13/15).
+      #   --smoke        -> 0 = subsystems started; 2 = a subsystem refused to
+      #                     start (on CI runners: no ASIO device exists, so 2
+      #                     is the DOCUMENTED expected refusal, not a hidden
+      #                     failure - the exit code is classified in the
+      #                     summary, never swallowed).
+      - name: Smoke (developer chain - hardware-independent, must pass)
+        id: smoke-dev
+        shell: pwsh
+        run: |
+          & build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe --dev --smoke *>&1 |
+              Tee-Object -FilePath ci-logs/smoke-dev.log
+          exit $LASTEXITCODE
+
+      - name: Smoke (production chain - hardware-dependent outcome classified)
+        id: smoke-plain
+        shell: pwsh
+        run: |
+          & build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe --smoke *>&1 |
+              Tee-Object -FilePath ci-logs/smoke-plain.log
+          $code = $LASTEXITCODE
+          if ($code -eq 0) {
+              "outcome=PASS" | Out-File -Append $env:GITHUB_OUTPUT
+              exit 0
+          }
+          if ($code -eq 2) {
+              # Exit 2 here is the application behaving correctly on a machine
+              # without audio hardware: the ASIO selection cannot open. This is
+              # the expected environment limitation of CI runners, recorded in
+              # the summary - the real-device smoke remains rig-checklist step 1.
+              "outcome=EXPECTED-HARDWARE-SKIP" | Out-File -Append $env:GITHUB_OUTPUT
+              Write-Output "::notice::plain --smoke exited 2: expected on a runner without ASIO hardware (production smoke is a venue check)"
+              exit 0
+          }
+          "outcome=FAIL" | Out-File -Append $env:GITHUB_OUTPUT
+          Write-Output "::error::unexpected --smoke exit code $code (not 0, not the documented 2)"
+          exit 1
+
+      # --------------------------------------------------------- artifacts
+      - name: Upload diagnostics (always - build/ctest/smoke/app logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics
+          path: |
+            ci-logs/
+            ~/AppData/Roaming/LingoFlow/logs/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Release executable (success only)
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: LingoFlow-Windows-Release
+          path: build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe
+          retention-days: 14
+
+      # ------------------------------------------------------------ summary
+      - name: Job summary (step summary markdown)
+        if: always()
+        shell: pwsh
+        run: |
+          $md = @"
+          ## LingoFlow CI
+
+          | check | result |
+          |---|---|
+          | configure (Debug) | ${{ steps.cfg-debug.outcome }} |
+          | build (Debug) | ${{ steps.build-debug.outcome }} |
+          | tests (Debug, full registered suite via ctest) | ${{ steps.tests-debug.outcome }} (${{ steps.tests-debug.outputs.discovered }} tests) |
+          | configure (Release) | ${{ steps.cfg-release.outcome }} |
+          | build (Release) | ${{ steps.build-release.outcome }} |
+          | tests (Release) | ${{ steps.tests-release.outcome }} (${{ steps.tests-release.outputs.discovered }} tests) |
+          | smoke --dev --smoke (hardware-independent) | ${{ steps.smoke-dev.outcome }} |
+          | smoke --smoke (hardware-dependent) | ${{ steps.smoke-plain.outputs.outcome || 'n/a' }} |
+          | compiler warnings | Debug ${{ steps.warn-debug.outputs.count }}, Release ${{ steps.warn-release.outputs.count }} |
+          | artifact LingoFlow-Windows-Release | see Artifacts (uploaded only when all green) |
+
+          CI never opened an audio device, never used a credential, never
+          touched the network provider - those are the venue checkpoints
+          (docs/CI.md, docs/release.md, docs/rig-checklist.md).
+          "@
+          $md | Out-File -Append $env:GITHUB_STEP_SUMMARY
