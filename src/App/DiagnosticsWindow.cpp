@@ -9,23 +9,94 @@
 namespace liveai {
 namespace {
 
-constexpr int kRowHeight = 14;
+// The card palette mirrors the operator window (UI-02): the surfaces match,
+// the density is allowed to be higher here.
+namespace dink {
 
-juce::Label& makeRowBlock(juce::Label& label, juce::Component& parent)
+const juce::Colour background  { 0xff1a1d20u };
+const juce::Colour card        { 0xff22262bu };
+const juce::Colour cardBorder  { 0xff2d333au };
+const juce::Colour header      { 0xff8b949eu };
+const juce::Colour caption     { 0xff9aa4afu };
+const juce::Colour value       { 0xffe6edf3u };
+const juce::Colour muted       { 0xff6e7681u };
+const juce::Colour green       { 0xff3fb950u };
+const juce::Colour amber       { 0xffd29922u };
+const juce::Colour red         { 0xfff85149u };
+const juce::Colour control     { 0xff30363du };
+
+} // namespace dink
+
+constexpr int kMargin = 16;
+constexpr int kCardPad = 14;
+constexpr int kCardGap = 12;
+constexpr int kRowH = 20;
+constexpr int kLatencyRowH = 30;
+constexpr int kHeaderH = 22;
+
+/// The state words the row colouring knows. The words come from the modules'
+/// own nameOf() - the tested contract is the word (UiModel tests assert it);
+/// colour is presentation, never a second vocabulary.
+juce::Colour valueColour(const std::string& label, const std::string& value)
 {
-    label.setFont(ui::monoFont());
-    label.setColour(juce::Label::textColourId, juce::Colour(0xffc9d1d9u));
-    label.setJustificationType(juce::Justification::topLeft);
-    label.setInterceptsMouseClicks(false, false);
-    parent.addAndMakeVisible(label);
-    return label;
+    const bool stateRow = label == "session" || label == "NDI state"
+                          || label == "audio (independent path)" || label == "application";
+    if (!stateRow)
+    {
+        // Non-state rows still speak loudly when they moved: underruns,
+        // overruns, drops and malformed counts are amber at non-zero, red at
+        // the actionable ones. Zero stays neutral - a healthy row needs no
+        // colour (UI-02 В§12).
+        const bool counting = label == "underruns" || label == "overruns"
+                              || label == "ring dropped (samples)"
+                              || label == "output silence (samples)"
+                              || label == "malformed callbacks" || label == "oversized callbacks"
+                              || label == "reconnects"
+                              || label == "translation errors (fatal)"
+                              || label == "NDI dropped" || label == "NDI transport errors"
+                              || label == "NDI errors (counted)"
+                              || label == "text partial/final/evicted/duplicates"
+                              || label == "text dispatch delivered/dropped"
+                              || label == "capture gap-refused" || label == "rejected (wrong rate)"
+                              || label == "dropped (buffer full)"
+                              || label == "clip samples in / out";
+        if (!counting)
+            return dink::value;
+
+        // A dispatch row reads "delivered / dropped": only the second number
+        // is an alarm, so that one row's colour checks the tail after the
+        // slash. Every other "a / b" row (clips, text totals) alarms on
+        // either half, and single values simply check themselves.
+        std::string watched = value;
+        if (label == "text dispatch delivered/dropped")
+        {
+            const auto tail = value.rfind('/');
+            if (tail != std::string::npos)
+                watched = value.substr(tail + 1);
+        }
+        return watched.find_first_not_of(" 0()") == std::string::npos ? dink::value : dink::amber;
+    }
+
+    if (value == "running" || value == "connected" || value == "publishing")
+        return dink::green;
+    if (value == "faulted")
+        return dink::red;
+    if (value == "reconnecting" || value == "connecting" || value == "starting"
+        || value == "stopping" || value == "opened" || value == "ready")
+        return dink::amber;
+    return dink::muted;   // stopped / closed / disabled / off
 }
 
-std::size_t lineCount(const std::string& text)
+int cardHeightFor(const std::vector<std::pair<std::string, std::string>>& rows)
 {
-    return static_cast<std::size_t>(
-        std::count(text.begin(), text.end(), '\n'))
-         + (text.empty() ? 0u : 1u);
+    return kHeaderH + kCardPad + static_cast<int>(rows.size()) * kRowH + kCardPad / 2;
+}
+
+void styleQuiet(juce::TextButton& button)
+{
+    button.setColour(juce::TextButton::buttonColourId, dink::control);
+    button.setColour(juce::TextButton::textColourOffId, dink::value);
+    button.setColour(juce::TextButton::textColourOnId, dink::value);
 }
 
 } // namespace
@@ -35,37 +106,28 @@ std::size_t lineCount(const std::string& text)
 DiagnosticsContent::DiagnosticsContent(ApplicationController& controller)
     : controller_(controller)
 {
-    ui::sectionHeader(audioHeader_, "AUDIO HEALTH", *this);
-    ui::sectionHeader(translationHeader_, "TRANSLATION HEALTH", *this);
-    ui::sectionHeader(subtitlesHeader_, "SUBTITLES - NDI AND TEXT PIPELINE", *this);
-    ui::sectionHeader(latencyHeader_,
-                      "LATENCY ACCOUNTING - every row keeps its kind: measured, estimated, or not measured",
-                      *this);
-    ui::sectionHeader(runtimeHeader_, "RUNTIME", *this);
-
-    makeRowBlock(audioRows_, *this);
-    makeRowBlock(translationRows_, *this);
-    makeRowBlock(subtitlesRows_, *this);
-    makeRowBlock(latencyRows_, *this);
-    makeRowBlock(runtimeRows_, *this);
-
     exportButton_.onClick = [this] { exportPressed(); };
+    styleQuiet(exportButton_);
     addAndMakeVisible(exportButton_);
 
+    rawButton_.onClick = [this] { rawToggled(); };
+    styleQuiet(rawButton_);
+    addAndMakeVisible(rawButton_);
+
     noteLabel_.setFont(ui::uiFont(12.0f));
-    noteLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd29922u));
-    noteLabel_.setJustificationType(juce::Justification::topLeft);
+    noteLabel_.setColour(juce::Label::textColourId, dink::amber);
     addAndMakeVisible(noteLabel_);
 
     rebuild();
-    startTimer(500);   // engineering numbers on an engineering surface: half a second is honest
+    startTimer(500);   // engineering numbers on an engineering surface
 }
 
 void DiagnosticsContent::exportPressed()
 {
-    // Task 017's funnel, relocated by UI-01 to the surface its receipts belong
-    // to. The note is the receipt either way - success names the file, failure
-    // is as talkable as success.
+    // Task 017's funnel; the note is the receipt either way - success names
+    // the file, failure is as talkable as the success. The export itself is
+    // secret-free by construction (identifiers only, task 015's rule, pinned
+    // by the export tests).
     std::filesystem::path written;
     std::string note;
     controller_.exportDiagnostics({}, written, note);
@@ -73,90 +135,177 @@ void DiagnosticsContent::exportPressed()
     rebuild();
 }
 
+void DiagnosticsContent::rawToggled()
+{
+    showRaw_ = !showRaw_;
+    rawButton_.setButtonText(showRaw_ ? "Hide raw details" : "Show raw details");
+    resized();
+    repaint();
+}
+
 void DiagnosticsContent::timerCallback()
 {
     rebuild();
 }
 
-std::string DiagnosticsContent::rows(
-    const std::vector<std::pair<std::string, std::string>>& metricRows)
-{
-    return ui::formatMetricRows(metricRows);
-}
-
 void DiagnosticsContent::rebuild()
 {
-    const DiagnosticsPanel panel = buildDiagnosticsPanel(controller_);
-
-    const std::string audioText = rows(panel.audioHealth);
-    const std::string translationText = rows(panel.translationHealth);
-    const std::string subtitlesText = rows(panel.subtitles);
-    const std::string runtimeText = rows(panel.runtime);
-
-    // The 018 accounting keeps the kind beside every number - here, of all
-    // places, nobody may read an estimate as a measurement. The row text is
-    // what the main screen used to print: relocated presentation.
-    std::string latency;
-    for (const auto& row : panel.latency)
-        latency += std::format("{:<26}{} [{}]\n", row.component, row.value, row.kind);
-
-    audioRows_.setText(juce::String(audioText), juce::NotificationType::dontSendNotification);
-    translationRows_.setText(juce::String(translationText), juce::NotificationType::dontSendNotification);
-    subtitlesRows_.setText(juce::String(subtitlesText), juce::NotificationType::dontSendNotification);
-    latencyRows_.setText(juce::String(latency), juce::NotificationType::dontSendNotification);
-    runtimeRows_.setText(juce::String(runtimeText), juce::NotificationType::dontSendNotification);
-
-    audioLines_ = lineCount(audioText);
-    translationLines_ = lineCount(translationText);
-    subtitlesLines_ = lineCount(subtitlesText);
-    latencyLines_ = lineCount(latency);
-    runtimeLines_ = lineCount(runtimeText);
-
+    panel_ = buildDiagnosticsPanel(controller_);
     noteLabel_.setText(juce::String(actionNote_), juce::NotificationType::dontSendNotification);
+    resized();   // card heights follow the row counts
+    repaint();
+}
+
+void DiagnosticsContent::drawCard(juce::Graphics& g, const juce::Rectangle<int>& card,
+                                  const juce::String& title) const
+{
+    g.setColour(dink::card);
+    g.fillRoundedRectangle(card.toFloat(), 6.0f);
+    g.setColour(dink::cardBorder);
+    g.drawRoundedRectangle(card.toFloat().reduced(0.5f), 6.0f, 1.0f);
+
+    g.setFont(ui::uiFont(11.0f));
+    g.setColour(dink::header);
+    g.drawText(title, card.reduced(kCardPad, 6).withHeight(16),
+               juce::Justification::left);
+}
+
+void DiagnosticsContent::drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
+                                  const std::vector<std::pair<std::string, std::string>>& rows) const
+{
+    g.setFont(ui::uiFont(13.0f));
+
+    for (const auto& [label, value] : rows)
+    {
+        auto row = area.removeFromTop(kRowH);
+        g.setColour(dink::caption);
+        g.drawText(juce::String(label), row.withWidth(row.getWidth() - 230),
+                   juce::Justification::left);
+        g.setColour(valueColour(label, value));
+        g.drawText(juce::String(value), row.withX(row.getRight() - 230).withWidth(230),
+                   juce::Justification::right);
+    }
+}
+
+void DiagnosticsContent::paint(juce::Graphics& g)
+{
+    g.fillAll(dink::background);
+
+    drawCard(g, audioCard_, "AUDIO HEALTH");
+    drawCard(g, translationCard_, "TRANSLATION HEALTH");
+    drawCard(g, subtitlesCard_, "SUBTITLES / NDI");
+    drawCard(g, runtimeCard_, "RUNTIME");
+    drawCard(g, latencyCard_, "LATENCY - every row keeps its kind: measured, estimated, or not measured");
+
+    {
+        auto inner = audioCard_.reduced(kCardPad, kHeaderH + 2);
+        drawRows(g, inner, panel_.audioHealth);
+    }
+    {
+        auto inner = translationCard_.reduced(kCardPad, kHeaderH + 2);
+        drawRows(g, inner, panel_.translationHealth);
+    }
+    {
+        auto inner = subtitlesCard_.reduced(kCardPad, kHeaderH + 2);
+        drawRows(g, inner, panel_.subtitles);
+    }
+    {
+        auto inner = runtimeCard_.reduced(kCardPad, kHeaderH + 2);
+        drawRows(g, inner, panel_.runtime);
+    }
+
+    // The latency table: component | value | kind. The kind column is the
+    // whole point of task 018's design and it stays visible on every row -
+    // nobody may read an estimate as a measurement here.
+    {
+        auto inner = latencyCard_.reduced(kCardPad, kHeaderH + 2);
+        g.setFont(ui::uiFont(13.0f));
+        for (const auto& row : panel_.latency)
+        {
+            auto r = inner.removeFromTop(kLatencyRowH);   // long values may wrap over two lines
+            g.setColour(dink::caption);
+            g.drawFittedText(juce::String(row.component), r.withWidth(210), r.getHeight(),
+                       juce::Justification::topLeft, 2);
+            g.setColour(dink::value);
+            g.drawFittedText(juce::String(row.value), r.withX(r.getX() + 218).withWidth(r.getWidth() - 218 - 270),
+                             r.getHeight(), juce::Justification::topLeft, 2);
+            g.setColour(dink::muted);
+            g.drawFittedText("[" + juce::String(row.kind) + "]", r.withX(r.getRight() - 262).withWidth(262), r.getHeight(),
+                       juce::Justification::topRight, 2);
+        }
+    }
+
+    if (showRaw_)
+    {
+        drawCard(g, rawCard_, "RAW DETAILS - event ring and configuration (full history in the export)");
+
+        auto inner = rawCard_.reduced(kCardPad, kHeaderH + 2);
+        g.setFont(ui::monoFont(12.0f));
+        g.setColour(dink::value);
+
+        // Newest last; when the area is short, the newest lines are the ones
+        // that must be visible, so the tail is what gets drawn.
+        const std::size_t lines = std::min<std::size_t>(
+            static_cast<std::size_t>(std::max(0, inner.getHeight() / 16)),
+            panel_.rawDetails.size());
+        std::string text;
+        for (std::size_t i = panel_.rawDetails.size() - lines;
+             i < panel_.rawDetails.size(); ++i)
+            text += panel_.rawDetails[i] + "\n";
+        g.drawMultiLineText(juce::String(text), inner.getX(),
+                            inner.getY() + 12, inner.getWidth());
+    }
 }
 
 void DiagnosticsContent::resized()
 {
-    auto bounds = getLocalBounds().reduced(14);
+    auto bounds = getLocalBounds().reduced(kMargin);
 
-    // Bottom-up: reserve the full-width latency block and the export row
-    // FIRST, then split what remains into the two metric columns. The first
-    // cut of this window laid the columns over the block and proved, loudly,
-    // what overlapping text looks like at a venue. The +2 lines of slack are
-    // for the long accounting sentences, which wrap inside their row.
-    const int bottomHeight = 18 + kRowHeight * (static_cast<int>(latencyLines_) + 2)
-                           + 8 + 30 + 40;   // header, rows, gap, export, note
-    auto bottom = bounds.removeFromBottom(bottomHeight);
+    // Bottom-up stacking: buttons + note, then (when expanded) the raw window,
+    // then the latency table, then the two columns of metric cards take what
+    // is left. Every card's rect is disjoint by construction.
+    auto bottom = bounds.removeFromBottom(kCardGap + 30 + kCardGap + 18);   // buttons + note
+    if (showRaw_)
+    {
+        const int rawHeight = kHeaderH + kCardPad + 8 * 16 + kCardPad / 2;   // a window into the ring
+        bounds.removeFromBottom(kCardGap);
+        rawCard_ = bounds.removeFromBottom(rawHeight);
+    }
+
+    const int latencyHeight = kHeaderH + kCardPad
+                            + static_cast<int>(panel_.latency.size()) * kLatencyRowH + kCardPad / 2;
+    bounds.removeFromBottom(kCardGap);
+    latencyCard_ = bounds.removeFromBottom(latencyHeight);
+
+    // The four metric cards in two columns; each column stacks two cards,
+    // the shorter column's second card absorbs the remainder so no gap lies.
     auto columns = bounds;
-
     auto left = columns.removeFromLeft(columns.getWidth() / 2);
     auto right = columns;
-    right.removeFromLeft(12);
+    right.removeFromLeft(kCardGap);
 
-    audioHeader_.setBounds(left.removeFromTop(18));
-    audioRows_.setBounds(left.removeFromTop(kRowHeight * static_cast<int>(audioLines_)));
-    left.removeFromTop(6);
-    runtimeHeader_.setBounds(left.removeFromTop(18));
-    runtimeRows_.setBounds(left);
+    const int leftFirst = cardHeightFor(panel_.audioHealth);
+    audioCard_ = left.removeFromTop(leftFirst);
+    left.removeFromTop(kCardGap);
+    runtimeCard_ = left;
 
-    translationHeader_.setBounds(right.removeFromTop(18));
-    translationRows_.setBounds(right.removeFromTop(kRowHeight * static_cast<int>(translationLines_)));
-    right.removeFromTop(6);
-    subtitlesHeader_.setBounds(right.removeFromTop(18));
-    subtitlesRows_.setBounds(right);
+    const int rightFirst = cardHeightFor(panel_.translationHealth);
+    translationCard_ = right.removeFromTop(rightFirst);
+    right.removeFromTop(kCardGap);
+    subtitlesCard_ = right;
 
-    latencyHeader_.setBounds(bottom.removeFromTop(18));
-    latencyRows_.setBounds(bottom.removeFromTop(kRowHeight * (static_cast<int>(latencyLines_) + 2)));
-    bottom.removeFromTop(8);
-    exportButton_.setBounds(bottom.removeFromTop(30).removeFromLeft(200));
-    noteLabel_.setBounds(bottom);
+    auto buttons = bottom.removeFromTop(30);
+    exportButton_.setBounds(buttons.removeFromLeft(180));
+    buttons.removeFromLeft(kCardGap);
+    rawButton_.setBounds(buttons.removeFromLeft(160));
+    noteLabel_.setBounds(bottom.withHeight(18));
 }
 
 // ======================================================================== DiagnosticsWindow
 
 DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller)
     : juce::DocumentWindow("LingoFlow Diagnostics",
-                           juce::Colour(0xff1e2124u),
+                           dink::background,
                            juce::DocumentWindow::closeButton)
 {
     setUsingNativeTitleBar(true);
@@ -168,8 +317,8 @@ DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller)
     setContentOwned(content, true);
 
     setResizable(true, true);
-    setResizeLimits(900, 620, 4000, 4000);
-    setSize(1040, 700);
+    setResizeLimits(900, 900, 4000, 4000);
+    setSize(1100, 1120);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

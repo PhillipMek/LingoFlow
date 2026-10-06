@@ -52,5 +52,20 @@ std::vector<std::string> ChainedSecretStore::identifiers() const
     return out;
 }
 
+ISecretStore::Location ChainedSecretStore::secretLocation(std::string_view identifier) const
+{
+    const std::string id(identifier);
+
+    const auto primaryIds = primary_->identifiers();
+    if (std::find(primaryIds.begin(), primaryIds.end(), id) != primaryIds.end())
+        return Location::primary;
+
+    const auto fallbackIds = fallback_->identifiers();
+    if (std::find(fallbackIds.begin(), fallbackIds.end(), id) != fallbackIds.end())
+        return Location::fallbackOnly;
+
+    return Location::none;
+}
+
 } // namespace security
 } // namespace liveai

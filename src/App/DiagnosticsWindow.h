@@ -1,17 +1,21 @@
 #pragma once
 //
 // DiagnosticsWindow - the dedicated engineering surface UI-01 carved out of the
-// main screen. The operator's window shows four health facts and a button to
-// this one; this window shows everything the raw-counter wall used to:
-// audio health, translation health, subtitles (NDI + text pipeline), the full
-// task 018 latency accounting with its kinds, and runtime facts. Nothing was
-// deleted to get here (AGENTS.md 19): information moved to the place an
-// operator opens deliberately, next to the Export diagnostics receipt button
-// that already lived in the header.
+// main screen, structured by UI-03: five cards (Audio health, Translation
+// health, Subtitles/NDI, Latency, Runtime) plus an expandable Raw details area,
+// drawn as aligned label/value tables - not a wall of monospace text. Monospace
+// survives in exactly one place: the raw event list, which IS a log.
 //
 // Same widget discipline as every other window (tasks 014/015/019): paint-only.
 // Every row is pre-built by buildDiagnosticsPanel() from public controller
-// reads; this file formats lists of pairs and never computes a value.
+// reads; this file positions text and never computes a value. The card
+// rectangles are computed in resized() and consumed by paint().
+//
+// Section 12's promise lives in the data: the NDI card carries the audio state
+// row beside it, so "NDI died, is the show over?" answers itself in one glance.
+// Section 14's promise lives there too: uptime/CPU/memory read "not measured"
+// because this application does not measure them - no cosmetic sampler was
+// added to make the row look nicer.
 
 #include <string>
 #include <utility>
@@ -28,6 +32,7 @@ class DiagnosticsContent final : public juce::Component, private juce::Timer
 {
 public:
     explicit DiagnosticsContent(ApplicationController& controller);
+    void paint(juce::Graphics& g) override;
     void resized() override;
 
     /// Recompute every section from the model. Public because the frame calls
@@ -37,21 +42,26 @@ public:
 private:
     void timerCallback() override;
     void exportPressed();
+    void rawToggled();
 
-    /// The three metric sections render through the same 22-row block so the
-    /// columns line up across the window; the row content is model-built.
-    static std::string rows(const std::vector<std::pair<std::string, std::string>>& metricRows);
+    /// One label/value row inside a card; state words colour themselves via
+    /// the shared stateColour mapping (the same words, the same meanings).
+    void drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
+                  const std::vector<std::pair<std::string, std::string>>& rows) const;
+    void drawCard(juce::Graphics& g, const juce::Rectangle<int>& card,
+                  const juce::String& title) const;
 
     ApplicationController& controller_;
-    std::string actionNote_;   ///< the export receipt lives here now (UI-01)
+    DiagnosticsPanel panel_;
+    std::string actionNote_;
+    bool showRaw_ = false;
 
-    juce::Label audioHeader_, translationHeader_, subtitlesHeader_, latencyHeader_, runtimeHeader_;
-    juce::Label audioRows_, translationRows_, subtitlesRows_, latencyRows_, runtimeRows_;
+    juce::Rectangle<int> audioCard_, translationCard_, subtitlesCard_, runtimeCard_,
+                         latencyCard_, rawCard_;
+
     juce::Label noteLabel_;
     juce::TextButton exportButton_ { "Export diagnostics" };
-
-    std::size_t audioLines_ = 1, translationLines_ = 1, subtitlesLines_ = 1;
-    std::size_t latencyLines_ = 1, runtimeLines_ = 1;   ///< sized by the model's rows
+    juce::TextButton rawButton_ { "Show raw details" };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DiagnosticsContent)
 };

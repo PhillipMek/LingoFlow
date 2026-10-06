@@ -49,6 +49,15 @@ public:
     /// Names only, never values.
     std::vector<std::string> identifiers() const override;
 
+    /// The question the chain exists to make answerable (UI-03 §5): a key the
+    /// primary holds is secure storage; one that only the environment provides
+    /// is a development convenience the status line must say so about.
+    Location secretLocation(std::string_view identifier) const override;
+
+    /// Writing goes to the primary, so the primary is what a status line
+    /// should name.
+    std::string_view writableStoreName() const noexcept override { return primary_->name(); }
+
     ISecretStore& primary() const noexcept { return *primary_; }
     ISecretStore& fallback() const noexcept { return *fallback_; }
 

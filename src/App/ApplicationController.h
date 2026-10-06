@@ -177,6 +177,14 @@ public:
     /// Store label for the UI ("Windows Credential Manager / fallback: ...").
     std::string secretStoreName() const;
 
+    /// Where the readable API key actually lives (UI-03 §5): the status line
+    /// may only claim secure storage when the writable store holds it - an
+    /// environment-only key is a development state and must read like one.
+    security::ISecretStore::Location apiSecretLocation() const;
+
+    /// The store a Store-key press writes to, named alone (no chain plumbing).
+    std::string secretStoreWritableName() const;
+
     /// Operator actions. `note` reports the outcome in operator words and is
     /// guaranteed to contain no trace of the secret itself.
     bool storeApiSecret(std::string_view secret, std::string& note);

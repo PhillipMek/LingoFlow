@@ -11,6 +11,7 @@
 // development an environment-variable store is allowed. No implementation here
 // may write a secret to disk in plain text or return it through AppConfig.
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -58,6 +59,27 @@ public:
 
     /// True when a value exists, without copying it out.
     bool contains(std::string_view identifier);
+
+    /// Where the readable value for an identifier actually lives (UI-03 §5).
+    /// The operator-facing status line needs this distinction to stay honest:
+    /// an environment-variable-only key must never be described as "stored
+    /// securely", because the storage that survives a show is the writable
+    /// one. A single store can only answer primary-or-none; the chain
+    /// (ChainedSecretStore) overrides to tell the two apart.
+    enum class Location { none, primary, fallbackOnly };
+
+    virtual Location secretLocation(std::string_view identifier) const
+    {
+        const auto ids = identifiers();
+        const std::string id(identifier);
+        return std::find(ids.begin(), ids.end(), id) != ids.end() ? Location::primary
+                                                                  : Location::none;
+    }
+
+    /// The store a write actually reaches. The chain's name() describes the
+    /// whole arrangement ("primary / fallback: secondary") - a status line
+    /// should name the writable one, not the plumbing diagram.
+    virtual std::string_view writableStoreName() const noexcept { return name(); }
 };
 
 /// A store that holds nothing: keeps the application runnable when secure storage

@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -290,17 +291,17 @@ TEST_CASE("UiModel: the subtitle fields are the task 013 model, not a copy of so
     ApplicationController controller;
     REQUIRE(controller.start());
 
-    controller.onPartialText("РџСЂРёРІРµС‚ РјРёСЂ");
+    controller.onPartialText("Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚ВР В Р Р‹Р В РІР‚С™");
 
     auto panel = buildOperatorPanel(controller, {});
-    CHECK(panel.currentSubtitle == "РџСЂРёРІРµС‚ РјРёСЂ");
+    CHECK(panel.currentSubtitle == "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚ВР В Р Р‹Р В РІР‚С™");
     CHECK(panel.subtitleHistory.empty());
 
-    controller.onFinalText("РџСЂРёРІРµС‚ РјРёСЂ");
+    controller.onFinalText("Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚ВР В Р Р‹Р В РІР‚С™");
     panel = buildOperatorPanel(controller, {});
     CHECK(panel.currentSubtitle.empty());
     REQUIRE(panel.subtitleHistory.size() == 1);
-    CHECK(panel.subtitleHistory[0] == "РџСЂРёРІРµС‚ РјРёСЂ");
+    CHECK(panel.subtitleHistory[0] == "Р В Р’В Р РЋРЎСџР В Р Р‹Р В РІР‚С™Р В Р’В Р РЋРІР‚ВР В Р’В Р В РІР‚В Р В Р’В Р вЂ™Р’ВµР В Р Р‹Р Р†Р вЂљРЎв„ў Р В Р’В Р РЋР’ВР В Р’В Р РЋРІР‚ВР В Р Р‹Р В РІР‚С™");
     CHECK(rowValue(buildDiagnosticsPanel(controller).subtitles,
                    "text partial/final/evicted/duplicates") == "1 / 1 / 0 / 0");
 
@@ -503,4 +504,90 @@ TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to di
     CHECK(rowValue(diag.runtime, "buffer delay detail").find("NOT included") != std::string::npos);
 
     controller.stop();
+}
+TEST_CASE("UiModel UI-03: raw details carry the truth and never a secret",
+          "[app][ui][model][diagnostics]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+
+    // A store that keeps values, so the leakage assertion below is about a
+    // real secret having been through the real controller path.
+    struct ValueStore final : public security::ISecretStore
+    {
+        std::string_view name() const noexcept override { return "Value test store"; }
+        security::SecretStatus store(std::string_view id, std::string_view secret) override
+        {
+            items[std::string(id)] = std::string(secret);
+            return security::SecretStatus::stored;
+        }
+        std::optional<std::string> load(std::string_view id) override
+        {
+            const auto it = items.find(std::string(id));
+            return it == items.end() ? std::nullopt : std::optional<std::string>(it->second);
+        }
+        security::SecretStatus remove(std::string_view id) override
+        {
+            return items.erase(std::string(id)) > 0 ? security::SecretStatus::found
+                                                    : security::SecretStatus::notFound;
+        }
+        std::vector<std::string> identifiers() const override
+        {
+            std::vector<std::string> out;
+            for (const auto& [id, value] : items)
+                out.push_back(id);
+            return out;
+        }
+        std::map<std::string, std::string> items;
+    };
+
+    ValueStore store;
+    controller.setSecretStore(store);
+
+    std::string note;
+    REQUIRE(controller.storeApiSecret("sk-DO-NOT-LEAK-42", note));
+
+    const DiagnosticsPanel diag = buildDiagnosticsPanel(controller);
+
+    // Section 14's honesty: named rows, not invented numbers.
+    CHECK(rowValue(diag.runtime, "application uptime") == "not measured");
+    CHECK(rowValue(diag.runtime, "CPU / memory") == "not measured");
+    CHECK(rowValue(diag.runtime, "API key") == "stored");
+
+    // Section 15's content: the event ring and the configuration, as lines.
+    REQUIRE_FALSE(diag.rawDetails.empty());
+    // UI-03 ordering: configuration first, events last (the raw window shows
+    // its tail, and the tail should be the newest events).
+    CHECK(diag.rawDetails[0].find("configuration") != std::string::npos);
+    const std::string lastLine = diag.rawDetails.back();
+    const bool endsWithEvent = lastLine.rfind("  #", 0) == 0
+                               || lastLine == "  (none recorded since startup)";
+    CHECK(endsWithEvent);
+    bool sawSecurityEvent = false;
+    for (const auto& line : diag.rawDetails)
+    {
+        if (line.find("operator stored the API key") != std::string::npos)
+            sawSecurityEvent = true;
+    }
+    CHECK(sawSecurityEvent);
+
+    // Section 16's promise: no surface of the diagnostics model - structured
+    // rows or raw lines - carries the secret value.
+    const std::string secret = "sk-DO-NOT-LEAK-42";
+    const auto checkNoSecret = [&](const std::vector<std::pair<std::string, std::string>>& rows)
+    {
+        for (const auto& [label, value] : rows)
+        {
+            CHECK(label.find(secret) == std::string::npos);
+            CHECK(value.find(secret) == std::string::npos);
+        }
+    };
+    checkNoSecret(diag.audioHealth);
+    checkNoSecret(diag.translationHealth);
+    checkNoSecret(diag.subtitles);
+    checkNoSecret(diag.runtime);
+    for (const auto& row : diag.latency)
+        CHECK(row.value.find(secret) == std::string::npos);
+    for (const auto& line : diag.rawDetails)
+        CHECK(line.find(secret) == std::string::npos);
 }

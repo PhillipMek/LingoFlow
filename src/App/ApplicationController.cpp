@@ -317,6 +317,16 @@ std::string ApplicationController::secretStoreName() const
     return std::string(secrets_->name());
 }
 
+security::ISecretStore::Location ApplicationController::apiSecretLocation() const
+{
+    return secrets_->secretLocation(security::kOpenAiApiKey);
+}
+
+std::string ApplicationController::secretStoreWritableName() const
+{
+    return std::string(secrets_->writableStoreName());
+}
+
 bool ApplicationController::storeApiSecret(std::string_view secret, std::string& note)
 {
     if (secret.empty())

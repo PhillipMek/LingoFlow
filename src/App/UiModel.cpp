@@ -57,6 +57,30 @@ std::string latencySummaryText(const AudioEngine& engine, const AppConfig& cfg)
         latency.totalMs - latency.blockMs * 2, latency.source);
 }
 
+/// The one credential sentence every surface shows (UI-03 section 5): "stored
+/// securely" belongs only to the writable store; a key the environment variable
+/// alone provides is named as the development state it is, with the remedy; and
+/// absence keeps its remedy sentence (task 015's PASS criterion). Names of
+/// stores, never values of secrets.
+std::string credentialStatusLine(ApplicationController& controller)
+{
+    switch (controller.apiSecretLocation())
+    {
+        case security::ISecretStore::Location::primary:
+            return "API key: stored securely in " + controller.secretStoreWritableName();
+
+        case security::ISecretStore::Location::fallbackOnly:
+            return "API key: development environment only - store it in Settings to "
+                   "move it into " + controller.secretStoreWritableName();
+
+        case security::ISecretStore::Location::none:
+        default:
+            return "API key: NOT stored - sessions will refuse until it is entered in "
+                   "Settings (store: " + controller.secretStoreWritableName() + ")";
+    }
+}
+
+
 UiMeterView meterView(const AudioEngine& engine, int channel, bool inputSide)
 {
     UiMeterView view;
@@ -93,13 +117,6 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     panel.canStop = status.application == ApplicationState::running
                     || status.application == ApplicationState::faulted;
 
-    // Task 015. Presence is read from the store's identifier list (names, never
-    // values), and the sentence points the operator at the exact remedy before
-    // a session ever refuses for a missing key.
-    panel.credentialLine = controller.hasApiSecret()
-        ? "API key: stored - " + controller.secretStoreName()
-        : "API key: NOT stored - sessions will refuse until it is entered in Settings (store: "
-              + controller.secretStoreName() + ")";
 
     // Task 019. The badge is the mounted plan, extended with the worker's real
     // state: a banner that promised "loopback on" while the worker failed to
@@ -230,6 +247,11 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     // ------------------------------------------------------------- readouts
     panel.latencySummary = latencySummaryText(engine, cfg);
 
+    // UI-03 В§5: the same three-state sentence the Settings status line gives -
+    // one function, so the main screen and the dialog can never disagree about
+    // where the key stands.
+    panel.credentialLine = credentialStatusLine(controller);
+
     const auto diag = controller.diagnostics().snapshot();
 
     // UI-01: the operator's live strip carries four scannable facts. The full
@@ -307,7 +329,7 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
                                          ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
                                                / static_cast<double>(engine.sampleRate())
                                          : 0.0) },
-        // UI-02 §6: the gain-glide detail left the operator screen for here -
+        // UI-02 Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В§6: the gain-glide detail left the operator screen for here -
         // it is real telemetry (the engine's applied values), just not a thing
         // a live room needs in its face.
         { "applied gain in / out", std::format("{:+.1f} / {:+.1f} dB (gliding)",
@@ -332,6 +354,11 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
 
     panel.subtitles = {
         { "NDI state", std::string(ndi::nameOf(status.ndi)) },
+        { "stream name", cfg.ndi.streamName.empty() ? "(not set)" : cfg.ndi.streamName },
+        // UI-03 section 12: when NDI fails the operator must see at a glance that
+        // audio was not dragged down with it - the audio state therefore lives
+        // inside this card, from the same status struct.
+        { "audio (independent path)", std::string(audio::nameOf(status.audio)) },
         { "NDI published", formatCount(ndi != nullptr ? ndi->publishedFrames() : 0) },
         { "NDI dropped", formatCount(ndi != nullptr ? ndi->droppedFrames() : 0) },
         { "NDI transport errors", formatCount(ndi != nullptr ? ndi->publishErrors() : 0) },
@@ -359,7 +386,59 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
         // UI-02: the full buffer-delay sentence lives here now; the operator
         // screen shows only its short health line. Same function, same words.
         { "buffer delay detail", latencySummaryText(engine, cfg) },
+        // UI-03 section 14: named, not invented. This application measures
+        // none of these; saying "not measured" is the honest row, and the
+        // task's rule against cosmetic polling metrics is honoured by the
+        // absence of any new sampler.
+        { "application uptime", std::string("not measured") },
+        { "CPU / memory", std::string("not measured") },
     };
+
+    // ------------------------------------------------------------- raw details
+    // UI-03 section 15: the event ring (task 017's, verbatim) and the
+    // configuration as it stands - the material a support reading needs when
+    // the structured rows say "something happened" but not what. Newest last;
+    // eviction said out loud; identifiers only, never secret values (the
+    // credential rules apply to this area as to every other).
+    // Configuration first, events last: the raw window in the Diagnostics
+    // surface shows its tail, and the tail should be the newest events, not
+    // the static facts that never change.
+    panel.rawDetails.push_back("configuration:");
+    panel.rawDetails.push_back("  device: " + (cfg.audio.inputDeviceId.empty()
+                                                   ? std::string("(none)")
+                                                   : cfg.audio.inputDeviceId));
+    panel.rawDetails.push_back(std::format("  rate {} Hz, buffer {} frames, channels {} / {}",
+                                           cfg.audio.sampleRate, cfg.audio.bufferFrames,
+                                           cfg.audio.inputChannel, cfg.audio.outputChannel));
+    panel.rawDetails.push_back(std::format("  languages {} -> {}, model hint {}",
+                                           cfg.translation.inputLanguage,
+                                           cfg.translation.outputLanguage,
+                                           cfg.translation.modelHint.empty()
+                                               ? std::string("(backend default)")
+                                               : cfg.translation.modelHint));
+    panel.rawDetails.push_back(std::format("  reconnect {}, backoff {}..{} ms, session max age {} s, jitter {} ms",
+                                           cfg.translation.reconnectEnabled ? "on" : "off",
+                                           cfg.translation.reconnectInitialBackoffMs,
+                                           cfg.translation.reconnectMaxBackoffMs,
+                                           cfg.translation.sessionMaxAgeSeconds,
+                                           cfg.translation.jitterBufferMs));
+    panel.rawDetails.push_back(std::format("  NDI {}, stream {}", cfg.ndi.enabled ? "on" : "off",
+                                           cfg.ndi.streamName.empty() ? "(not set)" : cfg.ndi.streamName));
+    panel.rawDetails.push_back(std::format("  log {}, file {}", cfg.diagnostics.logLevel,
+                                           cfg.diagnostics.writeLogFile ? "on" : "off"));
+    panel.rawDetails.push_back(std::format("  developer mode {}", cfg.developer.enabled ? "ON" : "off"));
+
+    panel.rawDetails.push_back("recent events (newest last, ring of 256):");
+
+    const auto events = controller.diagnostics().events();
+    if (events.empty())
+        panel.rawDetails.push_back("  (none recorded since startup)");
+    for (const auto& event : events)
+        panel.rawDetails.push_back(std::format("  #{} [{}] {}: {}", event.sequence,
+                                               event.timestamp, event.subsystem, event.message));
+
+    if (const auto evicted = controller.diagnostics().evictedEvents(); evicted > 0)
+        panel.rawDetails.push_back(std::format("  ({} older events evicted from the ring)", evicted));
 
     return panel;
 }

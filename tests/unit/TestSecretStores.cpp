@@ -138,6 +138,35 @@ TEST_CASE("ChainedSecretStore: writes the primary, reads primary-first, never re
         CHECK(id.find("fallback-value") == std::string::npos);   // names, never values
 }
 
+TEST_CASE("ChainedSecretStore: secretLocation tells secure from convenient (UI-03)",
+          "[security][chain]")
+{
+    MapStore primary("Windows Credential Manager");
+    MapStore fallback("Development environment");
+    security::ChainedSecretStore chain(primary, fallback);
+
+    using Loc = security::ISecretStore::Location;
+
+    CHECK(chain.secretLocation("k") == Loc::none);
+
+    // An environment-only key is NOT secure storage, and the status line must
+    // not say it is: that is the whole reason this query exists.
+    fallback.items["k"] = "env-only";
+    CHECK(chain.secretLocation("k") == Loc::fallbackOnly);
+
+    REQUIRE(chain.store("k", "written") == SecretStatus::stored);
+    CHECK(chain.secretLocation("k") == Loc::primary);
+
+    // The status line names the writable store, not the plumbing diagram.
+    CHECK(chain.writableStoreName() == "Windows Credential Manager");
+    CHECK(chain.name() == "Windows Credential Manager / fallback: Development environment");
+
+    // A single store can only answer primary-or-none - it never claims a
+    // fallback it does not have.
+    CHECK(primary.secretLocation("k") == Loc::primary);
+    CHECK(primary.secretLocation("zz") == Loc::none);
+    CHECK(primary.writableStoreName() == "Windows Credential Manager");
+}
 TEST_CASE("ChainedSecretStore: an unavailable primary does not fake a store",
           "[security][chain]")
 {

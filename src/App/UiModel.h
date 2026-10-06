@@ -146,6 +146,13 @@ struct DiagnosticsPanel
     std::vector<std::pair<std::string, std::string>> subtitles;
     std::vector<LatencyRow> latency;
     std::vector<std::pair<std::string, std::string>> runtime;
+
+    /// UI-03 §15: the un-formatted truth for the expandable "raw details"
+    /// area - the event ring (newest last, eviction counted) and the
+    /// configuration as it stands. Lines, not pairs: this is the one place a
+    /// diagnostics surface may be a log. Built from the same public reads,
+    /// and it carries no secret value (identifiers only, per the credential rules).
+    std::vector<std::string> rawDetails;
 };
 
 /// How many history lines the panel carries to the window. A display depth,

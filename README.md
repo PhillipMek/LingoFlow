@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 344 tests.
+(task 019), and 346 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-344 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+346 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -547,9 +547,16 @@ The window is thin by construction - three parts, each in the place that owns it
   `src/App/UiWidgets.h`): widgets, layout and repaint timers over those panels. The
   operator screen is sectioned (SYSTEM STATUS / AUDIO / TRANSLATION / LIVE HEALTH) with
   Diagnostics behind its own button - which also owns the Export-diagnostics receipt -
-  and the settings dialog is grouped into Audio, Credentials, Translation, Subtitles/NDI,
-  Diagnostics and an Advanced band last: developer/test mode and the unsupported
-  instructions field live there, away from everyday setup. It owns no logic: every
+  and the settings dialog is six tabs (UI-03): Audio (device, rate, buffer, discrete
+  channels, gains - the restart fields), Translation (pair, recovery policy, jitter),
+  Subtitles/NDI (with the live NDI state beside the switches), Credentials (the status
+  line names where the key actually lives: secure storage, development environment,
+  or absent - never the value), Diagnostics (log level, log file, Export), and
+  Advanced last: developer/test mode and the unsupported instructions field, away
+  from everyday setup. The Diagnostics window is structured cards with aligned
+  label/value rows and a kind column on every latency line - monospace survives only
+  in the expandable Raw details (event ring + configuration), and metrics this
+  application does not measure are said so ("not measured"). It owns no logic: every
   control either calls one controller method (`updateSettings`, `setGainsLive`,
   `clearFault`, `refreshDevices`, `start`, `stop`...) or paints a panel value.
   Programmatic refresh is guarded so a tick can never echo back as an operator action,
