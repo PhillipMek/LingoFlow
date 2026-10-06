@@ -23,6 +23,12 @@ using namespace liveai::network;
 
 namespace {
 
+// The largest chunk any test feeds a resampler is 88200 frames (the
+// 88.2 kHz stop-band probe); this shared bound is what configure()
+// preallocates against, exactly as the backend preallocates against
+// its cadence and the inbound delta ceiling (code review P2).
+constexpr int kTestMaxInFrames = 100000;
+
 std::vector<float> makeSine(int frames, double rate, double freq, double amplitude = 1.0)
 {
     std::vector<float> out (static_cast<std::size_t>(frames));
@@ -100,23 +106,58 @@ TEST_CASE("PcmResampler: only the documented rate pairs are supported", "[audio]
     CHECK_FALSE(PcmResampler::isSupportedPair(-48000, 24000));
 
     PcmResampler r;
-    CHECK_FALSE(r.configure(32000, 24000));
+    CHECK_FALSE(r.configure(32000, 24000, kTestMaxInFrames));
     CHECK(r.inputRate() == 0); // a refused configure leaves the object untouched
-    REQUIRE(r.configure(24000, 24000));
-    CHECK(r.configure(48000, 24000)); // a supported pair replaces the cascade
-    CHECK(r.configure(44100, 24000)); // and so does a rational pair
+    REQUIRE(r.configure(24000, 24000, kTestMaxInFrames));
+    CHECK(r.configure(48000, 24000, kTestMaxInFrames)); // a supported pair replaces the cascade
+    CHECK(r.configure(44100, 24000, kTestMaxInFrames)); // and so does a rational pair
     CHECK(r.inputRate() == 44100);
-    CHECK(r.configure(24000, 88200)); // switching direction replaces the phase table
+    CHECK(r.configure(24000, 88200, kTestMaxInFrames)); // switching direction replaces the phase table
     CHECK(r.inputRate() == 24000);
     CHECK(r.outputRate() == 88200);
-    CHECK_FALSE(r.configure(48000, 22050));
+    CHECK_FALSE(r.configure(48000, 22050, kTestMaxInFrames));
     CHECK(r.inputRate() == 24000); // still the last valid pair
+}
+
+TEST_CASE("PcmResampler: the cadence bound is a contract, not a suggestion",
+          "[audio][resampler]")
+{
+    // Code review P2 (2026-10-06): process() is noexcept, so it must never
+    // allocate. The mechanism is configure()'s preallocation against a
+    // caller-declared maxInFrames; these are the refusals that make the
+    // promise hold at the edges.
+    PcmResampler r;
+    CHECK_FALSE(r.configure(48000, 24000, 0));    // no cadence, no plan
+    CHECK_FALSE(r.configure(48000, 24000, -1));   // ditto, from the other side
+
+    REQUIRE(r.configure(48000, 24000, 480));
+    const auto in = makeSine(481, 48000.0, 1000.0);
+    std::vector<float> out (static_cast<std::size_t> (PcmResampler::maxOutputFor(481)));
+
+    // One frame over the planned chunk is a caller bug and is refused like
+    // the outCapacity violation - the buffers never grow to absorb it.
+    CHECK(r.process(in.data(), 481, out.data(), static_cast<int> (out.size())) == -1);
+    CHECK(r.process(in.data(), 480, out.data(), static_cast<int> (out.size())) == 240);
+
+    // The rational window honours the same bound (its insert is the second
+    // allocation site the review named).
+    PcmResampler q;
+    REQUIRE(q.configure(24000, 44100, 480));
+    CHECK(q.process(in.data(), 481, out.data(), static_cast<int> (out.size())) == -1);
+    CHECK(q.process(in.data(), 480, out.data(), static_cast<int> (out.size())) >= 0);
+
+    // And the refusal does not corrupt the stream: feeding the planned
+    // chunks afterwards continues to produce the expected ratio.
+    int produced = 0;
+    for (int chunk = 0; chunk < 20; ++chunk)
+        produced += q.process(in.data(), 480, out.data(), static_cast<int> (out.size()));
+    CHECK(produced > 0);
 }
 
 TEST_CASE("PcmResampler: 48k->24k passes the speech band at unity", "[audio][resampler]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(48000, 24000));
+    REQUIRE(r.configure(48000, 24000, kTestMaxInFrames));
     r.reset();
 
     const auto in = makeSine(9600, 48000.0, 1000.0); // 200 ms of 1 kHz
@@ -130,7 +171,7 @@ TEST_CASE("PcmResampler: 48k->24k passes the speech band at unity", "[audio][res
 TEST_CASE("PcmResampler: decimation suppresses the band that would alias", "[audio][resampler]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(48000, 24000));
+    REQUIRE(r.configure(48000, 24000, kTestMaxInFrames));
 
     // 20 kHz at the 48k input would fold to 4 kHz at 24k without the antialias
     // filter: after the halfband it must be negligible.
@@ -147,7 +188,7 @@ TEST_CASE("PcmResampler: decimation suppresses the band that would alias", "[aud
 TEST_CASE("PcmResampler: 24k->48k keeps DC and rejects images", "[audio][resampler]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(24000, 48000));
+    REQUIRE(r.configure(24000, 48000, kTestMaxInFrames));
 
     { // DC
         std::vector<float> in (2400, 0.25f);
@@ -174,12 +215,12 @@ TEST_CASE("PcmResampler: chunked streaming equals one-shot processing", "[audio]
     const auto in = makeSine(9600, 48000.0, 1000.0);
 
     PcmResampler whole;
-    REQUIRE(whole.configure(48000, 24000));
+    REQUIRE(whole.configure(48000, 24000, kTestMaxInFrames));
     std::vector<float> outWhole;
     REQUIRE(runAll(whole, in, outWhole) == 4800);
 
     PcmResampler chunked;
-    REQUIRE(chunked.configure(48000, 24000));
+    REQUIRE(chunked.configure(48000, 24000, kTestMaxInFrames));
     std::vector<float> outChunked;
     int offset = 0;
     const int sizes[] = { 997, 512, 1920, 480, 2048, 3721, 48, 1920 };
@@ -205,7 +246,7 @@ TEST_CASE("PcmResampler: chunked streaming equals one-shot processing", "[audio]
 TEST_CASE("PcmResampler: the 4:1 cascades work in both directions", "[audio][resampler]")
 {
     PcmResampler down;
-    REQUIRE(down.configure(96000, 24000));
+    REQUIRE(down.configure(96000, 24000, kTestMaxInFrames));
     const auto in96 = makeSine(19200, 96000.0, 1000.0);
     std::vector<float> out24;
     REQUIRE(runAll(down, in96, out24) == 4800);
@@ -213,7 +254,7 @@ TEST_CASE("PcmResampler: the 4:1 cascades work in both directions", "[audio][res
     CHECK(goertzel(out24, 24000.0, 12000.0) < 6e-3); // 84k input tone aliases to 12k: filtered
 
     PcmResampler up;
-    REQUIRE(up.configure(24000, 96000));
+    REQUIRE(up.configure(24000, 96000, kTestMaxInFrames));
     std::vector<float> dcIn (1200, 0.5f);
     std::vector<float> dcOut;
     REQUIRE(runAll(up, dcIn, dcOut) == 4800);
@@ -223,7 +264,7 @@ TEST_CASE("PcmResampler: the 4:1 cascades work in both directions", "[audio][res
 TEST_CASE("PcmResampler: identity passes samples through untouched", "[audio][resampler]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(24000, 24000));
+    REQUIRE(r.configure(24000, 24000, kTestMaxInFrames));
     std::vector<float> in { 0.1f, -0.2f, 0.3f, 0.0f, 1.0f, -1.0f };
     std::vector<float> out (static_cast<std::size_t>(PcmResampler::maxOutputFor(6)));
     REQUIRE(r.process(in.data(), 6, out.data(), static_cast<int>(out.size())) == 6);
@@ -236,7 +277,7 @@ TEST_CASE("PcmResampler: undersized output capacity is refused, not overrun",
           "[audio][resampler][robustness]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(24000, 48000));
+    REQUIRE(r.configure(24000, 48000, kTestMaxInFrames));
     std::vector<float> in (1000, 0.1f);
     std::vector<float> out (1000); // below maxOutputFor(1000)
     CHECK(r.process(in.data(), 1000, out.data(), 1000) == -1);
@@ -255,7 +296,7 @@ TEST_CASE("PcmResampler: undersized output capacity is refused, not overrun",
 TEST_CASE("PcmResampler: 44.1k->24k passes the speech band at unity", "[audio][resampler][rational]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(44100, 24000));
+    REQUIRE(r.configure(44100, 24000, kTestMaxInFrames));
 
     const auto in = makeSine(44100, 44100.0, 1000.0); // one second
     std::vector<float> out;
@@ -269,7 +310,7 @@ TEST_CASE("PcmResampler: 44.1k->24k passes the speech band at unity", "[audio][r
 TEST_CASE("PcmResampler: 44.1k->24k suppresses the band that would alias", "[audio][resampler][rational]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(44100, 24000));
+    REQUIRE(r.configure(44100, 24000, kTestMaxInFrames));
 
     // A 16 kHz tone at the 44.1k input sits above the new Nyquist; unfiltered,
     // decimation would land it near 8.7 kHz in the 24k view. It must not survive.
@@ -283,7 +324,7 @@ TEST_CASE("PcmResampler: 44.1k->24k suppresses the band that would alias", "[aud
 TEST_CASE("PcmResampler: 24k->44.1k keeps DC and rejects images", "[audio][resampler][rational]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(24000, 44100));
+    REQUIRE(r.configure(24000, 44100, kTestMaxInFrames));
 
     { // DC: every polyphase row is normalised to unity, so a held value holds.
         std::vector<float> in (2400, 0.25f);
@@ -311,7 +352,7 @@ TEST_CASE("PcmResampler: 24k->44.1k keeps DC and rejects images", "[audio][resam
 TEST_CASE("PcmResampler: 88.2k->24k keeps 1 kHz and stops 20 kHz", "[audio][resampler][rational]")
 {
     PcmResampler r;
-    REQUIRE(r.configure(88200, 24000));   // the 147/40 ratio
+    REQUIRE(r.configure(88200, 24000, kTestMaxInFrames));   // the 147/40 ratio
 
     const auto pass = makeSine(88200, 88200.0, 1000.0);
     std::vector<float> out;
@@ -321,7 +362,7 @@ TEST_CASE("PcmResampler: 88.2k->24k keeps 1 kHz and stops 20 kHz", "[audio][resa
     CHECK(rms(out, 600) == Catch::Approx(0.7071).epsilon(0.05));
 
     PcmResampler r2;
-    REQUIRE(r2.configure(88200, 24000));
+    REQUIRE(r2.configure(88200, 24000, kTestMaxInFrames));
     const auto stop = makeSine(88200, 88200.0, 20000.0, 0.9);
     std::vector<float> out2;
     runAll(r2, stop, out2);
@@ -337,14 +378,14 @@ TEST_CASE("PcmResampler: rational chunked streaming equals one-shot, and reset r
     for (const auto pair : std::vector<std::pair<int, int>> { { 44100, 24000 }, { 24000, 88200 } })
     {
         PcmResampler whole;
-        REQUIRE(whole.configure(pair.first, pair.second));
+        REQUIRE(whole.configure(pair.first, pair.second, kTestMaxInFrames));
         const auto in = makeSine(9000, static_cast<double>(pair.first), 1000.0);
         std::vector<float> outWhole;
         const int nWhole = runAll(whole, in, outWhole);
         REQUIRE(nWhole > 0);
 
         PcmResampler chunked;
-        REQUIRE(chunked.configure(pair.first, pair.second));
+        REQUIRE(chunked.configure(pair.first, pair.second, kTestMaxInFrames));
         std::vector<float> outChunked;
         int offset = 0;
         const int sizes[] = { 777, 512, 1613, 480, 2048, 3721, 48, 841 };

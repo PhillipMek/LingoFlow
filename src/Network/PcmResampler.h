@@ -43,9 +43,16 @@ public:
     /// Nothing else - 32000 Hz or 22050 <-> 24000 are refused by design.
     static bool isSupportedPair(int inputRate, int outputRate) noexcept;
 
-    /// Configures the stage cascade. Returns false for an unsupported pair and
-    /// leaves the object untouched.
-    bool configure(int inputRate, int outputRate);
+    /// Configures the stage cascade and preallocates every buffer the
+    /// streaming path will ever need for chunks up to maxInFrames input
+    /// frames (the caller's cadence bound - the sender's chunk size on the
+    /// input side, the inbound audio-delta ceiling on the output side).
+    /// Returns false for an unsupported pair or a non-positive maxInFrames
+    /// and leaves the object untouched. After a successful call process()
+    /// never allocates: its noexcept is a promise, not an accident (code
+    /// review P2, 2026-10-06 - a bad_alloc on the network worker must not
+    /// terminate the show).
+    bool configure(int inputRate, int outputRate, int maxInFrames);
 
     /// Drops the filter history (new session - a reopened session must not
     /// inherit filter state from the old one).
@@ -61,7 +68,8 @@ public:
 
     /// Consumes inFrames floats and writes converted frames into out. Returns
     /// the number written, or -1 if outCapacity is smaller than maxOutputFor
-    /// (caller bug, not a data condition).
+    /// or inFrames exceeds the maxInFrames configure() was given (caller bug,
+    /// not a data condition - both refusals keep the buffers honest).
     int process(const float* in, int inFrames, float* out, int outCapacity) noexcept;
 
 private:
@@ -90,6 +98,7 @@ private:
 
     int inputRate_ = 0;
     int outputRate_ = 0;
+    int maxInFrames_ = 0;    ///< the cadence bound configure() preallocated for
     int downStages_ = 0;
     int upStages_ = 0;
 

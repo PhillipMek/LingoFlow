@@ -270,8 +270,14 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
         queueCapacityFrames_ = static_cast<int>(cap < 1 ? 1 : (cap > 2'000'000'000LL ? 2'000'000'000LL : cap));
     }
 
-    inputResampler_.configure(request_.inputSampleRate, kWireSampleRate);
-    outputResampler_.configure(kWireSampleRate, request_.outputSampleRate);
+    // The cadence bounds (code review P2, 2026-10-06): the sender feeds the
+    // input resampler exactly chunkInputFrames_ at a time, and the receiver
+    // never hands the output resampler more than one inbound audio delta -
+    // kMaxAudioDeltaBytes of PCM16. configure() preallocates against these
+    // two numbers, which makes the streaming path's noexcept honest.
+    inputResampler_.configure(request_.inputSampleRate, kWireSampleRate, chunkInputFrames_);
+    outputResampler_.configure(kWireSampleRate, request_.outputSampleRate,
+                               static_cast<int>(kMaxAudioDeltaBytes / 2));
     inputResampler_.reset();
     outputResampler_.reset();
 

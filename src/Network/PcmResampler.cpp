@@ -125,9 +125,9 @@ void PcmResampler::resetRationalStream()
     absOut_ = 0;
 }
 
-bool PcmResampler::configure(int inputRate, int outputRate)
+bool PcmResampler::configure(int inputRate, int outputRate, int maxInFrames)
 {
-    if (!isSupportedPair(inputRate, outputRate))
+    if (!isSupportedPair(inputRate, outputRate) || maxInFrames < 1)
         return false;
 
     inputRate_ = inputRate;
@@ -148,6 +148,22 @@ bool PcmResampler::configure(int inputRate, int outputRate)
     if (rational_)
         configureRational(inputRate, outputRate);
 
+    // Preallocate the whole working set here, while allocation is allowed,
+    // so process() can keep its noexcept honestly (code review P2,
+    // 2026-10-06): the scratch only ever serves the two-stage cascades and
+    // only ever needs maxOutputFor(maxInFrames); the rational window holds
+    // at most the filter's retained history plus one chunk - the history is
+    // bounded by the lookahead (2 * kRationalHalf + a period's slack), and
+    // three tap-lengths of margin covers it generously. A chunk larger than
+    // the plan is refused by process(), never absorbed by a resize.
+    maxInFrames_ = maxInFrames;
+    const std::size_t scratchNeed = (downStages_ == 2 || upStages_ == 2)
+                                        ? static_cast<std::size_t>(maxOutputFor(maxInFrames))
+                                        : 0u;
+    scratch_.assign(scratchNeed, 0.0f);
+    if (rational_)
+        xin_.reserve(static_cast<std::size_t>(maxInFrames) + 3 * kRationalTaps);
+
     downs_.assign(static_cast<std::size_t>(downStages_), DownState {});
     ups_.assign(static_cast<std::size_t>(upStages_), UpState {});
     resetRationalStream();
@@ -160,7 +176,11 @@ void PcmResampler::reset() noexcept
         s = DownState {};
     for (UpState& s : ups_)
         s = UpState {};
-    resetRationalStream();   // a reopened session must not inherit the old stream's tail
+    // Only the rational object owns xin_ - and after a successful configure()
+    // its capacity already covers the zero-padding, so the assign inside
+    // cannot allocate and this noexcept stays honest (code review P2).
+    if (rational_)
+        resetRationalStream();   // a reopened session must not inherit the old stream's tail
 }
 
 int PcmResampler::maxOutputFor(int inFrames) noexcept
@@ -226,6 +246,11 @@ int PcmResampler::runUp(const float* in, int n, float* out, UpState& st) noexcep
 
 int PcmResampler::runRational(const float* in, int n, float* out) noexcept
 {
+    // The insert below cannot allocate: process() has refused n larger than
+    // maxInFrames_, configure() reserved maxInFrames + 3 * kRationalTaps, and
+    // the retained history never exceeds the filter's lookahead (the loop
+    // stops one output short of needing samples that have not arrived, and
+    // the erase at the bottom keeps at most ~2 * kRationalHalf + 1 of it).
     xin_.insert(xin_.end(), in, in + n);
     absIn_ += n;
 
@@ -270,6 +295,8 @@ int PcmResampler::process(const float* in, int inFrames, float* out, int outCapa
         return 0;
     if (inputRate_ == 0)
         return -1;
+    if (inFrames > maxInFrames_)
+        return -1;   // larger than the cadence configure() planned for
     if (outCapacity < maxOutputFor(inFrames))
         return -1;
 
@@ -278,15 +305,14 @@ int PcmResampler::process(const float* in, int inFrames, float* out, int outCapa
 
     int produced = inFrames;
 
-    if (inFrames > 0)
-    {
-        const int need = maxOutputFor(inFrames);
-        if (static_cast<int>(scratch_.size()) < need)
-            scratch_.resize(static_cast<std::size_t>(need));
-    }
-
     if (downStages_ == 2)
     {
+        // Belt and braces (code review P2): configure() sized the scratch to
+        // maxOutputFor(maxInFrames) and the inFrames guard above already holds,
+        // so this refusal is unreachable for configured objects - but it keeps
+        // the no-allocation promise local and greppable: no resize, ever.
+        if (static_cast<int>(scratch_.size()) < maxOutputFor(inFrames))
+            return -1;
         produced = runDown(in, inFrames, scratch_.data(), downs_[0]);
         produced = runDown(scratch_.data(), produced, out, downs_[1]);
         return produced;
@@ -295,6 +321,8 @@ int PcmResampler::process(const float* in, int inFrames, float* out, int outCapa
         return runDown(in, inFrames, out, downs_[0]);
     if (upStages_ == 2)
     {
+        if (static_cast<int>(scratch_.size()) < maxOutputFor(inFrames))
+            return -1;
         produced = runUp(in, inFrames, scratch_.data(), ups_[0]);
         produced = runUp(scratch_.data(), produced, out, ups_[1]);
         return produced;
