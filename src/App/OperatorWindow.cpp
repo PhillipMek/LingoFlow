@@ -76,6 +76,13 @@ juce::Slider& fader(juce::Slider& slider, double min, double max, double interva
     slider.setRange(min, max, interval);
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 74, 26);
+    // The screen scrolls with the wheel, and a cursor crossing a gain fader on
+    // its way must never ride that scroll into the live audio path: JUCE's
+    // own rule - with the wheel disabled the Slider hands the event back to
+    // the parent (the viewport), so scrolling keeps working and the gain
+    // stays exactly where the operator left it. Drag, click and keyboard on
+    // the fader are untouched.
+    slider.setScrollWheelEnabled(false);
     slider.setColour(juce::Slider::backgroundColourId, ink::card);
     slider.setColour(juce::Slider::trackColourId, ink::blue.withAlpha(0.55f));
     slider.setColour(juce::Slider::thumbColourId, ink::textPrimary);

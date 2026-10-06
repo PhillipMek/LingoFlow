@@ -175,6 +175,12 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     const auto [gainMin, gainMax] = config::gainRange();
     slider(inputGainSlider_, gainMin, gainMax, 0.5, *audioPage_);
     slider(outputGainSlider_, gainMin, gainMax, 0.5, *audioPage_);
+    // Same rule as the main screen's faders (where it is set inside fader()):
+    // these gains are live, and a stray mouse wheel must never ride them.
+    // Deliberately only the gain pair - the other settings sliders are not
+    // live audio, and the task warns against a global wheel ban.
+    inputGainSlider_.setScrollWheelEnabled(false);
+    outputGainSlider_.setScrollWheelEnabled(false);
     hint(audioRestartHintLabel_,
          "Device, sample rate, buffer, channels and languages take effect on the next Start.",
          *audioPage_);
