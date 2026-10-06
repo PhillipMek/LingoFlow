@@ -28,12 +28,30 @@ struct QuietLog
     ~QuietLog() { log::resetForTests(); }
 };
 
-std::string counterValue(const OperatorPanel& panel, std::string_view label)
+std::string rowValue(const std::vector<std::pair<std::string, std::string>>& rows,
+                     std::string_view label)
 {
-    for (const auto& [name, value] : panel.counters)
+    for (const auto& [name, value] : rows)
     {
         if (name == label)
             return value;
+    }
+    return "<missing row>";
+}
+
+/// UI-01: the raw counters moved from the operator panel to the diagnostics
+/// surface; tests address them through that section now.
+std::string counterValue(ApplicationController& controller, std::string_view label)
+{
+    const DiagnosticsPanel panel = buildDiagnosticsPanel(controller);
+    for (const auto* section : { &panel.audioHealth, &panel.translationHealth, &panel.subtitles,
+                                 &panel.runtime })
+    {
+        for (const auto& [name, value] : *section)
+        {
+            if (name == label)
+                return value;
+        }
     }
     return "<missing row>";
 }
@@ -128,7 +146,7 @@ TEST_CASE("UiModel: the stopped panel states facts, not promises", "[app][ui][mo
     CHECK(panel.maxChannel == config::channelRange().second);
     CHECK(panel.jitterMaxMs == config::jitterBufferRange().second);
 
-    CHECK(counterValue(panel, "audio blocks") == "0");
+    CHECK(counterValue(controller, "audio blocks") == "0");
 }
 
 TEST_CASE("UiModel: a configured device the scan cannot see stays visible and labelled",
@@ -253,8 +271,8 @@ TEST_CASE("UiModel: meters and counters read the running pipeline", "[app][ui][m
     CHECK_FALSE(panel.outputMeter.signalPresent);
     CHECK(panel.outputMeter.peakDb <= -100.0f);
 
-    CHECK(counterValue(panel, "audio blocks") == "2");
-    CHECK(std::stoull(counterValue(panel, "underruns")) >= 2);   // silence is played, counted
+    CHECK(counterValue(controller, "audio blocks") == "2");
+    CHECK(std::stoull(counterValue(controller, "underruns")) >= 2);   // silence is played, counted
 
     // The clip latch is consumed by the build that shows it: one panel sees the
     // clip, the next (without a new one) shows the lamp dark - no stale red.
@@ -283,7 +301,8 @@ TEST_CASE("UiModel: the subtitle fields are the task 013 model, not a copy of so
     CHECK(panel.currentSubtitle.empty());
     REQUIRE(panel.subtitleHistory.size() == 1);
     CHECK(panel.subtitleHistory[0] == "Привет мир");
-    CHECK(panel.textSummary.find("final 1") != std::string::npos);
+    CHECK(rowValue(buildDiagnosticsPanel(controller).subtitles,
+                   "text partial/final/evicted/duplicates") == "1 / 1 / 0 / 0");
 
     controller.stop();
 }
@@ -401,6 +420,82 @@ TEST_CASE("UiModel: faulted is visible and the retry path is the operator's, not
     panel = buildOperatorPanel(controller, {});
     CHECK_FALSE(panel.faulted);
     CHECK(panel.canStart);                // operator's decision to try again
+
+    controller.stop();
+}
+
+TEST_CASE("UiModel UI-01: channel choices are discrete, named when the driver names them",
+          "[app][ui][model][channels]")
+{
+    // The pure builder first: names in -> exactly those channels, numbered
+    // one-based with the driver's own labels; no names -> generic numbering up
+    // to the schema bound that validate() uses - never a UI-invented maximum.
+    const std::vector<std::string> names = { "Main L", "", "Interpreter feed" };
+    const auto named = channelOptions(names, 128);
+    REQUIRE(named.size() == 3);
+    CHECK(named[0].value == "1");
+    CHECK(named[0].label == "1 - Main L");
+    CHECK(named[1].label == "Channel 2");           // a nameless driver slot stays honest
+    CHECK(named[2].label == "3 - Interpreter feed");
+
+    const auto generic = channelOptions({}, 6);
+    REQUIRE(generic.size() == 6);
+    CHECK(generic[0].label == "Channel 1");
+    CHECK(generic[5].value == "6");
+
+    // The ghost rule (same honesty as the devices list): a configured index
+    // outside the named series stays selectable and says what it is.
+    std::vector<UiOption> shortList = channelOptions(names, 128);
+    const int selected = selectChannelWithGhost(shortList, 40);
+    CHECK(selected == 3);
+    CHECK(shortList[3].value == "40");
+    CHECK(shortList[3].label.find("from settings") != std::string::npos);
+    CHECK(selectChannelWithGhost(shortList, 2) == 1);   // in range: no extra entry
+
+    // Through the panel: the default null device exposes no names, so the
+    // operator sees generic numbering plus the honest note.
+    QuietLog quiet;
+    ApplicationController controller;
+    const auto panel = buildOperatorPanel(controller, {});
+    CHECK_FALSE(panel.inputChannelChoices.empty());
+    CHECK(panel.inputChannelChoices[0].label.rfind("Channel 1", 0) == 0);
+    CHECK_FALSE(panel.channelNote.empty());
+    CHECK(panel.selectedInputChannel >= 0);   // the configured 1 is in the list
+    CHECK(panel.inputChannelChoices[static_cast<std::size_t> (panel.selectedInputChannel)].value
+          == "1");
+}
+
+TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to diagnostics",
+          "[app][ui][model][sections]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    REQUIRE(controller.start());
+    feedBlock(controller.engine(), 0.5f);
+
+    const auto panel = buildOperatorPanel(controller, {});
+    REQUIRE(panel.health.size() == 4);
+    CHECK(panel.health[0].first == "latency");
+    CHECK(panel.health[0].second.find("estimated") != std::string::npos);  // never a bare number
+    CHECK(panel.health[1].first == "jitter fill");
+    CHECK(panel.health[2].first == "underruns");
+    CHECK(panel.health[3].first == "reconnects");
+
+    const DiagnosticsPanel diag = buildDiagnosticsPanel(controller);
+    CHECK_FALSE(diag.audioHealth.empty());
+    CHECK_FALSE(diag.translationHealth.empty());
+    CHECK_FALSE(diag.subtitles.empty());
+    CHECK_FALSE(diag.latency.empty());
+    CHECK_FALSE(diag.runtime.empty());
+
+    // Relocated, not deleted: rows the old counter wall showed read the same.
+    CHECK(rowValue(diag.audioHealth, "audio blocks") == "1");
+    CHECK_FALSE(rowValue(diag.audioHealth, "malformed callbacks").empty());
+    CHECK(rowValue(diag.subtitles, "NDI state") == std::string(nameOf(ndi::OutputState::disabled)));
+
+    // Runtime facts stay runtime facts: the stopped-with-null-store sentence.
+    CHECK(rowValue(diag.runtime, "application") == "running");
+    CHECK_FALSE(rowValue(diag.runtime, "API key").empty());
 
     controller.stop();
 }

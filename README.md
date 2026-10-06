@@ -28,7 +28,7 @@ timed-text subtitle output behind the contract (task 016), the bounded event rin
 the structured diagnostics export (task 017), the honest
 latency accounting with per-row kinds and no measured numbers in code (task 018), the
 developer & mock mode that runs the whole core without SoundGrid and without an API key
-(task 019), and 338 tests.
+(task 019), and 344 tests.
 The OpenAI backend (`task 009`) codes against the protocol verified from the live official
 documentation and frozen in `docs/openai-realtime-protocol.md`, spot-checked against the
 real service on 2026-10-02 (dedicated `gpt-realtime-translate` endpoint, complete event
@@ -98,7 +98,7 @@ Tests are configured by default; add `-DLIVEAI_BUILD_TESTS=OFF` to skip them.
 
 ## Run tests
 
-342 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
+344 CTest entries: Catch2 unit suites (including the gain-stage and translation-contract
 suites, the task 009 base64 / PCM-resampler / OpenAI-protocol-and-lifecycle suites that
 run the backend against a scripted offline transport, the task 010 reconnect-supervisor
 suite that drives recovery against a threaded mock, the task 011 language-registry
@@ -525,23 +525,36 @@ ever reaches them (SPEC "Text"):
 * task 014's UI reads exactly one type here: `TextPipeline::snapshot()` - the open line,
   the bounded history and the counters that say what was ignored and why.
 
-## The operator UI (task 014)
+## The operator UI (task 014, information architecture by UI-01)
 
 The window is thin by construction - three parts, each in the place that owns it:
 
 * `src/App/UiModel.{h,cpp}` (portable core): `buildOperatorPanel(controller, note)` turns
-  the controller's public reads into everything the screen shows - state words, selector
-  lists (registry languages, schema rates and ranges, cached device scan), meter views,
-  counter rows, the subtitle model, and a latency line that names itself as buffer
-  arithmetic with translation explicitly NOT included. Tested headless (9 cases) against
-  the real controller, including the refused device, refused pair, clamped gain and the
-  "configured device not in the scan stays visible, labelled" honesty rule.
-* `src/App/OperatorWindow.{h,cpp}` (JUCE app target): widgets, layout and a 100 ms repaint
-  timer over that panel. It owns no logic: every control either calls one controller
-  method (`updateSettings`, `setGainsLive`, `clearFault`, `refreshDevices`, `start`,
-  `stop`...) or paints a panel value. Programmatic refresh is guarded so a tick can never
-  echo back as an operator action, sliders commit at the end of a drag (no disk writes
-  mid-glide), and ComboBoxes are rebuilt only when the list actually changed.
+  the controller's public reads into everything the operator screen shows, and
+  `buildDiagnosticsPanel(controller)` builds the engineering surface from the same reads -
+  two destinations, one source of truth, so the screens cannot tell two stories. The
+  operator panel carries the live-event hierarchy (UI-01): system status, routing with
+  **discrete channel choices** (`channelOptions`: the driver's own names once a device is
+  open, honest "Channel N" numbering before that, never a fader for an index), paired
+  input/output meters and gains, the language pair with its live text, and a four-fact
+  health strip whose latency row says "estimated" out loud. The raw counter wall, the
+  full 018 accounting and the text-pipeline summary moved to the diagnostics panel -
+  relocated, never deleted. Tested headless against the real controller, including the
+  refused device, refused pair, clamped gain and the "configured device not in the scan
+  stays visible, labelled" honesty rule (its channel-list twin included).
+* `src/App/OperatorWindow.{h,cpp}`, `src/App/SettingsWindow.{h,cpp}` and
+  `src/App/DiagnosticsWindow.{h,cpp}` (JUCE app target; shared widget helpers in
+  `src/App/UiWidgets.h`): widgets, layout and repaint timers over those panels. The
+  operator screen is sectioned (SYSTEM STATUS / AUDIO / TRANSLATION / LIVE HEALTH) with
+  Diagnostics behind its own button - which also owns the Export-diagnostics receipt -
+  and the settings dialog is grouped into Audio, Credentials, Translation, Subtitles/NDI,
+  Diagnostics and an Advanced band last: developer/test mode and the unsupported
+  instructions field live there, away from everyday setup. It owns no logic: every
+  control either calls one controller method (`updateSettings`, `setGainsLive`,
+  `clearFault`, `refreshDevices`, `start`, `stop`...) or paints a panel value.
+  Programmatic refresh is guarded so a tick can never echo back as an operator action,
+  sliders commit at the end of a drag (no disk writes mid-glide), and ComboBoxes are
+  rebuilt only when the list actually changed.
 * controller seams added for the UI, all of them orchestrations of existing subsystems:
   the device-lister seam (the same pattern as the backend factory - platform knowledge
   arrives as a function, the core caches only its result), `clearFault` (retry is the

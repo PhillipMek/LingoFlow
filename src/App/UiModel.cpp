@@ -163,6 +163,27 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     panel.maxChannel = channelMax;
     (void)channelMin;   // one-based is structural; the UI clamps at the bounds validate uses
 
+    // --------------------------------------------------------- channel choices
+    // Discrete by nature (UI-01): the opened device's own names if there are
+    // any, generic numbering until a device has been opened once. The ghost
+    // rule repeats the device list's honesty: a configured index the current
+    // series does not cover stays visible and labelled, never silently
+    // dropped - even though the next Start will refuse it if the device says
+    // so.
+    {
+        const audio::DeviceCapabilities caps =
+            controller.audioBackend() != nullptr ? controller.audioBackend()->capabilities()
+                                                 : audio::DeviceCapabilities{};
+        panel.inputChannelChoices = channelOptions(caps.inputChannelNames, channelMax);
+        panel.outputChannelChoices = channelOptions(caps.outputChannelNames, channelMax);
+        panel.selectedInputChannel = selectChannelWithGhost(panel.inputChannelChoices,
+                                                            cfg.audio.inputChannel);
+        panel.selectedOutputChannel = selectChannelWithGhost(panel.outputChannelChoices,
+                                                             cfg.audio.outputChannel);
+        if (caps.inputChannelNames.empty() && caps.outputChannelNames.empty())
+            panel.channelNote = "generic numbering - channel names appear after the device is opened once";
+    }
+
     // ------------------------------------------------------------ live knobs
     panel.gainMinDb = gainMin;
     panel.gainMaxDb = gainMax;
@@ -210,33 +231,28 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
 
     const auto diag = controller.diagnostics().snapshot();
 
-    // The 018 accounting rides the same panel as everything else - the screen and
-    // the export render one function's rows, so they cannot tell two stories.
-    panel.latencyRows = latencyAccounting(engine, controller.audioBackend(), diag, cfg);
-
-    panel.counters = {
-        { "audio blocks", formatCount(diag.audioBlocks) },
-        { "underruns", formatCount(diag.underruns) },
-        { "overruns", formatCount(diag.overruns) },
-        { "ring dropped (samples)", formatCount(engine.inputRingDroppedSamples()) },
-        { "text dispatch dropped", formatCount(controller.textPipeline().droppedEvents()) },
-        { "capture submitted", formatCount(diag.translationSubmittedFrames) },
-        { "capture gap-refused", formatCount(diag.translationGapFrames) },
-        { "translated audio frames", formatCount(diag.translatedAudioFrames) },
-        { "rejected (wrong rate)", formatCount(diag.rejectedAudioFrames) },
-        { "dropped (buffer full)", formatCount(diag.translatedAudioDroppedFrames) },
-        { "clip samples in / out", formatCount(engine.inputClippedSamples())
-                                      + " / " + formatCount(engine.outputGainClippedSamples()) },
-        { "translation errors (fatal)", formatCount(diag.translationErrors)
-                                            + " (" + formatCount(diag.translationFatalErrors) + ")" },
-        { "reconnects", formatCount(diag.reconnects) },
-        { "jitter fill", std::format("{:.0f} ms",
-                                     engine.sampleRate() > 0
-                                         ? engine.jitterFillFrames() * 1000.0 / static_cast<double>(engine.sampleRate())
-                                         : 0.0) },
-        { "malformed callbacks", formatCount(engine.malformedCallbacks()) },
-        { "NDI errors", formatCount(diag.ndiErrors) },
-    };
+    // UI-01: the operator's live strip carries four scannable facts. The full
+    // 018 accounting and the raw counters did not disappear - they moved to
+    // buildDiagnosticsPanel(), and both surfaces read the same functions, so
+    // the screen and the Diagnostics window cannot tell two stories. Every
+    // value keeps the unit and the origin its builder documented; "estimated"
+    // is spelled out because an unlabeled number invites being read as a
+    // measurement (AGENTS.md 19).
+    {
+        const LatencyEstimate buffers = estimateBufferDelay(engine, cfg);
+        panel.health = {
+            { "latency", buffers.blockMs > 0
+                             ? std::format("~{} ms estimated (buffers only)", buffers.totalMs)
+                             : std::string("unknown") },
+            { "jitter fill", std::format("{:.0f} ms",
+                                         engine.sampleRate() > 0
+                                             ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
+                                                   / static_cast<double>(engine.sampleRate())
+                                             : 0.0) },
+            { "underruns", formatCount(diag.underruns) },
+            { "reconnects", formatCount(diag.reconnects) },
+        };
+    }
 
     const auto text = controller.textPipeline().snapshot();
     panel.currentSubtitle = text.currentLine;
@@ -244,14 +260,141 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     for (const auto& event : controller.textPipeline().recentHistory(kSubtitleHistoryTail))
         panel.subtitleHistory.push_back(event.text);
 
-    panel.textSummary = std::format("partial {} - final {} - evicted {} - duplicates {}",
-                                    controller.textPipeline().partialEvents(),
-                                    controller.textPipeline().finalEvents(),
-                                    controller.textPipeline().evictedLines(),
-                                    controller.textPipeline().ignoredDuplicates());
-
     panel.actionNote = actionNote;
     return panel;
+}
+
+// --------------------------------------------------------------- diagnostics face
+//
+// UI-01: the same reads the operator panel uses, sectioned for the engineering
+// surface. Row text is kept byte-for-byte where an older surface had a row (the
+// export and the tests recognize them); the sections only decide where a human
+// sees them. Nothing here computes a new number - every value already existed
+// as a counter, a snapshot field or the 018 accounting.
+
+DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
+{
+    DiagnosticsPanel panel;
+    AudioEngine& engine = controller.engine();
+    const AppConfig& cfg = controller.config().current();
+    const auto diag = controller.diagnostics().snapshot();
+    const AppStatus status = controller.status();
+    const audio::DeviceCapabilities caps =
+        controller.audioBackend() != nullptr ? controller.audioBackend()->capabilities()
+                                             : audio::DeviceCapabilities{};
+
+    panel.audioHealth = {
+        { "sample rate", engine.sampleRate() > 0
+                             ? std::to_string(engine.sampleRate()) + " Hz"
+                             : std::string("no device running (settings: ")
+                                   + std::to_string(cfg.audio.sampleRate) + " Hz)" },
+        { "buffer", engine.bufferFrames() > 0
+                        ? std::to_string(engine.bufferFrames()) + " frames"
+                        : std::string("no device running (settings: ")
+                              + std::to_string(cfg.audio.bufferFrames) + ")" },
+        { "audio blocks", formatCount(diag.audioBlocks) },
+        { "underruns", formatCount(diag.underruns) },
+        { "overruns", formatCount(diag.overruns) },
+        { "ring dropped (samples)", formatCount(engine.inputRingDroppedSamples()) },
+        { "output silence (samples)", formatCount(engine.outputSilenceSamples()) },
+        { "clip samples in / out", formatCount(engine.inputClippedSamples())
+                                      + " / " + formatCount(engine.outputGainClippedSamples()) },
+        { "malformed callbacks", formatCount(engine.malformedCallbacks()) },
+        { "oversized callbacks", formatCount(engine.oversizedCallbacks()) },
+        { "jitter fill", std::format("{:.0f} ms",
+                                     engine.sampleRate() > 0
+                                         ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
+                                               / static_cast<double>(engine.sampleRate())
+                                         : 0.0) },
+    };
+
+    panel.translationHealth = {
+        { "session", std::string(translation::nameOf(status.session)) },
+        { "capture submitted", formatCount(diag.translationSubmittedFrames) },
+        { "capture gap-refused", formatCount(diag.translationGapFrames) },
+        { "translated audio frames", formatCount(diag.translatedAudioFrames) },
+        { "rejected (wrong rate)", formatCount(diag.rejectedAudioFrames) },
+        { "dropped (buffer full)", formatCount(diag.translatedAudioDroppedFrames) },
+        { "translation errors (fatal)", formatCount(diag.translationErrors)
+                                            + " (" + formatCount(diag.translationFatalErrors) + ")" },
+        { "reconnects", formatCount(diag.reconnects) },
+    };
+
+    const translation::TextPipeline& text = controller.textPipeline();
+    const ndi::INdiOutput* ndi = controller.ndiOutput();
+
+    panel.subtitles = {
+        { "NDI state", std::string(ndi::nameOf(status.ndi)) },
+        { "NDI published", formatCount(ndi != nullptr ? ndi->publishedFrames() : 0) },
+        { "NDI dropped", formatCount(ndi != nullptr ? ndi->droppedFrames() : 0) },
+        { "NDI transport errors", formatCount(ndi != nullptr ? ndi->publishErrors() : 0) },
+        { "NDI errors (counted)", formatCount(diag.ndiErrors) },
+        { "text partial/final/evicted/duplicates",
+          std::format("{} / {} / {} / {}", text.partialEvents(), text.finalEvents(),
+                      text.evictedLines(), text.ignoredDuplicates()) },
+        { "text dispatch delivered/dropped",
+          formatCount(text.deliveredEvents()) + " / " + formatCount(text.droppedEvents()) },
+    };
+
+    panel.latency = latencyAccounting(engine, controller.audioBackend(), diag, cfg);
+
+    const auto& plan = controller.developerPlan();
+
+    panel.runtime = {
+        { "application", std::string(nameOf(status.application)) },
+        { "audio backend", status.audioBackendName.empty() ? "none" : status.audioBackendName },
+        { "channels in use (in/out)", std::to_string(caps.inputChannels) + " / "
+                                      + std::to_string(caps.outputChannels) },
+        { "API key", controller.hasApiSecret() ? "stored" : std::string("NOT stored") },
+        { "secret store", controller.secretStoreName() },
+        { "developer plan", plan.badge.empty() ? std::string("production") : plan.badge },
+        { "status detail", status.detail.empty() ? "ok" : status.detail },
+    };
+
+    return panel;
+}
+
+std::vector<UiOption> channelOptions(const std::vector<std::string>& driverNames,
+                                     int schemaFallbackMax)
+{
+    std::vector<UiOption> options;
+
+    if (!driverNames.empty())
+    {
+        // The device said what it has: exactly those channels, numbered as the
+        // config numbers them (one-based), labelled with the driver's own name.
+        options.reserve(driverNames.size());
+        for (std::size_t i = 0; i < driverNames.size(); ++i)
+        {
+            const std::string number = std::to_string(i + 1);
+            const std::string& name = driverNames[i];
+            options.push_back({ number,
+                                name.empty() ? "Channel " + number : number + " - " + name });
+        }
+        return options;
+    }
+
+    // Nothing opened yet: the schema's validated bound is the honest ceiling,
+    // not an invention of this file (the same constant validate() refuses at).
+    const int count = schemaFallbackMax > 0 ? schemaFallbackMax : 1;
+    options.reserve(static_cast<std::size_t>(count));
+    for (int i = 1; i <= count; ++i)
+        options.push_back({ std::to_string(i), "Channel " + std::to_string(i) });
+    return options;
+}
+
+int selectChannelWithGhost(std::vector<UiOption>& options, int configuredChannel)
+{
+    const std::string value = std::to_string(configuredChannel);
+    for (std::size_t i = 0; i < options.size(); ++i)
+    {
+        if (options[i].value == value)
+            return static_cast<int>(i);
+    }
+
+    options.push_back({ value,
+                        "Channel " + value + " (from settings; outside this device)" });
+    return static_cast<int>(options.size()) - 1;
 }
 
 std::vector<UiOption> logLevelChoices()

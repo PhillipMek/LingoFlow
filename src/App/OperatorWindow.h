@@ -11,14 +11,15 @@
 // audio. The updatingWidgets_ guard is why a programmatic refresh cannot echo
 // back as an operator action.
 //
-// Option lists (devices, languages, rates) live only as caches mirrored from
+// Option lists (devices, languages, channels) live only as caches mirrored from
 // the panel - the window holds no list of its own, so there is nothing that
 // could drift out of sync with the registry or the schema.
 //
 // Slider wiring (this JUCE version exposes onValueChange/onDragStart/onDragEnd):
-// dragging fires the LIVE call only (no disk); the commit that validates and
-// persists happens once at drag end - or immediately for a typed text value,
-// which arrives while no drag is active.
+// only the gains remain sliders on this screen - dragging fires the LIVE call
+// only (no disk); the commit that validates and persists happens once at drag
+// end - or immediately for a typed text value, which arrives while no drag is
+// active. Channels are discrete combo choices; they commit directly on change.
 
 #include <functional>
 #include <string>
@@ -31,7 +32,8 @@
 
 namespace liveai {
 
-class SettingsWindow;   // the task 015 dialog, owned while hidden and shown
+class SettingsWindow;      // the task 015 dialog, owned while hidden and shown
+class DiagnosticsWindow;   // the UI-01 engineering surface, same ownership rule
 
 /// A horizontal peak/RMS meter with a clipping lamp. Pure paint: it receives a
 /// UiMeterView and draws it; it owns no audio state.
@@ -47,8 +49,14 @@ private:
     UiMeterView view_;
 };
 
-/// The operator screen itself. Owned as the content component of OperatorWindow;
-/// it lays itself out (the JUCE 9 way) and polls the UiModel on a timer.
+/// The operator screen itself: the UI-01 information architecture. Header ->
+/// system status -> audio (routing, channels, meters, gains, mutes) ->
+/// translation (pair, live text) -> compact live health -> commands. Raw
+/// counters, the full latency accounting and the engineering text summary
+/// moved to the Diagnostics window; sample rate, buffer size and jitter
+/// pre-roll - set before a show, not during one - moved to Settings.
+/// Owned as the content component of OperatorWindow; it lays itself out (the
+/// JUCE 9 way) and polls the UiModel on a timer.
 class OperatorContent final : public juce::Component, private juce::Timer
 {
 public:
@@ -72,18 +80,14 @@ private:
     void startPressed();
     void stopPressed();
     void settingsPressed();
-    void exportPressed();
+    void diagnosticsPressed();
     void refreshDevicesPressed();
     void deviceSelected();
     void sourceSelected();
     void targetSelected();
-    void rateSelected();
-    void bufferChanged();
     void channelChanged();
     void gainMoved();
     void gainCommit();
-    void jitterMoved();
-    void jitterCommit();
     void muteToggled();
 
     /// Copy current settings, mutate, and push through controller.updateSettings;
@@ -96,56 +100,62 @@ private:
     ApplicationController& controller_;
     std::string actionNote_;
 
-    // ---------------------------------------------------------- header/status
+    // ---------------------------------------------------------------- header
     juce::Label titleLabel_;
     juce::TextButton startButton_ { "Start" };
     juce::TextButton stopButton_ { "Stop" };
     juce::TextButton settingsButton_ { "Settings..." };
-    juce::TextButton exportButton_ { "Export diagnostics" };
+    juce::TextButton diagnosticsButton_ { "Diagnostics..." };
+    juce::Label devBadge_;   ///< task 019: the developer-mode band, invisible in production
+
+    // ---------------------------------------------------------- system status
+    juce::Label statusHeader_;
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
     juce::Label detailLabel_;
-    juce::Label devBadge_;   ///< task 019: the developer-mode band, invisible in production
     juce::Label credentialLabel_;
 
-    // ---------------------------------------------------------- settings column
+    // ------------------------------------------------------------------ audio
+    juce::Label audioHeader_;
     juce::Label deviceCaption_, deviceNoteLabel_;
     juce::ComboBox deviceChoice_;
     juce::TextButton refreshDevicesButton_ { "Refresh devices" };
-    juce::Label rateCaption_;
-    juce::ComboBox rateChoice_;
-    juce::Label bufferCaption_;
-    juce::Slider bufferSlider_;
-    juce::Label inputChannelCaption_, outputChannelCaption_;
-    juce::Slider inputChannelSlider_, outputChannelSlider_;
-    juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
-    juce::ComboBox sourceChoice_, targetChoice_;
+    /// Discrete by nature (UI-01 §4): channel is an index, so it gets a list,
+    /// not a fader - the slider could be parked between two channels.
+    juce::Label inputChannelCaption_, outputChannelCaption_, channelNoteLabel_;
+    juce::ComboBox inputChannelChoice_, outputChannelChoice_;
 
-    // ---------------------------------------------------------- meters column
     juce::Label inputMeterCaption_, outputMeterCaption_;
     MeterBar inputMeter_, outputMeter_;
-    juce::Slider inputGainSlider_, outputGainSlider_, jitterSlider_;
-    juce::Label jitterCaption_;
+    juce::Slider inputGainSlider_, outputGainSlider_;
     juce::Label appliedInputLabel_, appliedOutputLabel_;
     juce::TextButton inputMuteButton_ { "MUTE IN" };
     juce::TextButton outputMuteButton_ { "MUTE OUT" };
-    juce::Label latencyLabel_;
 
-    // ---------------------------------------------------------- readout column
-    juce::Label countersLabel_;
-    juce::Label subtitleCaption_, currentSubtitleLabel_, historyLabel_, textSummaryLabel_;
+    // ------------------------------------------------------------- translation
+    juce::Label translationHeader_;
+    juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
+    juce::ComboBox sourceChoice_, targetChoice_;
+    juce::Label subtitleCaption_, currentSubtitleLabel_, historyLabel_;
+
+    // -------------------------------------------------------------- live health
+    juce::Label healthHeader_;
+    juce::Label latencyLabel_, healthLabel_;
+
     juce::Label noteLabel_;
 
     // Option caches: the window's only lists, mirrored from the panel.
-    std::vector<UiOption> deviceCache_, sourceCache_, targetCache_, rateCache_;
+    std::vector<UiOption> deviceCache_, sourceCache_, targetCache_;
+    std::vector<UiOption> inputChannelCache_, outputChannelCache_;
 
     /// The task 015 dialog: created on first open, hidden on close, always
     /// re-read before it is shown again - the settings funnel stays singular.
     std::unique_ptr<SettingsWindow> settingsWindow_;
 
+    /// The UI-01 diagnostics surface, same lifetime rule.
+    std::unique_ptr<DiagnosticsWindow> diagnosticsWindow_;
+
     bool updatingWidgets_ = false;
     bool gainDragging_ = false;
-    bool jitterDragging_ = false;
-    bool geometryDragging_ = false;   ///< buffer + channels share the commit-at-release rule
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OperatorContent)
 };

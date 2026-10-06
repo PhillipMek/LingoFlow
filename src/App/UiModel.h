@@ -88,10 +88,21 @@ struct OperatorPanel
     int selectedSampleRate = -1;       ///< index into sampleRates
     int bufferFrames = 0;
     int bufferMinFrames = 0;           ///< the schema's own range, exported so the
-    int bufferMaxFrames = 0;           ///< slider cannot offer a refused value
-    int inputChannel = 1;
-    int outputChannel = 1;
+    int bufferMaxFrames = 0;           ///< selector cannot offer a refused value
     int maxChannel = 128;              ///< same source as validate()'s bound
+
+    // ------------------------------------------------- channel selections
+    // UI-01: channel is an INDEX - the main screen offers it as a discrete choice
+    // list, never as a fader that could be parked between two channels. The
+    // driver's own names drive the labels while a device is open; generic
+    // "Channel N" numbering is used otherwise, and it says so (channelNote).
+    std::vector<UiOption> inputChannelChoices;
+    std::vector<UiOption> outputChannelChoices;
+    int selectedInputChannel = -1;     ///< index into the choices, ghost included
+    int selectedOutputChannel = -1;
+    std::string channelNote;           ///< why the numbering is generic; empty = named
+    int inputChannel = 1;              ///< the config truth, as text-in-list order too
+    int outputChannel = 1;
 
     // ------------------------------------------------------------ live knobs
     float gainMinDb = 0.0f;            ///< config gainRange(): the UI never owns a window
@@ -107,16 +118,34 @@ struct OperatorPanel
     UiMeterView inputMeter;
     UiMeterView outputMeter;
 
-    // ----------------------------------------------------------- readouts
-    std::string latencySummary;
-    std::vector<LatencyRow> latencyRows;   ///< the full 018 accounting, input -> audience
-    std::vector<std::pair<std::string, std::string>> counters;
+    // --------------------------------------------------------- live readouts
+    // UI-01 shrank this to the operator's four scannable facts; the full 018
+    // accounting and every raw counter live on in DiagnosticsPanel below,
+    // rendered by the Diagnostics window. Relocated, never deleted.
+    std::string latencySummary;        ///< the honest one-sentence buffer estimate
+    std::vector<std::pair<std::string, std::string>> health;
+                                       ///< latency/jitter/underruns/reconnects, compact
 
     std::string currentSubtitle;               ///< the open line from task 013
     std::vector<std::string> subtitleHistory;  ///< tail, oldest first
-    std::string textSummary;                   ///< partial/final/evicted in one line
 
     std::string actionNote;                    ///< last updateSettings outcome, or empty
+};
+
+/// The engineering face of the same truth (UI-01 information architecture):
+/// everything the main screen stopped showing. Built from the same controller
+/// reads and the same formatting functions as the operator panel - the two
+/// surfaces cannot tell two stories, they only decide who has to look.
+/// Sections follow the task's diagnostics design: audio health, translation
+/// health, subtitles (NDI + text pipeline), the full latency accounting with
+/// its kinds (measured/estimated/absent stay distinguished), and runtime facts.
+struct DiagnosticsPanel
+{
+    std::vector<std::pair<std::string, std::string>> audioHealth;
+    std::vector<std::pair<std::string, std::string>> translationHealth;
+    std::vector<std::pair<std::string, std::string>> subtitles;
+    std::vector<LatencyRow> latency;
+    std::vector<std::pair<std::string, std::string>> runtime;
 };
 
 /// How many history lines the panel carries to the window. A display depth,
@@ -179,5 +208,25 @@ std::vector<LatencyRow> latencyAccounting(const AudioEngine& engine,
 /// consumer, and a poll that did not take them would show a clip from five
 /// minutes ago as if it were now.
 OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::string& actionNote);
+
+/// The diagnostics surface's counterpart, from the same public reads (UI-01).
+/// The windows never duplicate the row-building: this is where relocated
+/// engineering information lives now, and the Diagnostics window only paints it.
+DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller);
+
+/// The discrete channel series for the selector (UI-01): `driverNames` are the
+/// opened device's own labels - when present the list is exactly the channels
+/// this device exposes, "1 - name" per entry, no invented maximum. An empty
+/// `driverNames` means no device has been opened in this session, and the list
+/// falls back to generic "Channel N" numbering up to the schema's validated
+/// bound. Values are the one-based indices the config stores.
+std::vector<UiOption> channelOptions(const std::vector<std::string>& driverNames,
+                                     int schemaFallbackMax);
+
+/// The configured channel stays selectable even when the (driver-named) list is
+/// shorter than the stored index - the ghost keeps the honesty rule the devices
+/// list uses: never silently drop what the settings file says. Appends the ghost
+/// entry and returns the selection index for the list.
+int selectChannelWithGhost(std::vector<UiOption>& options, int configuredChannel);
 
 } // namespace liveai

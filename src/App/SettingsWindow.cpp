@@ -2,6 +2,7 @@
 
 #include <format>
 
+#include "App/UiWidgets.h"
 #include "Config/ConfigSchema.h"
 
 namespace liveai {
@@ -10,15 +11,6 @@ namespace {
 juce::Font uiFont(float height = 15.0f)
 {
     return juce::Font(juce::FontOptions().withHeight(height));
-}
-
-juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent)
-{
-    label.setFont(uiFont(12.0f));
-    label.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    label.setText(text, juce::NotificationType::dontSendNotification);
-    parent.addAndMakeVisible(label);
-    return label;
 }
 
 juce::Slider& slider(juce::Slider& s, double min, double max, double interval,
@@ -54,9 +46,27 @@ std::string presenceLine(ApplicationController& controller)
 SettingsContent::SettingsContent(ApplicationController& controller)
     : controller_(controller)
 {
-    // ------------------------------------------------------------- credentials
-    caption(credentialCaption_, "CREDENTIALS - stored in Windows secure storage, never in settings",
-           *this);
+    // ---------------------------------------------------------------- audio
+    // UI-01: sample rate and buffer size moved here from the operator window -
+    // restart fields that belong to the setup of a show, not to its middle.
+    ui::sectionHeader(audioHeader_, "AUDIO - device restart applies these", *this);
+
+    ui::caption(sampleRateCaption_, "Sample rate", *this);
+    addAndMakeVisible(sampleRateChoice_);   // part of the draft: Apply commits it
+
+    ui::caption(bufferCaption_, "Buffer size (frames)", *this);
+    const auto [bufferMin, bufferMax] = config::bufferFramesRange();
+    slider(bufferSlider_, bufferMin, bufferMax, 16, *this);
+
+    audioRestartHintLabel_.setFont(uiFont(11.0f));
+    audioRestartHintLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    audioRestartHintLabel_.setText("Device, sample rate, buffer, channels and languages apply on Start.",
+                                   juce::NotificationType::dontSendNotification);
+    addAndMakeVisible(audioRestartHintLabel_);
+
+    // ---------------------------------------------------------- credentials
+    ui::sectionHeader(credentialsHeader_,
+                      "CREDENTIALS - stored in Windows secure storage, never in settings", *this);
     credStatusLabel_.setFont(uiFont(14.0f));
     credStatusLabel_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
     addAndMakeVisible(credStatusLabel_);
@@ -76,13 +86,70 @@ SettingsContent::SettingsContent(ApplicationController& controller)
                           juce::NotificationType::dontSendNotification);
     addAndMakeVisible(keyHintLabel_);
 
-    // ------------------------------------------------------------- translation
+    // ---------------------------------------------------------- translation
+    ui::sectionHeader(translationHeader_, "TRANSLATION - recovery policy and buffers", *this);
+
     // The editor is READ-ONLY on purpose (code review P1, 2026-10-05): the
     // current model ignores this text (protocol docs section 12.1), and making
     // the operator author a setting that does nothing is a fake contract. The
     // value stays visible - older installs may carry text - and the hint says
-    // what the truth is.
-    caption(instructionsCaption_, "Translation instructions - unsupported by gpt-realtime-translate", *this);
+    // what the truth is. UI-01 moved the whole block to Advanced: an ignored
+    // field has no place in everyday setup.
+    reconnectToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(reconnectToggle_);
+
+    const auto [backoffMin, backoffMax] = config::reconnectBackoffRange();
+    ui::caption(initialBackoffCaption_, "First reconnect delay (ms)", *this);
+    slider(initialBackoffSlider_, backoffMin, backoffMax, 100, *this);
+
+    ui::caption(maxBackoffCaption_, "Maximum reconnect backoff (ms)", *this);
+    slider(maxBackoffSlider_, backoffMin, backoffMax, 100, *this);
+
+    const auto [ageMin, ageMax] = config::sessionMaxAgeRange();
+    ui::caption(sessionAgeCaption_, "Session max age (s; 0 disables the proactive reopen)", *this);
+    slider(sessionAgeSlider_, ageMin, ageMax, 60, *this);
+
+    ui::caption(modelHintCaption_, "Model hint (empty = backend default)", *this);
+    editor(modelHintEditor_, *this);
+
+    const auto [jitterMin, jitterMax] = config::jitterBufferRange();
+    ui::caption(jitterCaption_, "Jitter pre-roll (ms)", *this);
+    slider(jitterSlider_, jitterMin, jitterMax, 10, *this);
+
+    // ------------------------------------------------------- subtitles / NDI
+    ui::sectionHeader(subtitlesHeader_, "SUBTITLES / NDI", *this);
+    ui::caption(ndiCaption_, "NDI - timed text (TTML) metadata; receiver check is the venue run-sheet",
+                *this);
+    ndiToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(ndiToggle_);
+
+    ui::caption(streamNameCaption_, "NDI stream name", *this);
+    editor(streamNameEditor_, *this);
+
+    // ---------------------------------------------------------- diagnostics
+    ui::sectionHeader(diagnosticsHeader_, "DIAGNOSTICS", *this);
+    ui::caption(logLevelCaption_, "Log level", *this);
+    addAndMakeVisible(logLevelChoice_);   // part of the draft: Apply commits it
+    logFileToggle_.setClickingTogglesState(true);
+    addAndMakeVisible(logFileToggle_);
+
+    restartHintLabel_.setFont(uiFont(11.0f));
+    restartHintLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    restartHintLabel_.setText("Turning the log file on/off and recovery-policy edits take effect "
+                              "when the application restarts.",
+                              juce::NotificationType::dontSendNotification);
+    addAndMakeVisible(restartHintLabel_);
+
+    // ------------------------------------------------ advanced / developer mode
+    // UI-01: the developer band is the last thing on this screen and named for
+    // what it is; task 019's rule stays - off means nothing below does anything.
+    ui::sectionHeader(advancedHeader_,
+                      "ADVANCED - developer / test mode; unsupported fields; off is the real chain",
+                      *this);
+
+    ui::caption(instructionsCaption_,
+                "Translation instructions - unsupported by gpt-realtime-translate (kept for a future model)",
+                *this);
     instructionsEditor_.setMultiLine(true);
     instructionsEditor_.setScrollbarsShown(true);
     instructionsEditor_.setReadOnly(true);
@@ -98,74 +165,30 @@ SettingsContent::SettingsContent(ApplicationController& controller)
         juce::NotificationType::dontSendNotification);
     addAndMakeVisible(instructionsHintLabel_);
 
-    caption(modelHintCaption_, "Model hint (empty = backend default)", *this);
-    editor(modelHintEditor_, *this);
-
-    reconnectToggle_.setClickingTogglesState(true);
-    addAndMakeVisible(reconnectToggle_);
-
-    const auto [backoffMin, backoffMax] = config::reconnectBackoffRange();
-    caption(initialBackoffCaption_, "First reconnect delay (ms)", *this);
-    slider(initialBackoffSlider_, backoffMin, backoffMax, 100, *this);
-
-    caption(maxBackoffCaption_, "Maximum reconnect backoff (ms)", *this);
-    slider(maxBackoffSlider_, backoffMin, backoffMax, 100, *this);
-
-    const auto [ageMin, ageMax] = config::sessionMaxAgeRange();
-    caption(sessionAgeCaption_, "Session max age (s; 0 disables the proactive reopen)", *this);
-    slider(sessionAgeSlider_, ageMin, ageMax, 60, *this);
-
-    // --------------------------------------------------------------------- NDI
-    caption(ndiCaption_, "NDI - timed text (TTML) metadata; receiver check is the venue run-sheet",
-            *this);
-    ndiToggle_.setClickingTogglesState(true);
-    addAndMakeVisible(ndiToggle_);
-
-    caption(streamNameCaption_, "NDI stream name", *this);
-    editor(streamNameEditor_, *this);
-
-    // -------------------------------------------------------------- diagnostics
-    caption(logLevelCaption_, "Log level", *this);
-    addAndMakeVisible(logLevelChoice_);   // part of the draft: Apply commits it
-    logFileToggle_.setClickingTogglesState(true);
-    addAndMakeVisible(logFileToggle_);
-
-    restartHintLabel_.setFont(uiFont(11.0f));
-    restartHintLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    restartHintLabel_.setText("Turning the log file on/off and recovery-policy edits take effect "
-                              "when the application restarts.",
-                              juce::NotificationType::dontSendNotification);
-    addAndMakeVisible(restartHintLabel_);
-
-    // ------------------------------------------------------- developer mode (019)
-    caption(developerCaption_,
-            "DEVELOPER / MOCK MODE - off is the real chain; while off, nothing below does anything",
-            *this);
-
     developerToggle_.setClickingTogglesState(true);
     addAndMakeVisible(developerToggle_);
 
-    caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", *this);
+    ui::caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", *this);
     addAndMakeVisible(devSourceChoice_);
 
-    caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", *this);
+    ui::caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", *this);
     editor(devWavInEditor_, *this);
 
-    caption(devWavOutCaption_, "Rehearsal recording WAV (empty = do not record)", *this);
+    ui::caption(devWavOutCaption_, "Rehearsal recording WAV (empty = do not record)", *this);
     editor(devWavOutEditor_, *this);
 
     mockToggle_.setClickingTogglesState(true);
     addAndMakeVisible(mockToggle_);
 
     const auto [mockMin, mockMax] = config::mockLatencyRange();
-    caption(mockLatencyCaption_, "Mock echo delay (ms) - known ground truth for the in-flight row", *this);
+    ui::caption(mockLatencyCaption_, "Mock echo delay (ms) - known ground truth for the in-flight row", *this);
     slider(devMockLatencySlider_, mockMin, mockMax, 10, *this);
 
-    caption(devToneFreqCaption_, "Test tone frequency (Hz)", *this);
+    ui::caption(devToneFreqCaption_, "Test tone frequency (Hz)", *this);
     const auto [toneMin, toneMax] = config::toneFrequencyRange();
     slider(devToneFreqSlider_, toneMin, toneMax, 10, *this);
 
-    caption(devToneLevelCaption_, "Test tone level (dBFS)", *this);
+    ui::caption(devToneLevelCaption_, "Test tone level (dBFS)", *this);
     const auto [levelMin, levelMax] = config::toneLevelRangeDb();
     slider(devToneLevelSlider_, levelMin, levelMax, 1, *this);
 
@@ -226,12 +249,18 @@ void SettingsContent::applyPressed()
 
     AppConfig candidate = controller_.config().current();
 
+    const int rateIndex = sampleRateChoice_.getSelectedItemIndex();
+    if (rateIndex >= 0 && static_cast<std::size_t> (rateIndex) < sampleRateCache_.size())
+        candidate.audio.sampleRate = std::stoi(sampleRateCache_[static_cast<std::size_t> (rateIndex)].value);
+    candidate.audio.bufferFrames = static_cast<int> (bufferSlider_.getValue());
+
     candidate.translation.instructions = instructionsEditor_.getText().toStdString();
     candidate.translation.modelHint = modelHintEditor_.getText().toStdString();
     candidate.translation.reconnectEnabled = reconnectToggle_.getToggleState();
     candidate.translation.reconnectInitialBackoffMs = static_cast<int> (initialBackoffSlider_.getValue());
     candidate.translation.reconnectMaxBackoffMs = static_cast<int> (maxBackoffSlider_.getValue());
     candidate.translation.sessionMaxAgeSeconds = static_cast<int> (sessionAgeSlider_.getValue());
+    candidate.translation.jitterBufferMs = static_cast<int> (jitterSlider_.getValue());
 
     candidate.ndi.enabled = ndiToggle_.getToggleState();
     candidate.ndi.streamName = streamNameEditor_.getText().toStdString();
@@ -287,6 +316,36 @@ void SettingsContent::refreshFromSettings()
 
     const auto& cfg = controller_.config().current();
 
+    // ---------------------------------------------------------------- audio
+    // The schema's own rate list, same source the operator panel builds from
+    // (UI-01 moved the choice here; the vocabulary stays the schema's).
+    const std::vector<UiOption> rates = [] {
+        std::vector<UiOption> list;
+        for (const int rate : config::supportedSampleRates())
+            list.push_back({ std::to_string(rate), std::to_string(rate) + " Hz" });
+        return list;
+    }();
+
+    if (sampleRateCache_ != rates)
+    {
+        sampleRateChoice_.clear(juce::NotificationType::dontSendNotification);
+        for (std::size_t i = 0; i < rates.size(); ++i)
+            sampleRateChoice_.addItem(juce::String(rates[i].label), static_cast<int> (i) + 1);
+        sampleRateCache_ = rates;
+    }
+
+    for (std::size_t i = 0; i < sampleRateCache_.size(); ++i)
+    {
+        if (sampleRateCache_[i].value == std::to_string(cfg.audio.sampleRate))
+        {
+            sampleRateChoice_.setSelectedId(static_cast<int> (i) + 1,
+                                            juce::NotificationType::dontSendNotification);
+            break;
+        }
+    }
+
+    bufferSlider_.setValue(cfg.audio.bufferFrames, juce::NotificationType::dontSendNotification);
+
     instructionsEditor_.setText(juce::String(cfg.translation.instructions),
                                 juce::NotificationType::dontSendNotification);
     modelHintEditor_.setText(juce::String(cfg.translation.modelHint),
@@ -299,6 +358,8 @@ void SettingsContent::refreshFromSettings()
                                juce::NotificationType::dontSendNotification);
     sessionAgeSlider_.setValue(cfg.translation.sessionMaxAgeSeconds,
                                juce::NotificationType::dontSendNotification);
+    jitterSlider_.setValue(cfg.translation.jitterBufferMs,
+                           juce::NotificationType::dontSendNotification);
 
     ndiToggle_.setToggleState(cfg.ndi.enabled, juce::NotificationType::dontSendNotification);
     streamNameEditor_.setText(juce::String(cfg.ndi.streamName),
@@ -401,21 +462,80 @@ void SettingsContent::resized()
 {
     auto bounds = getLocalBounds().reduced(14);
 
-    // credentials band across the top
-    credentialCaption_.setBounds(bounds.removeFromTop(18));
-    auto credRow = bounds.removeFromTop(30);
-    removeKeyButton_.setBounds(credRow.removeFromRight(130));
-    saveKeyButton_.setBounds(credRow.removeFromRight(110).withTrimmedLeft(4));
-    apiKeyEditor_.setBounds(credRow.removeFromRight(300).withTrimmedLeft(4));
-    credStatusLabel_.setBounds(credRow);
-    keyHintLabel_.setBounds(bounds.removeFromTop(26));
-    bounds.removeFromTop(6);
+    // Sections stack in the UI-01 order; the draft model means one column of
+    // fields and one Apply button - sections are organization, not new state.
+    audioHeader_.setBounds(bounds.removeFromTop(20));
+    {
+        auto row = bounds.removeFromTop(48);
+        sampleRateCaption_.setBounds(row.removeFromLeft(240).removeFromTop(16));
+        sampleRateChoice_.setBounds(row.removeFromLeft(240));
+        row.removeFromLeft(8);
+        bufferCaption_.setBounds(row.removeFromTop(16));
+        bufferSlider_.setBounds(row);
+    }
+    audioRestartHintLabel_.setBounds(bounds.removeFromTop(18));
+    bounds.removeFromTop(4);
 
-    // --- developer / mock band across the bottom (task 019)
-    auto devBand = bounds.removeFromBottom(246);
+    // credentials band: the secure thing, visibly separate near the top
+    credentialsHeader_.setBounds(bounds.removeFromTop(20));
+    credStatusLabel_.setBounds(bounds.removeFromTop(22));
+    {
+        auto credRow = bounds.removeFromTop(30);
+        removeKeyButton_.setBounds(credRow.removeFromRight(130));
+        saveKeyButton_.setBounds(credRow.removeFromRight(110).withTrimmedLeft(4));
+        apiKeyEditor_.setBounds(credRow.removeFromRight(300).withTrimmedLeft(4));
+    }
+    keyHintLabel_.setBounds(bounds.removeFromTop(26));
+    bounds.removeFromTop(4);
+
+    auto body = bounds;
+    auto devBand = body.removeFromBottom(344);
+
+    auto columns = body;
+    auto left = columns.removeFromLeft(columns.getWidth() / 2);
+    auto right = columns;
+    right.removeFromLeft(12);
+
+    // --- translation column
+    translationHeader_.setBounds(left.removeFromTop(20));
+    reconnectToggle_.setBounds(left.removeFromTop(24));
+
+    initialBackoffCaption_.setBounds(left.removeFromTop(16));
+    initialBackoffSlider_.setBounds(left.removeFromTop(28));
+    maxBackoffCaption_.setBounds(left.removeFromTop(20));
+    maxBackoffSlider_.setBounds(left.removeFromTop(28));
+    sessionAgeCaption_.setBounds(left.removeFromTop(20));
+    sessionAgeSlider_.setBounds(left.removeFromTop(28));
+    left.removeFromTop(4);
+    modelHintCaption_.setBounds(left.removeFromTop(16));
+    modelHintEditor_.setBounds(left.removeFromTop(26));
+    left.removeFromTop(4);
+    jitterCaption_.setBounds(left.removeFromTop(16));
+    jitterSlider_.setBounds(left.removeFromTop(28));
+    left.removeFromTop(0);
+
+    // --- subtitles / diagnostics column
+    subtitlesHeader_.setBounds(right.removeFromTop(20));
+    ndiToggle_.setBounds(right.removeFromTop(24));
+    streamNameCaption_.setBounds(right.removeFromTop(18));
+    streamNameEditor_.setBounds(right.removeFromTop(26));
+    right.removeFromTop(10);
+
+    diagnosticsHeader_.setBounds(right.removeFromTop(20));
+    logLevelCaption_.setBounds(right.removeFromTop(16));
+    logLevelChoice_.setBounds(right.removeFromTop(26));
+    logFileToggle_.setBounds(right.removeFromTop(24));
+    restartHintLabel_.setBounds(right.removeFromTop(30));
+    right.removeFromTop(10);
+
+    applyButton_.setBounds(right.removeFromTop(32).removeFromLeft(200));
+    noteLabel_.setBounds(right);
+
+    // --- advanced band (UI-01: developer/mock + unsupported fields, last)
     devBand.removeFromTop(6);
-    developerCaption_.setBounds(devBand.removeFromTop(16));
+    advancedHeader_.setBounds(devBand.removeFromTop(20));
     developerToggle_.setBounds(devBand.removeFromTop(24));
+    devBand.removeFromTop(2);
     developerHintLabel_.setBounds(devBand.removeFromBottom(28));
 
     auto devCols = devBand;
@@ -423,14 +543,12 @@ void SettingsContent::resized()
     auto devRight = devCols;
     devRight.removeFromLeft(12);
 
+    instructionsCaption_.setBounds(devLeft.removeFromTop(16));
+    instructionsEditor_.setBounds(devLeft.removeFromTop(70));
+    instructionsHintLabel_.setBounds(devLeft.removeFromTop(60));
+    devLeft.removeFromTop(4);
     devSourceCaption_.setBounds(devLeft.removeFromTop(16));
     devSourceChoice_.setBounds(devLeft.removeFromTop(26));
-    devLeft.removeFromTop(4);
-    devWavInCaption_.setBounds(devLeft.removeFromTop(16));
-    devWavInEditor_.setBounds(devLeft.removeFromTop(26));
-    devLeft.removeFromTop(4);
-    devWavOutCaption_.setBounds(devLeft.removeFromTop(16));
-    devWavOutEditor_.setBounds(devLeft.removeFromTop(26));
 
     mockToggle_.setBounds(devRight.removeFromTop(24));
     mockLatencyCaption_.setBounds(devRight.removeFromTop(16));
@@ -440,46 +558,11 @@ void SettingsContent::resized()
     devToneLevelCaption_.setBounds(devRight.removeFromTop(16));
     devToneLevelSlider_.setBounds(devRight.removeFromTop(26));
     loopbackToggle_.setBounds(devRight.removeFromTop(24));
-
-    auto body = bounds;
-    auto left = body.removeFromLeft(body.getWidth() / 2);
-    auto right = body;
-    right.removeFromLeft(12);
-
-    // --- translation column
-    instructionsCaption_.setBounds(left.removeFromTop(16));
-    instructionsEditor_.setBounds(left.removeFromTop(110));
-    instructionsHintLabel_.setBounds(left.removeFromTop(48));
-    left.removeFromTop(4);
-
-    modelHintCaption_.setBounds(left.removeFromTop(16));
-    modelHintEditor_.setBounds(left.removeFromTop(26));
-    left.removeFromTop(6);
-
-    reconnectToggle_.setBounds(left.removeFromTop(24));
-
-    initialBackoffCaption_.setBounds(left.removeFromTop(16));
-    initialBackoffSlider_.setBounds(left.removeFromTop(28));
-    maxBackoffCaption_.setBounds(left.removeFromTop(20));
-    maxBackoffSlider_.setBounds(left.removeFromTop(28));
-    sessionAgeCaption_.setBounds(left.removeFromTop(20));
-    sessionAgeSlider_.setBounds(left.removeFromTop(28));
-
-    // --- NDI / diagnostics column
-    ndiCaption_.setBounds(right.removeFromTop(16));
-    ndiToggle_.setBounds(right.removeFromTop(24));
-    streamNameCaption_.setBounds(right.removeFromTop(18));
-    streamNameEditor_.setBounds(right.removeFromTop(26));
-    right.removeFromTop(10);
-
-    logLevelCaption_.setBounds(right.removeFromTop(16));
-    logLevelChoice_.setBounds(right.removeFromTop(26));
-    logFileToggle_.setBounds(right.removeFromTop(24));
-    restartHintLabel_.setBounds(right.removeFromTop(30));
-    right.removeFromTop(10);
-
-    applyButton_.setBounds(right.removeFromTop(32).removeFromLeft(200));
-    noteLabel_.setBounds(right);
+    devRight.removeFromTop(4);
+    devWavInCaption_.setBounds(devRight.removeFromTop(16));
+    devWavInEditor_.setBounds(devRight.removeFromTop(24));
+    devWavOutCaption_.setBounds(devRight.removeFromTop(16));
+    devWavOutEditor_.setBounds(devRight);
 }
 
 // =========================================================================== SettingsWindow
@@ -498,10 +581,11 @@ SettingsWindow::SettingsWindow(ApplicationController& controller)
     setContentOwned(content, true);
 
     setResizable(true, true);
-    // Task 019 grew the content: the credentials header, two columns and the
-    // developer band across the bottom need the extra height.
-    setResizeLimits(720, 830, 4000, 4000);
-    setSize(820, 910);
+    // UI-01 grew the dialog sideways: the sections stack, the Advanced band
+    // sits at the bottom, and the columns want breathing room. The minimum
+    // height keeps every band reachable without scrolling into the clip.
+    setResizeLimits(760, 1010, 4000, 4000);
+    setSize(900, 1090);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

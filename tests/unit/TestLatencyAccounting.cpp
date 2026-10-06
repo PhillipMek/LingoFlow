@@ -182,16 +182,21 @@ TEST_CASE("Latency accounting: a driver that reports is quoted with its evidence
     CHECK(findRow(rows, "asio input latency")->kind == "not measured");
 }
 
-TEST_CASE("Latency accounting: the panel and the export render this one function",
+TEST_CASE("Latency accounting: the panel, the diagnostics surface and the export render one function",
           "[app][latency][accounting][ui]")
 {
     QuietLog quiet;
     ApplicationController controller;
 
     const auto panel = buildOperatorPanel(controller, {});
+    const auto diagPanel = buildDiagnosticsPanel(controller);
 
-    CHECK_FALSE(panel.latencyRows.empty());
-    CHECK(panel.latencyRows == latencyAccounting(controller.engine(), controller.audioBackend(),
+    // UI-01 moved the full accounting to the diagnostics surface; the operator
+    // panel keeps only the headline sentence. One function still feeds every
+    // consumer that shows the breakdown (screen detail, diagnostics window,
+    // export), so no two of them can tell two stories.
+    CHECK_FALSE(diagPanel.latency.empty());
+    CHECK(diagPanel.latency == latencyAccounting(controller.engine(), controller.audioBackend(),
                                                  controller.diagnostics().snapshot(),
                                                  controller.config().current()));
     // The headline still leads with the buffer arithmetic and its disclaimer.

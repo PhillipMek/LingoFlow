@@ -270,6 +270,12 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
     capabilities_.maxBufferFrames = buffers.empty() ? capabilities_.preferredBufferFrames : buffers.back();
     capabilities_.inputChannels = std::max(1, device_->getActiveInputChannels().countNumberOfSetBits());
     capabilities_.outputChannels = std::max(1, device_->getActiveOutputChannels().countNumberOfSetBits());
+    // UI-01: the names this open already read to validate the selection are kept
+    // for the discrete channel selector as well - existing state, published
+    // cleanly, not a second query. Control thread writes, GUI thread reads
+    // between open and close (capabilities() is polled, never realtime).
+    capabilities_.inputChannelNames = inputNames;
+    capabilities_.outputChannelNames = outputNames;
     capabilities_.preferredFormat = audio::SampleFormat::float32;
 
     inputLatency_ = device_->getInputLatencyInSamples();

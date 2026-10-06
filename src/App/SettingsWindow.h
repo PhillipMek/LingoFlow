@@ -15,6 +15,11 @@
 // screen with the schema's reason in the note (nothing was applied - ConfigManager
 // guarantees that, task 003).
 //
+// Sections follow the UI-01 information architecture: Audio (restart fields),
+// Translation (recovery + buffers), Subtitles/NDI, Credentials, Diagnostics,
+// and Advanced last - the developer/mock world and the unsupported-instructions
+// field, away from everyday setup.
+//
 // Credential rules visible right here (AGENTS.md 10, task 015 PASS criteria):
 // the key field masks its echo, a successful store clears the field (the value
 // must not sit on screen), and no label ever shows more than "stored/not".
@@ -54,20 +59,36 @@ private:
     ApplicationController& controller_;
     std::string actionNote_;
 
+    // Section order follows the UI-01 information architecture: the everyday
+    // configuration first (Audio, Translation, Subtitles), the secure thing
+    // visibly separate (Credentials), then Diagnostics behaviour, and the
+    // developer/mock world last - in its own Advanced band, where off means
+    // nothing below it does anything.
+    juce::Label audioHeader_, translationHeader_, subtitlesHeader_, credentialsHeader_,
+                diagnosticsHeader_, advancedHeader_;
+
+    // ------------------------------------------------------------------- audio
+    // Device-restart fields, moved here from the operator window by UI-01:
+    // what an operator sets before a show, not while one runs.
+    juce::Label sampleRateCaption_, bufferCaption_, audioRestartHintLabel_;
+    juce::ComboBox sampleRateChoice_;
+    juce::Slider bufferSlider_;
+
     // ------------------------------------------------------------ credentials
-    juce::Label credentialCaption_, credStatusLabel_, keyHintLabel_;
+    juce::Label credStatusLabel_, keyHintLabel_;
     juce::TextEditor apiKeyEditor_;
     juce::TextButton saveKeyButton_ { "Store key" };
     juce::TextButton removeKeyButton_ { "Remove key" };
 
     // ------------------------------------------------------------ translation
-    juce::Label instructionsCaption_, instructionsHintLabel_, modelHintCaption_, reconnectCaption_, initialBackoffCaption_,
-               maxBackoffCaption_, sessionAgeCaption_;
-    juce::TextEditor instructionsEditor_, modelHintEditor_;
+    juce::Label modelHintCaption_, reconnectCaption_, initialBackoffCaption_,
+               maxBackoffCaption_, sessionAgeCaption_, jitterCaption_;
+    juce::TextEditor modelHintEditor_;
     juce::ToggleButton reconnectToggle_ { "Reconnect after a dropped session" };
     juce::Slider initialBackoffSlider_, maxBackoffSlider_, sessionAgeSlider_;
+    juce::Slider jitterSlider_;   ///< live on apply (setJitterLive), chosen in Settings
 
-    // -------------------------------------------------------------------- NDI
+    // ---------------------------------------------------------- subtitles/NDI
     juce::Label ndiCaption_, streamNameCaption_;
     juce::ToggleButton ndiToggle_ { "Publish NDI output" };
     juce::TextEditor streamNameEditor_;
@@ -75,15 +96,23 @@ private:
     // -------------------------------------------------------------- diagnostics
     juce::Label logLevelCaption_;
     juce::ComboBox logLevelChoice_;
-    juce::ToggleButton logFileToggle_ { "Write the log file" };    juce::Label restartHintLabel_;
+    juce::ToggleButton logFileToggle_ { "Write the log file" };
+    juce::Label restartHintLabel_;
 
-    // ------------------------------------------------- developer / mock mode (019)
+    // ------------------------------------- advanced / developer mode (019+UI-01)
+    // The instructions field lives here, not in Translation (UI-01 §6): the
+    // current model ignores it, so it shares the Advanced band's rule -
+    // preserved for a future provider, never presented as everyday setup. The
+    // editor is read-only for the same reason (code review P1, 2026-10-05).
+    juce::Label instructionsCaption_, instructionsHintLabel_;
+    juce::TextEditor instructionsEditor_;
+
     // The whole band renders inert unless developer mode is enabled - that is
     // the plan's job, not the widgets'; here the rule is only that the draft
     // carries exactly what is on screen and the hint states when edits count.
-    juce::Label developerCaption_, devSourceCaption_, devWavInCaption_, devWavOutCaption_,
+    juce::Label devSourceCaption_, devWavInCaption_, devWavOutCaption_,
                 mockLatencyCaption_, developerHintLabel_;
-    juce::ToggleButton developerToggle_ { "Developer mode (simulated source / mock translation / loopback)" };
+    juce::ToggleButton developerToggle_ { "Developer / Test Mode (simulated source, mock translation, loopback)" };
     juce::ToggleButton mockToggle_ { "Mock translation: echo + labelled mock text, no provider session" };
     juce::ToggleButton loopbackToggle_ { "Loopback: capture to the audience; the translator is NOT fed" };
     juce::ComboBox devSourceChoice_;
@@ -95,7 +124,7 @@ private:
     juce::TextButton applyButton_ { "Apply settings" };
     juce::Label noteLabel_;
 
-    std::vector<UiOption> logLevelCache_;
+    std::vector<UiOption> logLevelCache_, sampleRateCache_;
     std::vector<std::string> devSourceCache_;   ///< developer.audioSource values, schema's list
     bool updatingWidgets_ = false;
 

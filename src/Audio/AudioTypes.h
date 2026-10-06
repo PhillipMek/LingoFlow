@@ -4,7 +4,9 @@
 // knows about OpenAI, NDI or the UI layer.
 
 #include <cstdint>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace liveai {
 namespace audio {
@@ -42,6 +44,15 @@ struct DeviceCapabilities
     int preferredBufferFrames = 480;
     int inputChannels = 1;
     int outputChannels = 1;
+
+    /// The full channel names the driver reports (device totals, not the engine's
+    /// selection - `inputChannels`/`outputChannels above stay the ACTIVE count).
+    /// Known while a device is open, empty whenever none is: UI-01's discrete
+    /// channel selector enumerates these, and an empty list honestly means
+    /// "not opened yet" - the selector falls back to generic numbering instead
+    /// of inventing names.
+    std::vector<std::string> inputChannelNames;
+    std::vector<std::string> outputChannelNames;
 
     /// What the driver itself reports as its input/output latency, in samples
     /// (task 018's accounting). 0 means "no usable answer": the backend did not

@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <format>
 #include <utility>
 
+#include "App/DiagnosticsWindow.h"
 #include "App/SettingsWindow.h"
+#include "App/UiWidgets.h"
 #include "Config/ConfigSchema.h"
 
 namespace liveai {
@@ -118,17 +119,11 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     startButton_.onClick = [this] { startPressed(); };
     stopButton_.onClick = [this] { stopPressed(); };
     settingsButton_.onClick = [this] { settingsPressed(); };
-    exportButton_.onClick = [this] { exportPressed(); };
+    diagnosticsButton_.onClick = [this] { diagnosticsPressed(); };
     addAndMakeVisible(startButton_);
     addAndMakeVisible(stopButton_);
     addAndMakeVisible(settingsButton_);
-    addAndMakeVisible(exportButton_);
-
-    for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
-    {
-        chip->setFont(uiFont(15.0f));
-        addAndMakeVisible(*chip);
-    }
+    addAndMakeVisible(diagnosticsButton_);
 
     devBadge_.setFont(uiFont(13.0f));
     devBadge_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
@@ -136,6 +131,15 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     devBadge_.setJustificationType(juce::Justification::centredLeft);
     devBadge_.setVisible(false);   // empty in production - the band appears only when real
     addAndMakeVisible(devBadge_);
+
+    // ---------------------------------------------------------- system status
+    ui::sectionHeader(statusHeader_, "SYSTEM STATUS", *this);
+
+    for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
+    {
+        chip->setFont(uiFont(15.0f));
+        addAndMakeVisible(*chip);
+    }
 
     detailLabel_.setFont(uiFont(13.0f));
     detailLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd29922u));
@@ -145,7 +149,9 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     credentialLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
     addAndMakeVisible(credentialLabel_);
 
-    // ------------------------------------------------------------- settings
+    // ------------------------------------------------------------------ audio
+    ui::sectionHeader(audioHeader_, "AUDIO - routing and levels", *this);
+
     caption(deviceCaption_, "Audio device (single ASIO in/out)", *this);
     deviceChoice_.onChange = [this] { deviceSelected(); };
     addAndMakeVisible(deviceChoice_);
@@ -157,63 +163,22 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     deviceNoteLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
     addAndMakeVisible(deviceNoteLabel_);
 
-    caption(rateCaption_, "Sample rate", *this);
-    rateChoice_.onChange = [this] { rateSelected(); };
-    addAndMakeVisible(rateChoice_);
+    // Discrete channel selection (UI-01 §4): the list IS the device's channel
+    // space (driver names once opened), so there is no in-between value to
+    // land on and no invented maximum to scroll past. Sample rate, buffer and
+    // jitter are Settings-window fields now - chosen before a show, not in it.
+    caption(inputChannelCaption_, "Input channel", *this);
+    inputChannelChoice_.onChange = [this] { channelChanged(); };
+    addAndMakeVisible(inputChannelChoice_);
 
-    caption(bufferCaption_, "Buffer size (frames)", *this);
-    const auto [bufferMin, bufferMax] = config::bufferFramesRange();
-    fader(bufferSlider_, bufferMin, bufferMax, 16, *this);
-    // Geometry fields commit at the end of a drag or right after a typed value;
-    // they are device-restart fields, so there is nothing to stream live.
-    bufferSlider_.onDragStart = [this] { geometryDragging_ = true; };
-    bufferSlider_.onDragEnd = [this]
-    {
-        geometryDragging_ = false;
-        bufferChanged();
-    };
-    bufferSlider_.onValueChange = [this]
-    {
-        if (updatingWidgets_ || geometryDragging_)
-            return;
-        bufferChanged();   // typed text arrives with no active drag
-    };
+    caption(outputChannelCaption_, "Output channel", *this);
+    outputChannelChoice_.onChange = [this] { channelChanged(); };
+    addAndMakeVisible(outputChannelChoice_);
 
-    caption(inputChannelCaption_, "Input channel (one-based)", *this);
-    const auto [channelMin, channelMax] = config::channelRange();
-    fader(inputChannelSlider_, channelMin, channelMax, 1, *this);
-    caption(outputChannelCaption_, "Output channel (one-based)", *this);
-    fader(outputChannelSlider_, channelMin, channelMax, 1, *this);
+    channelNoteLabel_.setFont(uiFont(11.0f));
+    channelNoteLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6e7681u));
+    addAndMakeVisible(channelNoteLabel_);
 
-    for (auto* slider : { &inputChannelSlider_, &outputChannelSlider_ })
-    {
-        slider->onDragStart = [this] { geometryDragging_ = true; };
-        slider->onDragEnd = [this]
-        {
-            geometryDragging_ = false;
-            channelChanged();
-        };
-        slider->onValueChange = [this]
-        {
-            if (updatingWidgets_ || geometryDragging_)
-                return;
-            channelChanged();
-        };
-    }
-
-    caption(sourceCaption_, "Input language", *this);
-    sourceChoice_.onChange = [this] { sourceSelected(); };
-    addAndMakeVisible(sourceChoice_);
-
-    caption(targetCaption_, "Output language", *this);
-    targetChoice_.onChange = [this] { targetSelected(); };
-    addAndMakeVisible(targetChoice_);
-
-    pairWarningLabel_.setFont(uiFont(12.0f));
-    pairWarningLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
-    addAndMakeVisible(pairWarningLabel_);
-
-    // --------------------------------------------------------------- meters
     caption(inputMeterCaption_, "INPUT - what the translator hears", *this);
     addAndMakeVisible(inputMeter_);
 
@@ -255,27 +220,22 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     outputMuteButton_.onClick = [this] { muteToggled(); };
     addAndMakeVisible(outputMuteButton_);
 
-    caption(jitterCaption_, "Jitter pre-roll (ms) - live", *this);
-    const auto [jitterMin, jitterMax] = config::jitterBufferRange();
-    fader(jitterSlider_, jitterMin, jitterMax, 10, *this);
-    jitterSlider_.onValueChange = [this] { jitterMoved(); };
-    jitterSlider_.onDragStart = [this] { jitterDragging_ = true; };
-    jitterSlider_.onDragEnd = [this]
-    {
-        jitterDragging_ = false;
-        jitterCommit();
-    };
+    // ------------------------------------------------------------ translation
+    ui::sectionHeader(translationHeader_, "TRANSLATION - pair and live text", *this);
 
-    latencyLabel_.setFont(uiFont(12.0f));
-    latencyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    addAndMakeVisible(latencyLabel_);
+    caption(sourceCaption_, "Input language", *this);
+    sourceChoice_.onChange = [this] { sourceSelected(); };
+    addAndMakeVisible(sourceChoice_);
 
-    // ------------------------------------------------------------- readouts
-    countersLabel_.setFont(monoFont());
-    countersLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffc9d1d9u));
-    addAndMakeVisible(countersLabel_);
+    caption(targetCaption_, "Output language", *this);
+    targetChoice_.onChange = [this] { targetSelected(); };
+    addAndMakeVisible(targetChoice_);
 
-    caption(subtitleCaption_, "SUBTITLES - the typed text model (task 013)", *this);
+    pairWarningLabel_.setFont(uiFont(12.0f));
+    pairWarningLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
+    addAndMakeVisible(pairWarningLabel_);
+
+    caption(subtitleCaption_, "Subtitles", *this);
 
     currentSubtitleLabel_.setFont(uiFont(20.0f));
     currentSubtitleLabel_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
@@ -287,9 +247,19 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     historyLabel_.setJustificationType(juce::Justification::topLeft);
     addAndMakeVisible(historyLabel_);
 
-    textSummaryLabel_.setFont(uiFont(11.0f));
-    textSummaryLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6e7681u));
-    addAndMakeVisible(textSummaryLabel_);
+    // ------------------------------------------------------------ live health
+    // The compact four-fact strip (UI-01): the raw counter wall and the full
+    // 018 accounting moved to the Diagnostics window behind this button.
+    ui::sectionHeader(healthHeader_, "LIVE HEALTH", *this);
+
+    latencyLabel_.setFont(uiFont(12.0f));
+    latencyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    latencyLabel_.setJustificationType(juce::Justification::topLeft);
+    addAndMakeVisible(latencyLabel_);
+
+    healthLabel_.setFont(monoFont());
+    healthLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffc9d1d9u));
+    addAndMakeVisible(healthLabel_);
 
     noteLabel_.setFont(uiFont(12.0f));
     addAndMakeVisible(noteLabel_);
@@ -334,20 +304,14 @@ void OperatorContent::settingsPressed()
         settingsWindow_->reopen();
 }
 
-void OperatorContent::exportPressed()
+void OperatorContent::diagnosticsPressed()
 {
-    // Task 017: one controller call, and the note IS the receipt - the file the
-    // operator can carry to a venue. No path invention here: the controller
-    // decides where exports live.
-    std::filesystem::path written;
-    std::string note;
-
-    if (controller_.exportDiagnostics({}, written, note))
-        actionNote_ = note;
+    // UI-01: the engineering surface opens on request, owns the Export button,
+    // and follows the same hide/reopen lifetime rule as the settings dialog.
+    if (diagnosticsWindow_ == nullptr)
+        diagnosticsWindow_ = std::make_unique<DiagnosticsWindow>(controller_);
     else
-        actionNote_ = note;   // the failure is as talkable as the success
-
-    rebuild();
+        diagnosticsWindow_->reopen();
 }
 
 void OperatorContent::refreshDevicesPressed()
@@ -390,21 +354,29 @@ void OperatorContent::deviceSelected()
     });
 }
 
-void OperatorContent::rateSelected()
+void OperatorContent::channelChanged()
 {
     if (updatingWidgets_)
         return;
 
-    const int index = rateChoice_.getSelectedItemIndex();
+    // The discrete choices (UI-01): the value list is the panel's, mirrored
+    // into the caches; a combo can only land on a real channel index.
+    const int inIndex = inputChannelChoice_.getSelectedItemIndex();
+    const int outIndex = outputChannelChoice_.getSelectedItemIndex();
 
-    if (index < 0 || static_cast<std::size_t> (index) >= rateCache_.size())
+    if (inIndex < 0 || static_cast<std::size_t> (inIndex) >= inputChannelCache_.size()
+        || outIndex < 0 || static_cast<std::size_t> (outIndex) >= outputChannelCache_.size())
         return;
 
-    const int rate = std::stoi(rateCache_[static_cast<std::size_t> (index)].value);
+    const int in = std::stoi(inputChannelCache_[static_cast<std::size_t> (inIndex)].value);
+    const int out = std::stoi(outputChannelCache_[static_cast<std::size_t> (outIndex)].value);
 
-    commitSettings([rate](AppConfig& cfg) { cfg.audio.sampleRate = rate; });
+    commitSettings([in, out](AppConfig& cfg)
+    {
+        cfg.audio.inputChannel = in;
+        cfg.audio.outputChannel = out;
+    });
 }
-
 void OperatorContent::sourceSelected()
 {
     if (updatingWidgets_)
@@ -435,25 +407,6 @@ void OperatorContent::targetSelected()
     commitSettings([code](AppConfig& cfg) { cfg.translation.outputLanguage = code; });
 }
 
-void OperatorContent::bufferChanged()
-{
-    const int frames = static_cast<int> (bufferSlider_.getValue());
-
-    commitSettings([frames](AppConfig& cfg) { cfg.audio.bufferFrames = frames; });
-}
-
-void OperatorContent::channelChanged()
-{
-    const int in = static_cast<int> (inputChannelSlider_.getValue());
-    const int out = static_cast<int> (outputChannelSlider_.getValue());
-
-    commitSettings([in, out](AppConfig& cfg)
-    {
-        cfg.audio.inputChannel = in;
-        cfg.audio.outputChannel = out;
-    });
-}
-
 void OperatorContent::gainMoved()
 {
     if (updatingWidgets_)
@@ -477,24 +430,6 @@ void OperatorContent::gainCommit()
         cfg.audio.inputGainDb = in;
         cfg.audio.outputGainDb = out;
     });
-}
-
-void OperatorContent::jitterMoved()
-{
-    if (updatingWidgets_)
-        return;
-
-    controller_.setJitterLive(static_cast<int> (jitterSlider_.getValue()));
-
-    if (!jitterDragging_)
-        jitterCommit();
-}
-
-void OperatorContent::jitterCommit()
-{
-    const int ms = static_cast<int> (jitterSlider_.getValue());
-
-    commitSettings([ms](AppConfig& cfg) { cfg.translation.jitterBufferMs = ms; });
 }
 
 void OperatorContent::muteToggled()
@@ -589,20 +524,19 @@ void OperatorContent::rebuild()
     stopButton_.setEnabled(panel.canStop);
 
     syncOptions(deviceChoice_, deviceCache_, panel.devices, panel.selectedDevice);
-    syncOptions(rateChoice_, rateCache_, panel.sampleRates, panel.selectedSampleRate);
     syncOptions(sourceChoice_, sourceCache_, panel.sourceLanguages, panel.selectedSource);
     syncOptions(targetChoice_, targetCache_, panel.targetLanguages, panel.selectedTarget);
+    syncOptions(inputChannelChoice_, inputChannelCache_, panel.inputChannelChoices,
+                panel.selectedInputChannel);
+    syncOptions(outputChannelChoice_, outputChannelCache_, panel.outputChannelChoices,
+                panel.selectedOutputChannel);
 
     deviceNoteLabel_.setText(juce::String(panel.deviceNote),
                              juce::NotificationType::dontSendNotification);
+    channelNoteLabel_.setText(juce::String(panel.channelNote),
+                              juce::NotificationType::dontSendNotification);
     pairWarningLabel_.setText(juce::String(panel.languagePairWarning),
                               juce::NotificationType::dontSendNotification);
-
-    bufferSlider_.setValue(panel.bufferFrames, juce::NotificationType::dontSendNotification);
-    inputChannelSlider_.setValue(panel.inputChannel,
-                                 juce::NotificationType::dontSendNotification);
-    outputChannelSlider_.setValue(panel.outputChannel,
-                                  juce::NotificationType::dontSendNotification);
 
     if (!gainDragging_)
     {
@@ -611,9 +545,6 @@ void OperatorContent::rebuild()
         outputGainSlider_.setValue(panel.outputGainDb,
                                    juce::NotificationType::dontSendNotification);
     }
-
-    if (!jitterDragging_)
-        jitterSlider_.setValue(panel.jitterMs, juce::NotificationType::dontSendNotification);
 
     inputMuteButton_.setToggleState(panel.inputMuted,
                                     juce::NotificationType::dontSendNotification);
@@ -630,20 +561,19 @@ void OperatorContent::rebuild()
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);
 
-    // The headline summary plus the full accounting lines beneath it (018): every
-    // component with its value AND its kind, so no line can read as a promise.
-    std::string latencyText = panel.latencySummary;
-    for (const auto& row : panel.latencyRows)
-        latencyText += std::format("\n  {} = {} [{}]", row.component, row.value, row.kind);
-    latencyLabel_.setText(juce::String(latencyText), juce::NotificationType::dontSendNotification);
+    // The one honest sentence about buffer delay (kept in full, kind and all -
+    // UI-01 did not shorten the truth, it shortened the screen), plus the four
+    // health facts. The detailed accounting is one button away, in Diagnostics.
+    latencyLabel_.setText(juce::String(panel.latencySummary),
+                          juce::NotificationType::dontSendNotification);
 
-    std::string counters;
-    for (const auto& [label, value] : panel.counters)
-        counters += std::format("{:<24}{:>12}\n", label, value);
-    countersLabel_.setText(juce::String(counters), juce::NotificationType::dontSendNotification);
+    std::string health;
+    for (const auto& [label, value] : panel.health)
+        health += std::format("{:<16}{}\n", label, value);
+    healthLabel_.setText(juce::String(health), juce::NotificationType::dontSendNotification);
 
     currentSubtitleLabel_.setText(panel.currentSubtitle.empty()
-                                      ? juce::String(".")
+                                      ? juce::String()
                                       : juce::String(panel.currentSubtitle),
                                   juce::NotificationType::dontSendNotification);
 
@@ -652,8 +582,6 @@ void OperatorContent::rebuild()
         history += line + "\n";
     historyLabel_.setText(juce::String(history), juce::NotificationType::dontSendNotification);
 
-    textSummaryLabel_.setText(juce::String(panel.textSummary),
-                              juce::NotificationType::dontSendNotification);
     noteLabel_.setText(juce::String(panel.actionNote),
                        juce::NotificationType::dontSendNotification);
     noteLabel_.setColour(juce::Label::textColourId,
@@ -668,96 +596,102 @@ void OperatorContent::resized()
 {
     auto bounds = getLocalBounds().reduced(14);
 
+    // 1. Header: identity left, commands right (Start/Stop stay the prominent
+    // pair; Settings opens configuration, Diagnostics opens the engineering
+    // surface that took over the raw-counter wall).
     auto header = bounds.removeFromTop(32);
     stopButton_.setBounds(header.removeFromRight(96));
     startButton_.setBounds(header.removeFromRight(96).withTrimmedRight(6));
     settingsButton_.setBounds(header.removeFromRight(110).withTrimmedRight(6));
-    exportButton_.setBounds(header.removeFromRight(150).withTrimmedRight(6));
+    diagnosticsButton_.setBounds(header.removeFromRight(120).withTrimmedRight(6));
     titleLabel_.setBounds(header);
-
-    auto chips = bounds.removeFromTop(26);
-    appValue_.setBounds(chips.removeFromLeft(220));
-    audioValue_.setBounds(chips.removeFromLeft(340));
-    sessionValue_.setBounds(chips.removeFromLeft(260));
-    ndiValue_.setBounds(chips.removeFromLeft(220));
-
-    detailLabel_.setBounds(bounds.removeFromTop(20));
-    credentialLabel_.setBounds(bounds.removeFromTop(18));
 
     // Task 019: the developer band sits above everything the operator reads -
     // production hides it (empty label, no paint), a developer run cannot
     // scroll it away or overlook it.
     devBadge_.setBounds(bounds.removeFromTop(24));
 
+    // 2. System status: one scannable block directly under the header.
+    statusHeader_.setBounds(bounds.removeFromTop(18));
+    {
+        auto chips = bounds.removeFromTop(24);
+        appValue_.setBounds(chips.removeFromLeft(200));
+        audioValue_.setBounds(chips.removeFromLeft(360));
+        sessionValue_.setBounds(chips.removeFromLeft(240));
+        ndiValue_.setBounds(chips);
+    }
+    detailLabel_.setBounds(bounds.removeFromTop(20));
+    credentialLabel_.setBounds(bounds.removeFromTop(18));
     bounds.removeFromTop(6);
 
-    auto content = bounds;
-    auto left = content.removeFromLeft(350);
-    auto middle = content.removeFromLeft(420);
-    auto right = content;
-    left.removeFromTop(4);
-    middle.removeFromTop(4);
-
-    // --- settings column
-    deviceCaption_.setBounds(left.removeFromTop(16));
-    deviceChoice_.setBounds(left.removeFromTop(26));
-    refreshDevicesButton_.setBounds(left.removeFromTop(28));
-    deviceNoteLabel_.setBounds(left.removeFromTop(30));
-    left.removeFromTop(6);
-
-    rateCaption_.setBounds(left.removeFromTop(16));
-    rateChoice_.setBounds(left.removeFromTop(26));
-    left.removeFromTop(6);
-
-    bufferCaption_.setBounds(left.removeFromTop(16));
-    bufferSlider_.setBounds(left.removeFromTop(28));
-    left.removeFromTop(2);
-
-    inputChannelCaption_.setBounds(left.removeFromTop(16));
-    inputChannelSlider_.setBounds(left.removeFromTop(28));
-    outputChannelCaption_.setBounds(left.removeFromTop(16));
-    outputChannelSlider_.setBounds(left.removeFromTop(28));
-    left.removeFromTop(6);
-
-    sourceCaption_.setBounds(left.removeFromTop(16));
-    sourceChoice_.setBounds(left.removeFromTop(26));
-    targetCaption_.setBounds(left.removeFromTop(20));
-    targetChoice_.setBounds(left.removeFromTop(26));
-    pairWarningLabel_.setBounds(left);
-
-    // --- meters column
-    inputMeterCaption_.setBounds(middle.removeFromTop(16));
-    inputMeter_.setBounds(middle.removeFromTop(22));
+    // 3. Audio: routing across the top, then INPUT and OUTPUT as paired
+    // columns - channel combo, meter, gain, mute in the same order on both
+    // sides so the two halves read as one control surface.
+    audioHeader_.setBounds(bounds.removeFromTop(18));
+    deviceCaption_.setBounds(bounds.removeFromTop(16));
     {
-        auto row = middle.removeFromTop(30);
+        auto row = bounds.removeFromTop(26);
+        refreshDevicesButton_.setBounds(row.removeFromRight(150).withTrimmedLeft(6));
+        deviceChoice_.setBounds(row);
+    }
+    deviceNoteLabel_.setBounds(bounds.removeFromTop(18));
+    bounds.removeFromTop(2);
+
+    auto audioCols = bounds.removeFromTop(150);
+    auto inCol = audioCols.removeFromLeft(audioCols.getWidth() / 2);
+    auto outCol = audioCols;
+    outCol.removeFromLeft(10);
+
+    inputChannelCaption_.setBounds(inCol.removeFromTop(16));
+    inputChannelChoice_.setBounds(inCol.removeFromTop(26));
+    inputMeterCaption_.setBounds(inCol.removeFromTop(18));
+    inputMeter_.setBounds(inCol.removeFromTop(22));
+    {
+        auto row = inCol.removeFromTop(30);
         inputMuteButton_.setBounds(row.removeFromRight(96).withTrimmedLeft(6));
         inputGainSlider_.setBounds(row);
     }
-    appliedInputLabel_.setBounds(middle.removeFromTop(16));
-    middle.removeFromTop(8);
+    appliedInputLabel_.setBounds(inCol.removeFromTop(16));
 
-    outputMeterCaption_.setBounds(middle.removeFromTop(16));
-    outputMeter_.setBounds(middle.removeFromTop(22));
+    outputChannelCaption_.setBounds(outCol.removeFromTop(16));
+    outputChannelChoice_.setBounds(outCol.removeFromTop(26));
+    outputMeterCaption_.setBounds(outCol.removeFromTop(18));
+    outputMeter_.setBounds(outCol.removeFromTop(22));
     {
-        auto row = middle.removeFromTop(30);
+        auto row = outCol.removeFromTop(30);
         outputMuteButton_.setBounds(row.removeFromRight(96).withTrimmedLeft(6));
         outputGainSlider_.setBounds(row);
     }
-    appliedOutputLabel_.setBounds(middle.removeFromTop(16));
-    middle.removeFromTop(8);
+    appliedOutputLabel_.setBounds(outCol.removeFromTop(16));
 
-    jitterCaption_.setBounds(middle.removeFromTop(16));
-    jitterSlider_.setBounds(middle.removeFromTop(30));
-    latencyLabel_.setBounds(middle.removeFromTop(130));
+    channelNoteLabel_.setBounds(bounds.removeFromTop(16));
+    bounds.removeFromTop(4);
 
-    // --- readout column
-    countersLabel_.setBounds(right.removeFromTop(360));
-    right.removeFromTop(4);
-    subtitleCaption_.setBounds(right.removeFromTop(16));
-    currentSubtitleLabel_.setBounds(right.removeFromTop(60));
-    historyLabel_.setBounds(right.removeFromTop(150));
-    textSummaryLabel_.setBounds(right.removeFromTop(16));
-    noteLabel_.setBounds(right);
+    // 4. Translation: the pair on one line, then the live text underneath.
+    translationHeader_.setBounds(bounds.removeFromTop(18));
+    {
+        auto pairRow = bounds.removeFromTop(44);
+        auto leftCol = pairRow.removeFromLeft(240);
+        auto rightCol = pairRow.removeFromLeft(260);
+        sourceCaption_.setBounds(leftCol.removeFromTop(16));
+        sourceChoice_.setBounds(leftCol.removeFromTop(26));
+        targetCaption_.setBounds(rightCol.removeFromTop(16));
+        targetChoice_.setBounds(rightCol.removeFromTop(26));
+        pairWarningLabel_.setBounds(pairRow);
+    }
+    subtitleCaption_.setBounds(bounds.removeFromTop(16));
+    currentSubtitleLabel_.setBounds(bounds.removeFromTop(34));
+    historyLabel_.setBounds(bounds.removeFromTop(120));
+    bounds.removeFromTop(4);
+
+    // 5. Live health: the four facts, the honest latency sentence - and the
+    // door to everything else (the Diagnostics button up in the header).
+    healthHeader_.setBounds(bounds.removeFromTop(18));
+    latencyLabel_.setBounds(bounds.removeFromTop(34));
+    healthLabel_.setBounds(bounds.removeFromTop(62));
+
+    bounds.removeFromTop(4);
+    noteLabel_.setBounds(bounds);
 }
 
 // ============================================================================ OperatorWindow
@@ -770,8 +704,10 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
     setUsingNativeTitleBar(true);
     setContentOwned(new OperatorContent(controller), true);
     setResizable(true, true);
-    setResizeLimits(1040, 700, 4000, 4000);
-    setSize(1200, 780);
+    // UI-01 reshaped the content vertically (status -> audio -> translation ->
+    // health); the counter wall's width is gone, the hierarchy needs the height.
+    setResizeLimits(900, 760, 4000, 4000);
+    setSize(1140, 860);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

@@ -279,7 +279,10 @@ target_sources(LingoFlow
         App/OperatorWindow.cpp
         App/OperatorWindow.h
         App/SettingsWindow.cpp
-        App/SettingsWindow.h)
+        App/SettingsWindow.h
+        App/DiagnosticsWindow.cpp
+        App/DiagnosticsWindow.h
+        App/UiWidgets.h)
 
 target_compile_definitions(LingoFlow
     PRIVATE

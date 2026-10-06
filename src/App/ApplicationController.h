@@ -209,6 +209,12 @@ public:
     /// anything through it.
     const audio::IAudioBackend* audioBackend() const noexcept { return audioBackend_.get(); }
 
+    /// The subtitle transport as the read-only boundary, for UI-01's diagnostics
+    /// surface (published/dropped/error counters live on the interface).
+    /// Null before any backend exists. A display read, never an operation:
+    /// the UI may not start, stop or publish through it.
+    const ndi::INdiOutput* ndiOutput() const noexcept { return ndiOutput_.get(); }
+
     ConfigManager& config() noexcept { return config_; }
     const ConfigManager& config() const noexcept { return config_; }
     DiagnosticsManager& diagnostics() noexcept { return diagnostics_; }
