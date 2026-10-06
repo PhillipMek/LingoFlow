@@ -1301,6 +1301,25 @@ void ApplicationController::onFinalText(std::string_view text)
 
 void ApplicationController::onSessionStateChanged(translation::SessionState state)
 {
+    // Task 023 (2026-10-06): the "reconnects" row displayed in the HEALTH card,
+    // the diagnostics surface and the export was never fed - a recovery that
+    // worked was told by the transitions in the ring, while the count said
+    // zero. Count the reconnect where the application can observe it honestly:
+    // a `connected` transition that follows a `reconnecting` one. The initial
+    // open goes closed -> connecting -> connected and never counts; a clean
+    // stop never sees `reconnecting` at all.
+    const translation::SessionState previous =
+        lastSessionState_.exchange(state, std::memory_order_relaxed);
+    if (state == translation::SessionState::connected
+        && previous == translation::SessionState::reconnecting)
+    {
+        diagnostics_.countReconnect();
+        // Wording stays neutral: a supervisor recovery after an outage and a
+        // proactive rotate before the provider's ceiling both pass through
+        // `reconnecting` - the error lines in the ring distinguish them.
+        diagnostics_.noteEvent("translation", "session reconnected");
+    }
+
     diagnostics_.noteEvent("translation", std::string("session: ")
                                               + std::string(translation::nameOf(state)));
     log::info(kComponent, std::string("translation session: ").append(nameOf(state)));

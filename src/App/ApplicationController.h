@@ -397,6 +397,12 @@ private:
     std::atomic<bool> warnedRateMismatch_{ false };
     std::atomic<bool> warnedNoBuffer_{ false };
     std::atomic<bool> warnedBadBlock_{ false };
+
+    /// The session's last reported state, for the reconnect count (task 023):
+    /// a `connected` that follows a `reconnecting` is the recovery, and nothing
+    /// else is. Relaxed is exact - only the callback thread that reports the
+    /// transition exchanges it.
+    std::atomic<translation::SessionState> lastSessionState_{ translation::SessionState::closed };
     std::string lastTranslationError_;  ///< guarded by subsystemMutex_
     mutable std::mutex subsystemMutex_; ///< protects lastTranslationError_ only; mutable
                                         ///< because status() is a const read of it
