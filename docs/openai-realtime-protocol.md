@@ -435,6 +435,17 @@ Consumers of this single list: `ApplicationController::startSession` (operator g
 replace it through - dynamic discovery is not available with this key, section 15), and
 from task 014 the UI dropdowns. Nothing else may carry a language list (FAIL criterion).
 
+**UI consequence (P1 fix, 2026-10-06).** Because the source code never crosses the wire,
+no operator-facing surface may present it as if it did. The main screen shows the target
+as a selector and the source as a static line - `Source: Automatic detection` (the text
+comes from `OperatorPanel::sourceDisplay`, i.e. from the tested model). The expectation
+is set only in Settings -> Translation under the name "Expected source language", with a
+visible note that OpenAI detects the spoken language itself and the setting is used by
+LingoFlow for validation and diagnostics only; `checkPair` keeps gating the expectation
+against the manifest (an expectation of a language the provider cannot detect is a
+configuration defect worth refusing). The Diagnostics export states the two facts
+separately: `source_expectation` and `provider_source_detection: automatic`.
+
 ## 14. Explicitly unverified — needs the live API (HUMAN CHECKPOINT)
 
 This task verified documentation, not traffic; there is no `OPENAI_API_KEY` on this

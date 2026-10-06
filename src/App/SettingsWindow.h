@@ -104,6 +104,7 @@ private:
 
     // ------------------------------------------------------------ translation
     juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
+    juce::Label sourceNoteLabel_;         ///< the expectation-vs-wire truth, in one sentence
     juce::ComboBox sourceChoice_, targetChoice_;
     juce::Label modelHintCaption_;
     juce::TextEditor modelHintEditor_;

@@ -77,6 +77,13 @@ struct OperatorPanel
     std::string deviceNote;            ///< why the list can be empty, in plain words
 
     // ---------------------------------------------------------- languages
+    // The provider auto-detects the spoken language and the wire carries only
+    // the target (docs/openai-realtime-protocol.md section 5, R8). So the
+    // main screen shows the target as a control and the source as a static,
+    // honest line; sourceLanguages/selectedSource survive for the Settings
+    // tab, where the operator records the EXPECTATION - LingoFlow-side
+    // validation and diagnostics only, never a wire parameter.
+    std::string sourceDisplay;         ///< "Automatic detection" - the truth of the wire
     std::vector<UiOption> sourceLanguages;
     std::vector<UiOption> targetLanguages;
     int selectedSource = -1;

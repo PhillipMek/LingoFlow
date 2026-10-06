@@ -518,8 +518,28 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     sections.push_back({ "developer", std::move(developerRows) });
 
     std::vector<std::pair<std::string, std::string>> translationRows;
-    translationRows.emplace_back("languages", cfg.translation.inputLanguage + "->"
-                                             + cfg.translation.outputLanguage);
+    // The provider auto-detects the spoken language and the wire carries only
+    // the target (docs section 5, R8). The old "en->ru" line read like a
+    // declaration OpenAI was given; the export now states the expectation and
+    // the reality as two separate facts, so a venue reading the file cannot
+    // mistake one for the other.
+    const auto& capabilities = translation::openAiManifest().capabilities();
+    const auto named = [](std::string_view code, const auto& list)
+    {
+        std::string lowered;
+        for (const char ch : std::string(code))
+            lowered += static_cast<char> (ch >= 'A' && ch <= 'Z' ? ch + 32 : ch);
+        for (const auto& language : list)
+            if (language.code == lowered)
+                return language.englishName + " (" + lowered + ")";
+        return std::string(code) + " (not in the manifest)";
+    };
+    translationRows.emplace_back("source_expectation",
+                                 named(cfg.translation.inputLanguage, capabilities.sources));
+    translationRows.emplace_back("provider_source_detection",
+                                 "automatic (the wire carries only the target)");
+    translationRows.emplace_back("target_language",
+                                 named(cfg.translation.outputLanguage, capabilities.targets));
     translationRows.emplace_back("model_hint", cfg.translation.modelHint.empty()
                                                            ? "(backend default)"
                                                            : cfg.translation.modelHint);

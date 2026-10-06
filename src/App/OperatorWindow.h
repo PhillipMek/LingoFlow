@@ -99,7 +99,6 @@ private:
     void diagnosticsPressed();
     void refreshDevicesPressed();
     void deviceSelected();
-    void sourceSelected();
     void targetSelected();
     void channelChanged();
     void gainMoved();
@@ -155,8 +154,9 @@ private:
 
     // ------------------------------------------------------------- translation
     juce::Label translationHeader_;
-    juce::Label sourceCaption_, targetCaption_, arrowLabel_, pairWarningLabel_;
-    juce::ComboBox sourceChoice_, targetChoice_;
+    juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
+    juce::Label sourceValueLabel_;       ///< static "Automatic detection" - the wire's truth (R8)
+    juce::ComboBox targetChoice_;
     juce::Label sessionLineLabel_;         ///< "Connected" beside the pair - the same state word
     juce::Label currentSubtitleLabel_;     ///< the live line, quoted
     juce::Label historyLabel_;             ///< compact tail of recent lines
@@ -179,7 +179,7 @@ private:
     juce::Rectangle<int> statusCard_, audioCard_, translationCard_, healthCard_;
 
     // Option caches: the window's only lists, mirrored from the panel.
-    std::vector<UiOption> deviceCache_, sourceCache_, targetCache_;
+    std::vector<UiOption> deviceCache_, targetCache_;
     std::vector<UiOption> inputChannelCache_, outputChannelCache_;
 
     /// The task 015 dialog: created on first open, hidden on close, always

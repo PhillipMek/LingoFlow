@@ -263,6 +263,15 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     // the text was never sent. Default config = not set; if it were set the
     // same key would say "ignored - ...".
     CHECK(report.find("instructions_effect=not set") != std::string::npos);
+    // P1 (2026-10-06): the operator's expectation and the provider's
+    // auto-detection are two separate facts in the file (docs section 5,
+    // R8) - a venue reading the export cannot mistake the expectation for a
+    // parameter OpenAI was given. The old combined "languages=en->ru" line,
+    // which read exactly like that mistake, must be gone.
+    CHECK(report.find("source_expectation=English (en)") != std::string::npos);
+    CHECK(report.find("provider_source_detection=automatic") != std::string::npos);
+    CHECK(report.find("target_language=Russian (ru)") != std::string::npos);
+    CHECK(report.find("languages=en") == std::string::npos);
     CHECK(report.find("[ndi]") != std::string::npos);
     CHECK(report.find("[settings]") != std::string::npos);
 

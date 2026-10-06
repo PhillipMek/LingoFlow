@@ -187,10 +187,19 @@ SettingsContent::SettingsContent(ApplicationController& controller)
 
     // -------------------------------------------------------------- translation
     translationPage_ = new juce::Component();
-    caption(sourceCaption_, "Input language", *translationPage_);
+    // The provider auto-detects the spoken language (docs section 5, R8):
+    // what the operator picks here is the EXPECTATION LingoFlow validates
+    // and reports with - not a parameter OpenAI is given. The labels say
+    // exactly that, so the screen cannot imply a declaration the wire never
+    // carries.
+    caption(sourceCaption_, "Expected source language", *translationPage_);
     styleBox(sourceChoice_, *translationPage_);
-    caption(targetCaption_, "Output language", *translationPage_);
+    caption(targetCaption_, "Target language", *translationPage_);
     styleBox(targetChoice_, *translationPage_);
+    hint(sourceNoteLabel_,
+         "OpenAI detects the spoken language automatically. The expectation above is used "
+         "by LingoFlow for validation and diagnostics only.",
+         *translationPage_);
     pairWarningLabel_.setFont(ui::uiFont(12.0f));
     pairWarningLabel_.setColour(juce::Label::textColourId, sink::red);
     translationPage_->addAndMakeVisible(pairWarningLabel_);
@@ -737,6 +746,9 @@ void SettingsContent::layoutTranslationPage()
     targetCaption_.setBounds(right.removeFromTop(kCaptionH));
     targetChoice_.setBounds(right);
     b.removeFromTop(kRowGap);
+
+    sourceNoteLabel_.setBounds(b.removeFromTop(16));
+    b.removeFromTop(4);
 
     pairWarningLabel_.setBounds(b.removeFromTop(18));
     b.removeFromTop(kRowGap);

@@ -174,6 +174,12 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     panel.selectedSource = indexOfValue(panel.sourceLanguages, lower(cfg.translation.inputLanguage));
     panel.selectedTarget = indexOfValue(panel.targetLanguages, lower(cfg.translation.outputLanguage));
 
+    // The main screen's source line states the wire's truth (R8: the provider
+    // auto-detects; only the target travels). The operator's expectation is
+    // editable where it is honest - the Settings tab - and readable in
+    // Diagnostics; it is never presented as something OpenAI is told.
+    panel.sourceDisplay = "Automatic detection";
+
     if (const auto pair = translation::openAiManifest().checkPair(cfg.translation.inputLanguage,
                                                                   cfg.translation.outputLanguage);
         !pair)
@@ -410,12 +416,13 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
     panel.rawDetails.push_back(std::format("  rate {} Hz, buffer {} frames, channels {} / {}",
                                            cfg.audio.sampleRate, cfg.audio.bufferFrames,
                                            cfg.audio.inputChannel, cfg.audio.outputChannel));
-    panel.rawDetails.push_back(std::format("  languages {} -> {}, model hint {}",
-                                           cfg.translation.inputLanguage,
-                                           cfg.translation.outputLanguage,
-                                           cfg.translation.modelHint.empty()
-                                               ? std::string("(backend default)")
-                                               : cfg.translation.modelHint));
+    panel.rawDetails.push_back(std::format(
+        "  source expectation {} (provider auto-detects), target {}, model hint {}",
+        cfg.translation.inputLanguage,
+        cfg.translation.outputLanguage,
+        cfg.translation.modelHint.empty()
+            ? std::string("(backend default)")
+            : cfg.translation.modelHint));
     panel.rawDetails.push_back(std::format("  reconnect {}, backoff {}..{} ms, session max age {} s, jitter {} ms",
                                            cfg.translation.reconnectEnabled ? "on" : "off",
                                            cfg.translation.reconnectInitialBackoffMs,

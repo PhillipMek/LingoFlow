@@ -137,6 +137,13 @@ TEST_CASE("UiModel: the stopped panel states facts, not promises", "[app][ui][mo
     CHECK(panel.selectedTarget >= 0);   // the default "ru" is in the list
     CHECK(panel.languagePairWarning.empty());
 
+    // P1 (2026-10-06): the main screen's source line states what the wire
+    // does - the provider auto-detects (docs section 5, R8) - and not what
+    // the operator merely expects. The expectation stays in the Settings
+    // lists above; the display line is the truth, pinned word for word so a
+    // relapse into "From [selector]" cannot pass silently.
+    CHECK(panel.sourceDisplay == "Automatic detection");
+
     // Ranges are the schema's own, never a UI-side invention.
     const auto [gainMin, gainMax] = config::gainRange();
     CHECK(panel.gainMinDb == gainMin);

@@ -322,21 +322,21 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     // ------------------------------------------------------------ translation
     caption(translationHeader_, "TRANSLATION", *this, ink::textMuted, 11.0f);
 
-    caption(sourceCaption_, "From", *this);
-    sourceChoice_.onChange = [this] { sourceSelected(); };
-    styleBox(sourceChoice_);
-    addAndMakeVisible(sourceChoice_);
-
-    arrowLabel_.setFont(uiFont(18.0f));
-    arrowLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
-    arrowLabel_.setJustificationType(juce::Justification::centred);
-    arrowLabel_.setText(juce::String::fromUTF8("\u2192"), juce::NotificationType::dontSendNotification);
-    addAndMakeVisible(arrowLabel_);
-
-    caption(targetCaption_, "To", *this);
+    // The pair as the wire knows it (docs section 5, R8): the target is the
+    // operator's choice, the source is what the provider decides by itself.
+    // The old "From [combo] -> To [combo]" implied a declaration that never
+    // leaves LingoFlow; the expectation lives in Settings, the truth lives
+    // here.
+    caption(targetCaption_, "Target", *this);
     targetChoice_.onChange = [this] { targetSelected(); };
     styleBox(targetChoice_);
     addAndMakeVisible(targetChoice_);
+
+    caption(sourceCaption_, "Source", *this);
+    sourceValueLabel_.setFont(uiFont(14.0f));
+    sourceValueLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    sourceValueLabel_.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(sourceValueLabel_);
 
     sessionLineLabel_.setFont(uiFont(13.0f));
     addAndMakeVisible(sessionLineLabel_);
@@ -479,21 +479,6 @@ void OperatorContent::deviceSelected()
         cfg.audio.inputDeviceId = id;
         cfg.audio.outputDeviceId = id;   // SPEC: one ASIO device carries input and output
     });
-}
-
-void OperatorContent::sourceSelected()
-{
-    if (updatingWidgets_)
-        return;
-
-    const int index = sourceChoice_.getSelectedItemIndex();
-
-    if (index < 0 || static_cast<std::size_t> (index) >= sourceCache_.size())
-        return;
-
-    const std::string code = sourceCache_[static_cast<std::size_t> (index)].value;
-
-    commitSettings([code](AppConfig& cfg) { cfg.translation.inputLanguage = code; });
 }
 
 void OperatorContent::targetSelected()
@@ -682,8 +667,13 @@ void OperatorContent::rebuild()
 
     // ------------------------------------------------------------------- audio
     syncOptions(deviceChoice_, deviceCache_, panel.devices, panel.selectedDevice);
-    syncOptions(sourceChoice_, sourceCache_, panel.sourceLanguages, panel.selectedSource);
     syncOptions(targetChoice_, targetCache_, panel.targetLanguages, panel.selectedTarget);
+    // The source line is the panel's words, not a widget's guess: it says
+    // what the wire actually does (R8), and it is set here, from the tested
+    // model, so a future change of provider behaviour moves one string in
+    // UiModel and this screen follows.
+    sourceValueLabel_.setText(juce::String(panel.sourceDisplay),
+                              juce::NotificationType::dontSendNotification);
     syncOptions(inputChannelChoice_, inputChannelCache_, panel.inputChannelChoices,
                 panel.selectedInputChannel);
     syncOptions(outputChannelChoice_, outputChannelCache_, panel.outputChannelChoices,
@@ -845,7 +835,7 @@ int OperatorContent::preferredHeight() const
     const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
     const int audio = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
                     + columnsHeight + 14;
-    const int translation = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 12
+    const int translation = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 20 + 12
                           + 18 + kRowGap + 30 + 3 * 16;
     const int health = kCardPad * 2 + 16 + kRowGap + 4 * kHealthRowH + kRowGap + kSmallBtnH;
 
@@ -955,9 +945,11 @@ void OperatorContent::resized()
         }
     }
 
-    // 4. TRANSLATION card: the pair with an arrow, the state, the live line.
+    // 4. TRANSLATION card: the target the operator chose, the source the
+    //    provider decides for itself (R8), the live text. No arrow - an
+    //    arrow drew a pair the wire never carries.
     {
-        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 12
+        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 20 + 12
                          + 18 + kRowGap + 30 + 3 * 16;
         translationCard_ = bounds.removeFromTop(height);
         bounds.removeFromTop(kCardGap);
@@ -966,19 +958,17 @@ void OperatorContent::resized()
         translationHeader_.setBounds(inner.removeFromTop(16));
         inner.removeFromTop(kRowGap);
 
-        auto pairRow = inner.removeFromTop(kControlH + 14);
-        auto fromCol = pairRow.removeFromLeft(260);
-        sourceCaption_.setBounds(fromCol.removeFromTop(14));
-        sourceChoice_.setBounds(fromCol);
-        auto arrowCol = pairRow.removeFromLeft(48);
-        arrowCol.removeFromTop(14);                       // align with the combos, not the captions
-        arrowLabel_.setBounds(arrowCol.withHeight(kControlH));
-        auto toCol = pairRow.removeFromLeft(260);
+        auto targetRow = inner.removeFromTop(kControlH + 14);
+        auto toCol = targetRow.removeFromLeft(260);
         targetCaption_.setBounds(toCol.removeFromTop(14));
         targetChoice_.setBounds(toCol);
-        auto statusCol = pairRow;
+        auto statusCol = targetRow;
         statusCol.removeFromTop(14 + 6);
         sessionLineLabel_.setBounds(statusCol.reduced(16, 0).withHeight(kControlH - 12));
+
+        auto sourceRow = inner.removeFromTop(20);
+        sourceCaption_.setBounds(sourceRow.removeFromLeft(64));
+        sourceValueLabel_.setBounds(sourceRow);
 
         pairWarningLabel_.setBounds(inner.removeFromTop(18));
         currentSubtitleLabel_.setBounds(inner.removeFromTop(30));
