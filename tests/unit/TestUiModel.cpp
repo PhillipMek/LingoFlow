@@ -290,17 +290,17 @@ TEST_CASE("UiModel: the subtitle fields are the task 013 model, not a copy of so
     ApplicationController controller;
     REQUIRE(controller.start());
 
-    controller.onPartialText("Привет мир");
+    controller.onPartialText("РџСЂРёРІРµС‚ РјРёСЂ");
 
     auto panel = buildOperatorPanel(controller, {});
-    CHECK(panel.currentSubtitle == "Привет мир");
+    CHECK(panel.currentSubtitle == "РџСЂРёРІРµС‚ РјРёСЂ");
     CHECK(panel.subtitleHistory.empty());
 
-    controller.onFinalText("Привет мир");
+    controller.onFinalText("РџСЂРёРІРµС‚ РјРёСЂ");
     panel = buildOperatorPanel(controller, {});
     CHECK(panel.currentSubtitle.empty());
     REQUIRE(panel.subtitleHistory.size() == 1);
-    CHECK(panel.subtitleHistory[0] == "Привет мир");
+    CHECK(panel.subtitleHistory[0] == "РџСЂРёРІРµС‚ РјРёСЂ");
     CHECK(rowValue(buildDiagnosticsPanel(controller).subtitles,
                    "text partial/final/evicted/duplicates") == "1 / 1 / 0 / 0");
 
@@ -475,11 +475,11 @@ TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to di
 
     const auto panel = buildOperatorPanel(controller, {});
     REQUIRE(panel.health.size() == 4);
-    CHECK(panel.health[0].first == "latency");
+    CHECK(panel.health[0].first == "Latency");
     CHECK(panel.health[0].second.find("estimated") != std::string::npos);  // never a bare number
-    CHECK(panel.health[1].first == "jitter fill");
-    CHECK(panel.health[2].first == "underruns");
-    CHECK(panel.health[3].first == "reconnects");
+    CHECK(panel.health[1].first == "Jitter fill");
+    CHECK(panel.health[2].first == "Underruns");
+    CHECK(panel.health[3].first == "Reconnects");
 
     const DiagnosticsPanel diag = buildDiagnosticsPanel(controller);
     CHECK_FALSE(diag.audioHealth.empty());
@@ -496,6 +496,11 @@ TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to di
     // Runtime facts stay runtime facts: the stopped-with-null-store sentence.
     CHECK(rowValue(diag.runtime, "application") == "running");
     CHECK_FALSE(rowValue(diag.runtime, "API key").empty());
+
+    // UI-02: the technical detail the operator screen gave up is here now -
+    // the gain glide, and the full buffer-delay sentence.
+    CHECK(rowValue(diag.audioHealth, "applied gain in / out").find("gliding") != std::string::npos);
+    CHECK(rowValue(diag.runtime, "buffer delay detail").find("NOT included") != std::string::npos);
 
     controller.stop();
 }

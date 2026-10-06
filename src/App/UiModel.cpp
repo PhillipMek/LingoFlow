@@ -37,6 +37,26 @@ std::string formatCount(std::uint64_t value)
     return std::to_string(value);
 }
 
+/// The one sentence about the pipeline's own delay, from the product's single
+/// arithmetic (task 017) - and explicitly only that: translation latency is a
+/// measured property of the rig (task 018), and inventing a number for it here
+/// would be the AGENTS.md 19 kind of lie. UI-02 moved this full sentence off
+/// the operator screen (which shows the short health line) onto the Diagnostics
+/// surface; both builders call this one function, so the wording cannot drift.
+std::string latencySummaryText(const AudioEngine& engine, const AppConfig& cfg)
+{
+    const LatencyEstimate latency = estimateBufferDelay(engine, cfg);
+
+    if (latency.blockMs == 0)
+        return "Buffer delay: unknown until a device or settings give a sample rate.";
+
+    return std::format(
+        "Pipeline buffer ~{} ms ({} in + {} out + {} pre-roll, {}); translation latency "
+        "is NOT included (measured in task 018)",
+        latency.totalMs, latency.blockMs, latency.blockMs,
+        latency.totalMs - latency.blockMs * 2, latency.source);
+}
+
 UiMeterView meterView(const AudioEngine& engine, int channel, bool inputSide)
 {
     UiMeterView view;
@@ -208,26 +228,7 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     panel.outputMeter.clipping = engine.takeOutputClipIndicator();
 
     // ------------------------------------------------------------- readouts
-    {
-        // The pipeline's own delay, from the product's one arithmetic (task 017),
-        // and explicitly only that: translation latency is a measured property of
-        // the rig (task 018), and inventing a number for it here would be the
-        // AGENTS.md 19 kind of lie.
-        const LatencyEstimate latency = estimateBufferDelay(engine, cfg);
-
-        if (latency.blockMs == 0)
-        {
-            panel.latencySummary = "Buffer delay: unknown until a device or settings give a sample rate.";
-        }
-        else
-        {
-            panel.latencySummary = std::format(
-                "Pipeline buffer ~{} ms ({} in + {} out + {} pre-roll, {}); translation latency "
-                "is NOT included (measured in task 018)",
-                latency.totalMs, latency.blockMs, latency.blockMs,
-                latency.totalMs - latency.blockMs * 2, latency.source);
-        }
-    }
+    panel.latencySummary = latencySummaryText(engine, cfg);
 
     const auto diag = controller.diagnostics().snapshot();
 
@@ -241,16 +242,16 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     {
         const LatencyEstimate buffers = estimateBufferDelay(engine, cfg);
         panel.health = {
-            { "latency", buffers.blockMs > 0
+            { "Latency", buffers.blockMs > 0
                              ? std::format("~{} ms estimated (buffers only)", buffers.totalMs)
                              : std::string("unknown") },
-            { "jitter fill", std::format("{:.0f} ms",
+            { "Jitter fill", std::format("{:.0f} ms",
                                          engine.sampleRate() > 0
                                              ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
                                                    / static_cast<double>(engine.sampleRate())
                                              : 0.0) },
-            { "underruns", formatCount(diag.underruns) },
-            { "reconnects", formatCount(diag.reconnects) },
+            { "Underruns", formatCount(diag.underruns) },
+            { "Reconnects", formatCount(diag.reconnects) },
         };
     }
 
@@ -306,6 +307,12 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
                                          ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
                                                / static_cast<double>(engine.sampleRate())
                                          : 0.0) },
+        // UI-02 §6: the gain-glide detail left the operator screen for here -
+        // it is real telemetry (the engine's applied values), just not a thing
+        // a live room needs in its face.
+        { "applied gain in / out", std::format("{:+.1f} / {:+.1f} dB (gliding)",
+                                               engine.appliedInputGainDb(),
+                                               engine.appliedOutputGainDb()) },
     };
 
     panel.translationHealth = {
@@ -349,6 +356,9 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
         { "secret store", controller.secretStoreName() },
         { "developer plan", plan.badge.empty() ? std::string("production") : plan.badge },
         { "status detail", status.detail.empty() ? "ok" : status.detail },
+        // UI-02: the full buffer-delay sentence lives here now; the operator
+        // screen shows only its short health line. Same function, same words.
+        { "buffer delay detail", latencySummaryText(engine, cfg) },
     };
 
     return panel;

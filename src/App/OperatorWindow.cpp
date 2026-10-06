@@ -7,27 +7,64 @@
 
 #include "App/DiagnosticsWindow.h"
 #include "App/SettingsWindow.h"
-#include "App/UiWidgets.h"
 #include "Config/ConfigSchema.h"
 
 namespace liveai {
 namespace {
 
-juce::Font uiFont(float height = 15.0f)
+// ---------------------------------------------------------------- the palette
+// Colour communicates state and nothing else (UI-02 §12): surfaces stay
+// neutral, the four state colours appear only on dots, words and the buttons
+// that mean them.
+
+namespace ink {
+
+const juce::Colour background    { 0xff1a1d20u };
+const juce::Colour card          { 0xff22262bu };
+const juce::Colour cardBorder    { 0xff2d333au };
+const juce::Colour textPrimary   { 0xffe6edf3u };
+const juce::Colour textSecondary { 0xff9aa4afu };
+const juce::Colour textMuted     { 0xff6e7681u };
+const juce::Colour green         { 0xff3fb950u };
+const juce::Colour amber         { 0xffd29922u };
+const juce::Colour red           { 0xfff85149u };
+const juce::Colour blue          { 0xff2f81f7u };
+const juce::Colour control       { 0xff30363du };
+
+} // namespace ink
+
+// ------------------------------------------------------------- the spacing grid
+// 4 / 8 / 12 / 16 / 24 / 32 (UI-02 §11). Component heights are constants, not
+// per-widget negotiations.
+
+constexpr int kMargin    = 16;   // window edge -> card
+constexpr int kCardPad   = 16;   // card edge -> content
+constexpr int kCardGap   = 12;   // between cards
+constexpr int kRowGap    = 8;    // between rows inside a card
+constexpr int kControlH  = 30;   // ComboBox height, everywhere
+constexpr int kSmallBtnH = 30;   // Refresh / Diagnostics
+constexpr int kCommandH  = 46;   // START / STOP - the tallest controls on screen
+constexpr int kMeterH    = 22;
+constexpr int kStatusRowH = 24;
+constexpr int kHealthRowH = 22;
+
+/// One AUDIO column: caption, channel combo, meter, numeric level, gain, mute.
+/// The same block height on both sides is what makes the pair read as a pair.
+constexpr int kColumnH = 14 + kControlH + 4 + 14 + kMeterH + 16 + 4 + 14 + 28 + kRowGap + 30;
+
+juce::Font uiFont(float height = 15.0f, bool bold = false)
 {
-    return juce::Font(juce::FontOptions().withHeight(height));
+    juce::Font font { juce::FontOptions().withHeight(height) };
+    if (bold)
+        font.setBold(true);
+    return font;
 }
 
-juce::Font monoFont(float height = 13.0f)
+juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent,
+                     juce::Colour colour = ink::textSecondary, float height = 12.0f)
 {
-    return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(),
-                                        height, juce::Font::plain));
-}
-
-juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent)
-{
-    label.setFont(uiFont(12.0f));
-    label.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    label.setFont(uiFont(height));
+    label.setColour(juce::Label::textColourId, colour);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
     return label;
@@ -38,10 +75,38 @@ juce::Slider& fader(juce::Slider& slider, double min, double max, double interva
 {
     slider.setRange(min, max, interval);
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
-    slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 74, 22);
+    slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 74, 26);
+    slider.setColour(juce::Slider::backgroundColourId, ink::card);
+    slider.setColour(juce::Slider::trackColourId, ink::blue.withAlpha(0.55f));
+    slider.setColour(juce::Slider::thumbColourId, ink::textPrimary);
+    slider.setColour(juce::Slider::textBoxTextColourId, ink::textPrimary);
+    slider.setColour(juce::Slider::textBoxBackgroundColourId, ink::control);
+    slider.setColour(juce::Slider::textBoxOutlineColourId, ink::cardBorder);
     parent.addAndMakeVisible(slider);
     return slider;
 }
+
+/// The house style of every ComboBox on this screen: same height, same
+/// colours - a channel selector must never resemble the gain fader below it.
+void styleBox(juce::ComboBox& box)
+{
+    box.setColour(juce::ComboBox::backgroundColourId, ink::control);
+    box.setColour(juce::ComboBox::outlineColourId, ink::cardBorder);
+    box.setColour(juce::ComboBox::textColourId, ink::textPrimary);
+    box.setColour(juce::ComboBox::arrowColourId, ink::textSecondary);
+    box.setColour(juce::ComboBox::focusedOutlineColourId, ink::blue);
+}
+
+void styleQuietButton(juce::TextButton& button)
+{
+    button.setColour(juce::TextButton::buttonColourId, ink::control);
+    button.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
+    button.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
+}
+
+/// How many history lines this screen shows: a tail, not a transcript - the
+/// full bounded history stays in the model (and readable in Diagnostics).
+constexpr int kOperatorHistoryTail = 3;
 
 } // namespace
 
@@ -63,25 +128,24 @@ void MeterBar::setLevels(const UiMeterView& view)
 
 void MeterBar::paint(juce::Graphics& g)
 {
-    const auto bounds = getLocalBounds().toFloat();
+    const auto bounds = getLocalBounds().toFloat().reduced(0.5f);
 
-    g.setColour(juce::Colour(0xff16191cu));
+    g.setColour(ink::background);
     g.fillRoundedRectangle(bounds, 3.0f);
 
     const float peakX = bounds.getX() + positionForDb(view_.peakDb) * bounds.getWidth();
     const float rmsX = bounds.getX() + positionForDb(view_.rmsDb) * bounds.getWidth();
 
-    g.setColour(juce::Colour(0xff2f81f7u).withAlpha(0.85f));   // RMS body
+    g.setColour(ink::blue.withAlpha(0.85f));                          // RMS body
     g.fillRoundedRectangle({ bounds.getX() + 1.0f, bounds.getY() + 1.0f,
                              jmax(0.0f, rmsX - bounds.getX() - 1.0f),
                              bounds.getHeight() - 2.0f }, 2.0f);
 
-    g.setColour(view_.clipping ? juce::Colour(0xfff85149u)      // peak line
-                               : juce::Colour(0xffe6edf3u));
+    g.setColour(view_.clipping ? ink::red : ink::textPrimary);        // peak line
     g.fillRect(juce::Rectangle<float> (peakX - 1.0f, bounds.getY() + 1.0f, 2.5f,
                                        bounds.getHeight() - 2.0f));
 
-    g.setColour(juce::Colour(0xff8b949eu));                     // scale ticks
+    g.setColour(ink::textMuted);                                      // scale ticks
     for (int db = -60; db <= 0; db += 12)
     {
         const float x = bounds.getX() + positionForDb(static_cast<float> (db)) * bounds.getWidth();
@@ -90,13 +154,13 @@ void MeterBar::paint(juce::Graphics& g)
 
     if (view_.clipping)
     {
-        g.setColour(juce::Colour(0xfff85149u));                 // the latched clip lamp
+        g.setColour(ink::red);                                        // the latched clip lamp
         g.fillEllipse(bounds.getRight() - 13.0f, bounds.getCentreY() - 4.0f, 8.0f, 8.0f);
     }
     else if (!view_.signalPresent)
     {
         g.setFont(uiFont(10.0f));
-        g.setColour(juce::Colour(0xff8b949eu));
+        g.setColour(ink::textMuted);
         g.drawFittedText("no signal", getLocalBounds(), juce::Justification::centredRight, 1,
                          static_cast<float> (getWidth()) - 20.0f);
     }
@@ -108,80 +172,92 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     : controller_(controller)
 {
     // ---------------------------------------------------------------- header
-    titleLabel_.setFont(uiFont(17.0f));
-    titleLabel_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
+    titleLabel_.setFont(uiFont(20.0f, true));
+    titleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
     titleLabel_.setText(juce::String(std::format("{} {}",
                                                  JUCE_APPLICATION_NAME_STRING,
                                                  JUCE_APPLICATION_VERSION_STRING)),
                         juce::NotificationType::dontSendNotification);
     addAndMakeVisible(titleLabel_);
 
-    startButton_.onClick = [this] { startPressed(); };
-    stopButton_.onClick = [this] { stopPressed(); };
-    settingsButton_.onClick = [this] { settingsPressed(); };
-    diagnosticsButton_.onClick = [this] { diagnosticsPressed(); };
-    addAndMakeVisible(startButton_);
-    addAndMakeVisible(stopButton_);
-    addAndMakeVisible(settingsButton_);
-    addAndMakeVisible(diagnosticsButton_);
-
-    devBadge_.setFont(uiFont(13.0f));
-    devBadge_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
-    devBadge_.setColour(juce::Label::backgroundColourId, juce::Colour(0xff3c1416u));
-    devBadge_.setJustificationType(juce::Justification::centredLeft);
-    devBadge_.setVisible(false);   // empty in production - the band appears only when real
+    // UI-02 §4: developer mode is a compact, unmistakable chip - not the red
+    // banner that used to make a rehearsal look like an incident. The plan's
+    // full sentence stays readable below the status rows (devDetailLabel_).
+    devBadge_.setFont(uiFont(11.0f, true));
+    devBadge_.setColour(juce::Label::textColourId, ink::red);
+    devBadge_.setColour(juce::Label::backgroundColourId, ink::red.withAlpha(0.12f));
+    devBadge_.setColour(juce::Label::outlineColourId, ink::red.withAlpha(0.6f));
+    devBadge_.setJustificationType(juce::Justification::centred);
+    devBadge_.setText("DEVELOPER MODE", juce::NotificationType::dontSendNotification);
+    devBadge_.setVisible(false);   // empty in production - the chip appears only when real
     addAndMakeVisible(devBadge_);
 
+    settingsButton_.onClick = [this] { settingsPressed(); };
+    styleQuietButton(settingsButton_);
+    addAndMakeVisible(settingsButton_);
+
     // ---------------------------------------------------------- system status
-    ui::sectionHeader(statusHeader_, "SYSTEM STATUS", *this);
+    caption(statusHeader_, "SYSTEM STATUS", *this, ink::textMuted, 11.0f);
+
+    caption(appCaption_, "App", *this, ink::textSecondary, 14.0f);
+    caption(audioCaption_, "Audio", *this, ink::textSecondary, 14.0f);
+    caption(sessionCaption_, "Translation", *this, ink::textSecondary, 14.0f);
+    caption(ndiCaption_, "NDI", *this, ink::textSecondary, 14.0f);
 
     for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
     {
-        chip->setFont(uiFont(15.0f));
+        chip->setFont(uiFont(14.0f));
         addAndMakeVisible(*chip);
     }
 
     detailLabel_.setFont(uiFont(13.0f));
-    detailLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffd29922u));
+    detailLabel_.setColour(juce::Label::textColourId, ink::amber);
     addAndMakeVisible(detailLabel_);
 
     credentialLabel_.setFont(uiFont(12.0f));
-    credentialLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    credentialLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     addAndMakeVisible(credentialLabel_);
 
-    // ------------------------------------------------------------------ audio
-    ui::sectionHeader(audioHeader_, "AUDIO - routing and levels", *this);
+    devDetailLabel_.setFont(uiFont(11.0f));
+    devDetailLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    devDetailLabel_.setVisible(false);
+    addAndMakeVisible(devDetailLabel_);
 
-    caption(deviceCaption_, "Audio device (single ASIO in/out)", *this);
+    // ------------------------------------------------------------------ audio
+    caption(audioHeader_, "AUDIO", *this, ink::textMuted, 11.0f);
+
+    caption(deviceCaption_, "Device (one ASIO in/out)", *this);
     deviceChoice_.onChange = [this] { deviceSelected(); };
+    styleBox(deviceChoice_);
     addAndMakeVisible(deviceChoice_);
 
     refreshDevicesButton_.onClick = [this] { refreshDevicesPressed(); };
+    styleQuietButton(refreshDevicesButton_);
     addAndMakeVisible(refreshDevicesButton_);
 
     deviceNoteLabel_.setFont(uiFont(11.0f));
-    deviceNoteLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    deviceNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     addAndMakeVisible(deviceNoteLabel_);
 
-    // Discrete channel selection (UI-01 §4): the list IS the device's channel
-    // space (driver names once opened), so there is no in-between value to
-    // land on and no invented maximum to scroll past. Sample rate, buffer and
-    // jitter are Settings-window fields now - chosen before a show, not in it.
-    caption(inputChannelCaption_, "Input channel", *this);
+    caption(inputChannelCaption_, "Channel", *this);
     inputChannelChoice_.onChange = [this] { channelChanged(); };
+    styleBox(inputChannelChoice_);
     addAndMakeVisible(inputChannelChoice_);
 
-    caption(outputChannelCaption_, "Output channel", *this);
+    caption(outputChannelCaption_, "Channel", *this);
     outputChannelChoice_.onChange = [this] { channelChanged(); };
+    styleBox(outputChannelChoice_);
     addAndMakeVisible(outputChannelChoice_);
 
     channelNoteLabel_.setFont(uiFont(11.0f));
-    channelNoteLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff6e7681u));
+    channelNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     addAndMakeVisible(channelNoteLabel_);
 
-    caption(inputMeterCaption_, "INPUT - what the translator hears", *this);
+    caption(inputMeterCaption_, "Input level", *this);
     addAndMakeVisible(inputMeter_);
+    caption(inputLevelLabel_, "", *this, ink::textSecondary, 12.0f);
 
+    caption(inputGainCaption_, "Gain", *this);
     const auto [gainMin, gainMax] = config::gainRange();
     fader(inputGainSlider_, gainMin, gainMax, 0.5, *this);
     inputGainSlider_.onValueChange = [this] { gainMoved(); };
@@ -192,17 +268,16 @@ OperatorContent::OperatorContent(ApplicationController& controller)
         gainCommit();
     };
 
-    appliedInputLabel_.setFont(uiFont(11.0f));
-    appliedInputLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    addAndMakeVisible(appliedInputLabel_);
-
     inputMuteButton_.setClickingTogglesState(true);
     inputMuteButton_.onClick = [this] { muteToggled(); };
+    styleQuietButton(inputMuteButton_);
     addAndMakeVisible(inputMuteButton_);
 
-    caption(outputMeterCaption_, "OUTPUT - what the audience hears", *this);
+    caption(outputMeterCaption_, "Output level", *this);
     addAndMakeVisible(outputMeter_);
+    caption(outputLevelLabel_, "", *this, ink::textSecondary, 12.0f);
 
+    caption(outputGainCaption_, "Gain", *this);
     fader(outputGainSlider_, gainMin, gainMax, 0.5, *this);
     outputGainSlider_.onValueChange = [this] { gainMoved(); };
     outputGainSlider_.onDragStart = [this] { gainDragging_ = true; };
@@ -212,57 +287,82 @@ OperatorContent::OperatorContent(ApplicationController& controller)
         gainCommit();
     };
 
-    appliedOutputLabel_.setFont(uiFont(11.0f));
-    appliedOutputLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    addAndMakeVisible(appliedOutputLabel_);
-
     outputMuteButton_.setClickingTogglesState(true);
     outputMuteButton_.onClick = [this] { muteToggled(); };
+    styleQuietButton(outputMuteButton_);
     addAndMakeVisible(outputMuteButton_);
 
     // ------------------------------------------------------------ translation
-    ui::sectionHeader(translationHeader_, "TRANSLATION - pair and live text", *this);
+    caption(translationHeader_, "TRANSLATION", *this, ink::textMuted, 11.0f);
 
-    caption(sourceCaption_, "Input language", *this);
+    caption(sourceCaption_, "From", *this);
     sourceChoice_.onChange = [this] { sourceSelected(); };
+    styleBox(sourceChoice_);
     addAndMakeVisible(sourceChoice_);
 
-    caption(targetCaption_, "Output language", *this);
+    arrowLabel_.setFont(uiFont(18.0f));
+    arrowLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    arrowLabel_.setJustificationType(juce::Justification::centred);
+    arrowLabel_.setText(juce::String::fromUTF8("\u2192"), juce::NotificationType::dontSendNotification);
+    addAndMakeVisible(arrowLabel_);
+
+    caption(targetCaption_, "To", *this);
     targetChoice_.onChange = [this] { targetSelected(); };
+    styleBox(targetChoice_);
     addAndMakeVisible(targetChoice_);
 
+    sessionLineLabel_.setFont(uiFont(13.0f));
+    addAndMakeVisible(sessionLineLabel_);
+
     pairWarningLabel_.setFont(uiFont(12.0f));
-    pairWarningLabel_.setColour(juce::Label::textColourId, juce::Colour(0xfff85149u));
+    pairWarningLabel_.setColour(juce::Label::textColourId, ink::red);
     addAndMakeVisible(pairWarningLabel_);
 
-    caption(subtitleCaption_, "Subtitles", *this);
-
-    currentSubtitleLabel_.setFont(uiFont(20.0f));
-    currentSubtitleLabel_.setColour(juce::Label::textColourId, juce::Colours::whitesmoke);
-    currentSubtitleLabel_.setJustificationType(juce::Justification::topLeft);
+    currentSubtitleLabel_.setFont(uiFont(18.0f));
+    currentSubtitleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
+    currentSubtitleLabel_.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(currentSubtitleLabel_);
 
-    historyLabel_.setFont(uiFont(13.0f));
-    historyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    historyLabel_.setFont(uiFont(12.0f));
+    historyLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     historyLabel_.setJustificationType(juce::Justification::topLeft);
     addAndMakeVisible(historyLabel_);
 
     // ------------------------------------------------------------ live health
-    // The compact four-fact strip (UI-01): the raw counter wall and the full
-    // 018 accounting moved to the Diagnostics window behind this button.
-    ui::sectionHeader(healthHeader_, "LIVE HEALTH", *this);
+    caption(healthHeader_, "HEALTH", *this, ink::textMuted, 11.0f);
 
-    latencyLabel_.setFont(uiFont(12.0f));
-    latencyLabel_.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
-    latencyLabel_.setJustificationType(juce::Justification::topLeft);
-    addAndMakeVisible(latencyLabel_);
+    caption(latencyCaption_, "Latency", *this, ink::textSecondary, 13.0f);
+    caption(jitterCaption_, "Jitter fill", *this, ink::textSecondary, 13.0f);
+    caption(underrunCaption_, "Underruns", *this, ink::textSecondary, 13.0f);
+    caption(reconnectCaption_, "Reconnects", *this, ink::textSecondary, 13.0f);
 
-    healthLabel_.setFont(monoFont());
-    healthLabel_.setColour(juce::Label::textColourId, juce::Colour(0xffc9d1d9u));
-    addAndMakeVisible(healthLabel_);
+    for (auto* value : { &latencyValue_, &jitterValue_, &underrunValue_, &reconnectValue_ })
+    {
+        value->setFont(uiFont(13.0f));
+        value->setColour(juce::Label::textColourId, ink::textSecondary);
+        addAndMakeVisible(*value);
+    }
+
+    diagnosticsButton_.onClick = [this] { diagnosticsPressed(); };
+    styleQuietButton(diagnosticsButton_);
+    addAndMakeVisible(diagnosticsButton_);
 
     noteLabel_.setFont(uiFont(12.0f));
+    noteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     addAndMakeVisible(noteLabel_);
+
+    // ------------------------------------------------------------ command bar
+    // The two tallest, widest controls on the screen (UI-02 §10). Start is
+    // green when it means "go", Stop stays blue-strong: ending a show is an
+    // action, not an error. Retry (faulted) borrows amber - it asks attention.
+    startButton_.onClick = [this] { startPressed(); };
+    stopButton_.onClick = [this] { stopPressed(); };
+    startButton_.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
+    startButton_.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
+    stopButton_.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
+    stopButton_.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
+    addAndMakeVisible(startButton_);
+    addAndMakeVisible(stopButton_);
 
     controller_.refreshDevices();   // the first list the window can honestly show
     rebuild();
@@ -354,29 +454,6 @@ void OperatorContent::deviceSelected()
     });
 }
 
-void OperatorContent::channelChanged()
-{
-    if (updatingWidgets_)
-        return;
-
-    // The discrete choices (UI-01): the value list is the panel's, mirrored
-    // into the caches; a combo can only land on a real channel index.
-    const int inIndex = inputChannelChoice_.getSelectedItemIndex();
-    const int outIndex = outputChannelChoice_.getSelectedItemIndex();
-
-    if (inIndex < 0 || static_cast<std::size_t> (inIndex) >= inputChannelCache_.size()
-        || outIndex < 0 || static_cast<std::size_t> (outIndex) >= outputChannelCache_.size())
-        return;
-
-    const int in = std::stoi(inputChannelCache_[static_cast<std::size_t> (inIndex)].value);
-    const int out = std::stoi(outputChannelCache_[static_cast<std::size_t> (outIndex)].value);
-
-    commitSettings([in, out](AppConfig& cfg)
-    {
-        cfg.audio.inputChannel = in;
-        cfg.audio.outputChannel = out;
-    });
-}
 void OperatorContent::sourceSelected()
 {
     if (updatingWidgets_)
@@ -405,6 +482,30 @@ void OperatorContent::targetSelected()
     const std::string code = targetCache_[static_cast<std::size_t> (index)].value;
 
     commitSettings([code](AppConfig& cfg) { cfg.translation.outputLanguage = code; });
+}
+
+void OperatorContent::channelChanged()
+{
+    if (updatingWidgets_)
+        return;
+
+    // The discrete choices (UI-01): the value list is the panel's, mirrored
+    // into the caches; a combo can only land on a real channel index.
+    const int inIndex = inputChannelChoice_.getSelectedItemIndex();
+    const int outIndex = outputChannelChoice_.getSelectedItemIndex();
+
+    if (inIndex < 0 || static_cast<std::size_t> (inIndex) >= inputChannelCache_.size()
+        || outIndex < 0 || static_cast<std::size_t> (outIndex) >= outputChannelCache_.size())
+        return;
+
+    const int in = std::stoi(inputChannelCache_[static_cast<std::size_t> (inIndex)].value);
+    const int out = std::stoi(outputChannelCache_[static_cast<std::size_t> (outIndex)].value);
+
+    commitSettings([in, out](AppConfig& cfg)
+    {
+        cfg.audio.inputChannel = in;
+        cfg.audio.outputChannel = out;
+    });
 }
 
 void OperatorContent::gainMoved()
@@ -452,13 +553,30 @@ juce::Colour OperatorContent::stateColour(std::string_view state) noexcept
     // The words come from the modules' own nameOf(); mapping them to meaning is
     // cosmetic - the tested contract is the word (UiModel tests assert it).
     if (state == "running" || state == "connected" || state == "publishing")
-        return juce::Colour(0xff3fb950u);   // the show is working
+        return ink::green;        // the show is working
     if (state == "starting" || state == "stopping" || state == "opened"
         || state == "connecting" || state == "reconnecting" || state == "ready")
-        return juce::Colour(0xffd29922u);   // on its way, not there yet
+        return ink::amber;        // on its way, not there yet
     if (state == "faulted")
-        return juce::Colour(0xfff85149u);   // operator, look here
-    return juce::Colour(0xff8b949eu);       // stopped / off / disabled
+        return ink::red;          // operator, look here
+    return ink::textMuted;        // stopped / off / disabled
+}
+
+juce::String OperatorContent::stateGlyph(std::string_view state) noexcept
+{
+    // Filled dot when something is on (in any health colour), hollow when it is
+    // off/disabled/closed: the shape says "is it running", the colour says how.
+    const bool off = state == "stopped" || state == "closed" || state == "disabled"
+                     || state == "off" || state == "idle";
+    return off ? juce::String::fromUTF8("\u25cb ") : juce::String::fromUTF8("\u25cf ");
+}
+
+void OperatorContent::layoutStatusRow(juce::Rectangle<int>& area, juce::Label& captionLabel,
+                                      juce::Label& value) const
+{
+    auto row = area.removeFromTop(kStatusRowH);
+    captionLabel.setBounds(row.removeFromLeft(140).reduced(0, 2));
+    value.setBounds(row.reduced(0, 2));
 }
 
 void OperatorContent::syncOptions(juce::ComboBox& box, std::vector<UiOption>& cache,
@@ -486,22 +604,26 @@ void OperatorContent::rebuild()
 
     const OperatorPanel panel = buildOperatorPanel(controller_, actionNote_);
 
-    appValue_.setText("app: " + juce::String(panel.applicationState),
+    // ------------------------------------------------------------- status card
+    appValue_.setText(stateGlyph(panel.applicationState) + juce::String(panel.applicationState),
                       juce::NotificationType::dontSendNotification);
-    audioValue_.setText("audio: " + juce::String(panel.audioState) + " ("
-                            + juce::String(panel.audioBackendName) + ")",
+    audioValue_.setText(stateGlyph(panel.audioState) + juce::String(panel.audioState)
+                            + "  (" + juce::String(panel.audioBackendName) + ")",
                         juce::NotificationType::dontSendNotification);
-    sessionValue_.setText("translation: " + juce::String(panel.sessionState),
+    sessionValue_.setText(stateGlyph(panel.sessionState) + juce::String(panel.sessionState),
                           juce::NotificationType::dontSendNotification);
-    ndiValue_.setText("NDI: " + juce::String(panel.ndiState),
+    ndiValue_.setText(stateGlyph(panel.ndiState) + juce::String(panel.ndiState),
                       juce::NotificationType::dontSendNotification);
     appValue_.setColour(juce::Label::textColourId, stateColour(panel.applicationState));
     audioValue_.setColour(juce::Label::textColourId, stateColour(panel.audioState));
     sessionValue_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
     ndiValue_.setColour(juce::Label::textColourId, stateColour(panel.ndiState));
 
+    // Warnings only when they ask something (UI-02 §9): "ok" paints nothing.
     detailLabel_.setText(panel.detail == "ok" ? juce::String() : juce::String(panel.detail),
                          juce::NotificationType::dontSendNotification);
+    detailLabel_.setColour(juce::Label::textColourId,
+                           panel.faulted ? ink::red : ink::amber);
 
     // Task 015: the credential state belongs to the main screen too - an
     // operator must be able to see "no key" before pressing Start, not only
@@ -510,19 +632,28 @@ void OperatorContent::rebuild()
                              juce::NotificationType::dontSendNotification);
     credentialLabel_.setColour(juce::Label::textColourId,
                                panel.credentialLine.rfind("API key: stored", 0) == 0
-                                   ? juce::Colour(0xff8b949eu)
-                                   : juce::Colour(0xffd29922u));
+                                   ? ink::textMuted
+                                   : ink::amber);
 
-    // Task 019: visible only when the mounted plan is a developer plan; the
-    // text itself is the plan's badge, extended with the loopback worker's
-    // real state (UiModel does the composing, this widget only paints it).
-    devBadge_.setVisible(!panel.developerBadge.empty());
-    devBadge_.setText(juce::String(panel.developerBadge), juce::NotificationType::dontSendNotification);
+    // Task 019 + UI-02 §4: the chip is the compact, unmistakable flag; the
+    // plan's full sentence rides below the rows, muted. Production: empty,
+    // both invisible.
+    const bool dev = !panel.developerBadge.empty();
+    devBadge_.setVisible(dev);
+    devDetailLabel_.setVisible(dev);
+    devDetailLabel_.setText(juce::String(panel.developerBadge),
+                            juce::NotificationType::dontSendNotification);
 
+    // ------------------------------------------------------------- command bar
     startButton_.setEnabled(panel.canStart || panel.faulted);
     startButton_.setButtonText(panel.faulted ? "Retry" : "Start");
+    startButton_.setColour(juce::TextButton::buttonColourId,
+                           (panel.faulted ? ink::amber : ink::green).withAlpha(0.28f));
     stopButton_.setEnabled(panel.canStop);
+    stopButton_.setColour(juce::TextButton::buttonColourId,
+                          panel.canStop ? ink::blue.withAlpha(0.25f) : ink::control);
 
+    // ------------------------------------------------------------------- audio
     syncOptions(deviceChoice_, deviceCache_, panel.devices, panel.selectedDevice);
     syncOptions(sourceChoice_, sourceCache_, panel.sourceLanguages, panel.selectedSource);
     syncOptions(targetChoice_, targetCache_, panel.targetLanguages, panel.selectedTarget);
@@ -546,168 +677,298 @@ void OperatorContent::rebuild()
                                    juce::NotificationType::dontSendNotification);
     }
 
+    // The caption carries the requested number (the slider's own value); the
+    // technical "applying ... (gliding)" line moved to Diagnostics (UI-02 §6).
+    inputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.inputGainDb)),
+                              juce::NotificationType::dontSendNotification);
+    outputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.outputGainDb)),
+                               juce::NotificationType::dontSendNotification);
+
     inputMuteButton_.setToggleState(panel.inputMuted,
                                     juce::NotificationType::dontSendNotification);
     outputMuteButton_.setToggleState(panel.outputMuted,
                                      juce::NotificationType::dontSendNotification);
-
-    appliedInputLabel_.setText(
-        juce::String(std::format("applying {:+.1f} dB (gliding)", panel.appliedInputGainDb)),
-        juce::NotificationType::dontSendNotification);
-    appliedOutputLabel_.setText(
-        juce::String(std::format("applying {:+.1f} dB (gliding)", panel.appliedOutputGainDb)),
-        juce::NotificationType::dontSendNotification);
+    inputMuteButton_.setColour(juce::TextButton::buttonColourId,
+                               panel.inputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
+    outputMuteButton_.setColour(juce::TextButton::buttonColourId,
+                                panel.outputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
 
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);
 
-    // The one honest sentence about buffer delay (kept in full, kind and all -
-    // UI-01 did not shorten the truth, it shortened the screen), plus the four
-    // health facts. The detailed accounting is one button away, in Diagnostics.
-    latencyLabel_.setText(juce::String(panel.latencySummary),
-                          juce::NotificationType::dontSendNotification);
+    // Numeric readout beside the bar (UI-02 §6): level and peak from the same
+    // view the bar draws - existing telemetry, no new processing.
+    inputLevelLabel_.setText(juce::String(std::format("{:.1f} dB   peak {:.1f} dB",
+                                                      panel.inputMeter.rmsDb,
+                                                      panel.inputMeter.peakDb)),
+                             juce::NotificationType::dontSendNotification);
+    inputLevelLabel_.setColour(juce::Label::textColourId,
+                               panel.inputMeter.clipping ? ink::red : ink::textSecondary);
+    outputLevelLabel_.setText(juce::String(std::format("{:.1f} dB   peak {:.1f} dB",
+                                                       panel.outputMeter.rmsDb,
+                                                       panel.outputMeter.peakDb)),
+                              juce::NotificationType::dontSendNotification);
+    outputLevelLabel_.setColour(juce::Label::textColourId,
+                                panel.outputMeter.clipping ? ink::red : ink::textSecondary);
 
-    std::string health;
-    for (const auto& [label, value] : panel.health)
-        health += std::format("{:<16}{}\n", label, value);
-    healthLabel_.setText(juce::String(health), juce::NotificationType::dontSendNotification);
+    // -------------------------------------------------------------- translation
+    sessionLineLabel_.setText(stateGlyph(panel.sessionState) + juce::String(panel.sessionState),
+                              juce::NotificationType::dontSendNotification);
+    sessionLineLabel_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
 
     currentSubtitleLabel_.setText(panel.currentSubtitle.empty()
-                                      ? juce::String()
-                                      : juce::String(panel.currentSubtitle),
+                                      ? juce::String::fromUTF8("\u2014")
+                                      : juce::String("\u201c" + panel.currentSubtitle + "\u201d"),
                                   juce::NotificationType::dontSendNotification);
 
     std::string history;
-    for (const auto& line : panel.subtitleHistory)
-        history += line + "\n";
+    const std::size_t total = panel.subtitleHistory.size();
+    const std::size_t shown = total > static_cast<std::size_t>(kOperatorHistoryTail)
+                                  ? total - static_cast<std::size_t>(kOperatorHistoryTail)
+                                  : 0u;
+    for (std::size_t i = shown; i < total; ++i)
+        history += panel.subtitleHistory[i] + "\n";
     historyLabel_.setText(juce::String(history), juce::NotificationType::dontSendNotification);
+
+    // -------------------------------------------------------------------- health
+    // Four rows, values verbatim from the model (the "estimated" wording is the
+    // model's, not this window's invention). Non-zero underruns/reconnects turn
+    // amber: a number that stays 0 needs no colour, one that moved does.
+    if (panel.health.size() == 4)
+    {
+        latencyValue_.setText(juce::String(panel.health[0].second),
+                              juce::NotificationType::dontSendNotification);
+        jitterValue_.setText(juce::String(panel.health[1].second),
+                             juce::NotificationType::dontSendNotification);
+        underrunValue_.setText(juce::String(panel.health[2].second),
+                               juce::NotificationType::dontSendNotification);
+        reconnectValue_.setText(juce::String(panel.health[3].second),
+                                juce::NotificationType::dontSendNotification);
+        underrunValue_.setColour(juce::Label::textColourId,
+                                 panel.health[2].second == "0" ? ink::textSecondary : ink::amber);
+        reconnectValue_.setColour(juce::Label::textColourId,
+                                  panel.health[3].second == "0" ? ink::textSecondary : ink::amber);
+    }
 
     noteLabel_.setText(juce::String(panel.actionNote),
                        juce::NotificationType::dontSendNotification);
     noteLabel_.setColour(juce::Label::textColourId,
                          panel.actionNote.rfind("settings refused", 0) == 0
-                             ? juce::Colour(0xfff85149u)
-                             : juce::Colour(0xffd29922u));
+                             ? ink::red
+                             : ink::textMuted);
 
     updatingWidgets_ = false;
+    repaint();
 }
+
+// ------------------------------------------------------------------------------ paint
+
+void OperatorContent::paint(juce::Graphics& g)
+{
+    g.fillAll(ink::background);
+
+    for (const auto& card : { statusCard_, audioCard_, translationCard_, healthCard_ })
+    {
+        g.setColour(ink::card);
+        g.fillRoundedRectangle(card.toFloat(), 6.0f);
+        g.setColour(ink::cardBorder);
+        g.drawRoundedRectangle(card.toFloat().reduced(0.5f), 6.0f, 1.0f);
+    }
+}
+
+// ---------------------------------------------------------------------------- layout
+
+namespace {
+
+/// One AUDIO column laid out inside its rectangle (UI-02 §5: the same block on
+/// both sides - device is shared above them, channel/meter/gain/mute are not).
+void layoutAudioColumn(juce::Rectangle<int>& col,
+                       juce::Label& channelCaption, juce::ComboBox& channelBox,
+                       juce::Label& meterCaption, MeterBar& meter, juce::Label& levelLabel,
+                       juce::Label& gainCaption, juce::Slider& gainSlider,
+                       juce::TextButton& muteButton)
+{
+    channelCaption.setBounds(col.removeFromTop(14));
+    channelBox.setBounds(col.removeFromTop(kControlH));
+    col.removeFromTop(4);
+    meterCaption.setBounds(col.removeFromTop(14));
+    meter.setBounds(col.removeFromTop(kMeterH));
+    levelLabel.setBounds(col.removeFromTop(16));
+    col.removeFromTop(4);
+    gainCaption.setBounds(col.removeFromTop(14));
+    gainSlider.setBounds(col.removeFromTop(28));
+    col.removeFromTop(kRowGap);
+    muteButton.setBounds(col.removeFromTop(30));
+}
+
+} // namespace
 
 void OperatorContent::resized()
 {
-    auto bounds = getLocalBounds().reduced(14);
+    auto bounds = getLocalBounds().reduced(kMargin);
 
-    // 1. Header: identity left, commands right (Start/Stop stay the prominent
-    // pair; Settings opens configuration, Diagnostics opens the engineering
-    // surface that took over the raw-counter wall).
-    auto header = bounds.removeFromTop(32);
-    stopButton_.setBounds(header.removeFromRight(96));
-    startButton_.setBounds(header.removeFromRight(96).withTrimmedRight(6));
-    settingsButton_.setBounds(header.removeFromRight(110).withTrimmedRight(6));
-    diagnosticsButton_.setBounds(header.removeFromRight(120).withTrimmedRight(6));
+    // 1. Header: identity left, the compact developer chip, Settings right.
+    auto header = bounds.removeFromTop(36);
+    settingsButton_.setBounds(header.removeFromRight(110).withHeight(kSmallBtnH));
+    devBadge_.setBounds(header.removeFromRight(160).withTrimmedRight(12).reduced(0, 5));
     titleLabel_.setBounds(header);
+    bounds.removeFromTop(kCardGap);
 
-    // Task 019: the developer band sits above everything the operator reads -
-    // production hides it (empty label, no paint), a developer run cannot
-    // scroll it away or overlook it.
-    devBadge_.setBounds(bounds.removeFromTop(24));
+    const bool stacked = bounds.getWidth() < 760;   // narrow: the audio pair stacks
 
-    // 2. System status: one scannable block directly under the header.
-    statusHeader_.setBounds(bounds.removeFromTop(18));
+    // 2. SYSTEM STATUS card: header line (with the app state), three rows,
+    // then the lines that ask attention.
     {
-        auto chips = bounds.removeFromTop(24);
-        appValue_.setBounds(chips.removeFromLeft(200));
-        audioValue_.setBounds(chips.removeFromLeft(360));
-        sessionValue_.setBounds(chips.removeFromLeft(240));
-        ndiValue_.setBounds(chips);
-    }
-    detailLabel_.setBounds(bounds.removeFromTop(20));
-    credentialLabel_.setBounds(bounds.removeFromTop(18));
-    bounds.removeFromTop(6);
+        const int height = kCardPad * 2 + 16 + kRowGap
+                         + 4 * kStatusRowH + kRowGap + 18 + 16
+                         + (devBadge_.isVisible() ? 16 : 0);
+        statusCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
 
-    // 3. Audio: routing across the top, then INPUT and OUTPUT as paired
-    // columns - channel combo, meter, gain, mute in the same order on both
-    // sides so the two halves read as one control surface.
-    audioHeader_.setBounds(bounds.removeFromTop(18));
-    deviceCaption_.setBounds(bounds.removeFromTop(16));
+        auto inner = statusCard_.reduced(kCardPad);
+        statusHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+        layoutStatusRow(inner, appCaption_, appValue_);
+        layoutStatusRow(inner, audioCaption_, audioValue_);
+        layoutStatusRow(inner, sessionCaption_, sessionValue_);
+        layoutStatusRow(inner, ndiCaption_, ndiValue_);
+        inner.removeFromTop(kRowGap);
+        detailLabel_.setBounds(inner.removeFromTop(18));
+        credentialLabel_.setBounds(inner.removeFromTop(16));
+        if (devBadge_.isVisible())
+            devDetailLabel_.setBounds(inner.removeFromTop(16));
+    }
+
+    // 3. AUDIO card: shared device row on top, then the paired columns.
     {
-        auto row = bounds.removeFromTop(26);
-        refreshDevicesButton_.setBounds(row.removeFromRight(150).withTrimmedLeft(6));
-        deviceChoice_.setBounds(row);
+        const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
+        const int height = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
+                         + columnsHeight + 14;
+        audioCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
+
+        auto inner = audioCard_.reduced(kCardPad);
+        audioHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+        deviceCaption_.setBounds(inner.removeFromTop(14));
+        {
+            auto row = inner.removeFromTop(kControlH);
+            refreshDevicesButton_.setBounds(row.removeFromRight(90).withTrimmedLeft(kRowGap));
+            deviceChoice_.setBounds(row);
+        }
+        deviceNoteLabel_.setBounds(inner.removeFromTop(14));
+        inner.removeFromTop(kRowGap);
+
+        auto columns = inner;
+        if (stacked)
+        {
+            auto inCol = columns.removeFromTop(kColumnH);
+            columns.removeFromTop(kRowGap);
+            auto outCol = columns;   // full width, under the input column
+
+            layoutAudioColumn(inCol, inputChannelCaption_, inputChannelChoice_,
+                              inputMeterCaption_, inputMeter_, inputLevelLabel_,
+                              inputGainCaption_, inputGainSlider_, inputMuteButton_);
+            layoutAudioColumn(outCol, outputChannelCaption_, outputChannelChoice_,
+                              outputMeterCaption_, outputMeter_, outputLevelLabel_,
+                              outputGainCaption_, outputGainSlider_, outputMuteButton_);
+            channelNoteLabel_.setBounds({});
+        }
+        else
+        {
+            auto inCol = columns.removeFromLeft(columns.getWidth() / 2);
+            auto outCol = columns;
+            outCol.removeFromLeft(24);
+
+            layoutAudioColumn(inCol, inputChannelCaption_, inputChannelChoice_,
+                              inputMeterCaption_, inputMeter_, inputLevelLabel_,
+                              inputGainCaption_, inputGainSlider_, inputMuteButton_);
+            layoutAudioColumn(outCol, outputChannelCaption_, outputChannelChoice_,
+                              outputMeterCaption_, outputMeter_, outputLevelLabel_,
+                              outputGainCaption_, outputGainSlider_, outputMuteButton_);
+            channelNoteLabel_.setBounds(outCol.withHeight(14));
+        }
     }
-    deviceNoteLabel_.setBounds(bounds.removeFromTop(18));
-    bounds.removeFromTop(2);
 
-    auto audioCols = bounds.removeFromTop(150);
-    auto inCol = audioCols.removeFromLeft(audioCols.getWidth() / 2);
-    auto outCol = audioCols;
-    outCol.removeFromLeft(10);
-
-    inputChannelCaption_.setBounds(inCol.removeFromTop(16));
-    inputChannelChoice_.setBounds(inCol.removeFromTop(26));
-    inputMeterCaption_.setBounds(inCol.removeFromTop(18));
-    inputMeter_.setBounds(inCol.removeFromTop(22));
+    // 4. TRANSLATION card: the pair with an arrow, the state, the live line.
     {
-        auto row = inCol.removeFromTop(30);
-        inputMuteButton_.setBounds(row.removeFromRight(96).withTrimmedLeft(6));
-        inputGainSlider_.setBounds(row);
-    }
-    appliedInputLabel_.setBounds(inCol.removeFromTop(16));
+        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 12
+                         + 18 + kRowGap + 30 + 3 * 16;
+        translationCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
 
-    outputChannelCaption_.setBounds(outCol.removeFromTop(16));
-    outputChannelChoice_.setBounds(outCol.removeFromTop(26));
-    outputMeterCaption_.setBounds(outCol.removeFromTop(18));
-    outputMeter_.setBounds(outCol.removeFromTop(22));
+        auto inner = translationCard_.reduced(kCardPad);
+        translationHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+
+        auto pairRow = inner.removeFromTop(kControlH + 14);
+        auto fromCol = pairRow.removeFromLeft(260);
+        sourceCaption_.setBounds(fromCol.removeFromTop(14));
+        sourceChoice_.setBounds(fromCol);
+        auto arrowCol = pairRow.removeFromLeft(48);
+        arrowCol.removeFromTop(14);                       // align with the combos, not the captions
+        arrowLabel_.setBounds(arrowCol.withHeight(kControlH));
+        auto toCol = pairRow.removeFromLeft(260);
+        targetCaption_.setBounds(toCol.removeFromTop(14));
+        targetChoice_.setBounds(toCol);
+        auto statusCol = pairRow;
+        statusCol.removeFromTop(14 + 6);
+        sessionLineLabel_.setBounds(statusCol.reduced(16, 0).withHeight(kControlH - 12));
+
+        pairWarningLabel_.setBounds(inner.removeFromTop(18));
+        currentSubtitleLabel_.setBounds(inner.removeFromTop(30));
+        historyLabel_.setBounds(inner);
+    }
+
+    // 5. HEALTH card: four rows and the (deliberately quiet) door to detail.
     {
-        auto row = outCol.removeFromTop(30);
-        outputMuteButton_.setBounds(row.removeFromRight(96).withTrimmedLeft(6));
-        outputGainSlider_.setBounds(row);
+        const int height = kCardPad * 2 + 16 + kRowGap + 4 * kHealthRowH + kRowGap + kSmallBtnH;
+        healthCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kRowGap);
+
+        auto inner = healthCard_.reduced(kCardPad);
+        healthHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+
+        const auto layoutHealth = [](juce::Rectangle<int>& row, juce::Label& cap,
+                                     juce::Label& val)
+        {
+            auto r = row.removeFromTop(kHealthRowH);
+            cap.setBounds(r.removeFromLeft(140));
+            val.setBounds(r);
+        };
+        layoutHealth(inner, latencyCaption_, latencyValue_);
+        layoutHealth(inner, jitterCaption_, jitterValue_);
+        layoutHealth(inner, underrunCaption_, underrunValue_);
+        layoutHealth(inner, reconnectCaption_, reconnectValue_);
+
+        diagnosticsButton_.setBounds(inner.withHeight(kSmallBtnH).withWidth(140));
     }
-    appliedOutputLabel_.setBounds(outCol.removeFromTop(16));
 
-    channelNoteLabel_.setBounds(bounds.removeFromTop(16));
-    bounds.removeFromTop(4);
-
-    // 4. Translation: the pair on one line, then the live text underneath.
-    translationHeader_.setBounds(bounds.removeFromTop(18));
-    {
-        auto pairRow = bounds.removeFromTop(44);
-        auto leftCol = pairRow.removeFromLeft(240);
-        auto rightCol = pairRow.removeFromLeft(260);
-        sourceCaption_.setBounds(leftCol.removeFromTop(16));
-        sourceChoice_.setBounds(leftCol.removeFromTop(26));
-        targetCaption_.setBounds(rightCol.removeFromTop(16));
-        targetChoice_.setBounds(rightCol.removeFromTop(26));
-        pairWarningLabel_.setBounds(pairRow);
-    }
-    subtitleCaption_.setBounds(bounds.removeFromTop(16));
-    currentSubtitleLabel_.setBounds(bounds.removeFromTop(34));
-    historyLabel_.setBounds(bounds.removeFromTop(120));
-    bounds.removeFromTop(4);
-
-    // 5. Live health: the four facts, the honest latency sentence - and the
-    // door to everything else (the Diagnostics button up in the header).
-    healthHeader_.setBounds(bounds.removeFromTop(18));
-    latencyLabel_.setBounds(bounds.removeFromTop(34));
-    healthLabel_.setBounds(bounds.removeFromTop(62));
-
-    bounds.removeFromTop(4);
-    noteLabel_.setBounds(bounds);
+    // 6. Action note + the command bar: the last thing the eye lands on.
+    noteLabel_.setBounds(bounds.removeFromTop(18).reduced(4, 0));
+    bounds.removeFromTop(kRowGap);
+    auto commands = bounds.removeFromTop(kCommandH);
+    const int half = commands.getWidth() / 2;
+    startButton_.setBounds(commands.removeFromLeft(half).reduced(4, 0));
+    stopButton_.setBounds(commands.reduced(4, 0));
 }
 
 // ============================================================================ OperatorWindow
 
 OperatorWindow::OperatorWindow(ApplicationController& controller)
     : juce::DocumentWindow(JUCE_APPLICATION_NAME_STRING,
-                           juce::Colour(0xff1e2124u),
+                           ink::background,
                            juce::DocumentWindow::closeButton)
 {
     setUsingNativeTitleBar(true);
     setContentOwned(new OperatorContent(controller), true);
     setResizable(true, true);
-    // UI-01 reshaped the content vertically (status -> audio -> translation ->
-    // health); the counter wall's width is gone, the hierarchy needs the height.
-    setResizeLimits(900, 760, 4000, 4000);
-    setSize(1140, 860);
+    // UI-02: the card column wants vertical room (measured: ~1100 content
+    // height with the developer rows visible); below ~760 content width the
+    // audio pair stacks and stays usable.
+    setResizeLimits(720, 1020, 4000, 4000);
+    setSize(980, 1140);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

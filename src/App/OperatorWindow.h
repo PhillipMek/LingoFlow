@@ -1,10 +1,19 @@
 #pragma once
 //
-// OperatorWindow - the JUCE shell of task 014. It owns WIDGETS and nothing else:
-// every value it paints comes from buildOperatorPanel() (App/UiModel), and every
-// action it takes is exactly one call into ApplicationController. No device is
-// opened, no audio computed, no socket touched from this file - the FAIL
-// criterion "UI owns backend/audio logic" is kept out by construction.
+// OperatorWindow - the JUCE shell of task 014, laid out for UI-02's operator
+// screen. It owns WIDGETS and nothing else: every value it paints comes from
+// buildOperatorPanel() (App/UiModel), and every action it takes is exactly one
+// call into ApplicationController. No device is opened, no audio computed, no
+// socket touched from this file - the FAIL criterion "UI owns backend/audio
+// logic" is kept out by construction.
+//
+// The visual contract (UI-02, on top of UI-01's information architecture):
+//   header -> SYSTEM STATUS card -> AUDIO card (paired INPUT/OUTPUT columns)
+//   -> TRANSLATION card -> HEALTH card (with the door to Diagnostics)
+//   -> command bar (START/STOP). Colour is state only; the spacing scale is
+//   4/8/12/16/24/32; no monospace and no engineering explanations on this
+//   screen - the applied-glide detail and the arithmetic behind the latency
+//   line live in the Diagnostics window.
 //
 // Threading: everything runs on the message thread. The timer (100 ms) is a
 // repaint clock over atomic snapshots - a slow paint stalls paint only, never
@@ -36,7 +45,9 @@ class SettingsWindow;      // the task 015 dialog, owned while hidden and shown
 class DiagnosticsWindow;   // the UI-01 engineering surface, same ownership rule
 
 /// A horizontal peak/RMS meter with a clipping lamp. Pure paint: it receives a
-/// UiMeterView and draws it; it owns no audio state.
+/// UiMeterView and draws it; it owns no audio state. The numeric readout lives
+/// beside it (a Label the content window fills from the same view), never
+/// inside the bar.
 class MeterBar final : public juce::Component
 {
 public:
@@ -49,20 +60,17 @@ private:
     UiMeterView view_;
 };
 
-/// The operator screen itself: the UI-01 information architecture. Header ->
-/// system status -> audio (routing, channels, meters, gains, mutes) ->
-/// translation (pair, live text) -> compact live health -> commands. Raw
-/// counters, the full latency accounting and the engineering text summary
-/// moved to the Diagnostics window; sample rate, buffer size and jitter
-/// pre-roll - set before a show, not during one - moved to Settings.
-/// Owned as the content component of OperatorWindow; it lays itself out (the
-/// JUCE 9 way) and polls the UiModel on a timer.
+/// The operator screen itself: the UI-01 information architecture wearing the
+/// UI-02 visual hierarchy. Raw counters, the full latency accounting and the
+/// technical gain-glide detail are the Diagnostics window's business; this
+/// screen answers "ready? routed? levels? translating? act?" in one glance.
 class OperatorContent final : public juce::Component, private juce::Timer
 {
 public:
     explicit OperatorContent(ApplicationController& controller);
     ~OperatorContent() override;   ///< defined where SettingsWindow is complete
 
+    void paint(juce::Graphics& g) override;
     void resized() override;
 
 private:
@@ -96,52 +104,71 @@ private:
     void commitSettings(std::function<void(AppConfig&)> mutate);
 
     static juce::Colour stateColour(std::string_view state) noexcept;
+    static juce::String stateGlyph(std::string_view state) noexcept;
+
+    /// One status row: "Audio  в—Џ Running" - dot and word share the state's
+    /// colour, the caption stays neutral. Painted as two labels per row.
+    void layoutStatusRow(juce::Rectangle<int>& area, juce::Label& caption,
+                         juce::Label& value) const;
 
     ApplicationController& controller_;
     std::string actionNote_;
 
     // ---------------------------------------------------------------- header
     juce::Label titleLabel_;
-    juce::TextButton startButton_ { "Start" };
-    juce::TextButton stopButton_ { "Stop" };
-    juce::TextButton settingsButton_ { "Settings..." };
-    juce::TextButton diagnosticsButton_ { "Diagnostics..." };
-    juce::Label devBadge_;   ///< task 019: the developer-mode band, invisible in production
+    juce::Label devBadge_;         ///< compact "DEVELOPER MODE" chip, hidden in production
+    juce::TextButton settingsButton_ { "Settings" };
 
     // ---------------------------------------------------------- system status
     juce::Label statusHeader_;
+    juce::Label appCaption_, audioCaption_, sessionCaption_, ndiCaption_;
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
-    juce::Label detailLabel_;
+    juce::Label detailLabel_;          ///< the actionable warning line (amber/red), empty when healthy
     juce::Label credentialLabel_;
+    juce::Label devDetailLabel_;       ///< the plan's full truth, small, only when developer mode is on
 
     // ------------------------------------------------------------------ audio
     juce::Label audioHeader_;
     juce::Label deviceCaption_, deviceNoteLabel_;
     juce::ComboBox deviceChoice_;
-    juce::TextButton refreshDevicesButton_ { "Refresh devices" };
-    /// Discrete by nature (UI-01 §4): channel is an index, so it gets a list,
-    /// not a fader - the slider could be parked between two channels.
+    juce::TextButton refreshDevicesButton_ { "Refresh" };
+    /// Discrete by nature (UI-01 В§4): channel is an index, so it gets a list,
+    /// not a fader - and a visibly different control from the gain slider.
     juce::Label inputChannelCaption_, outputChannelCaption_, channelNoteLabel_;
     juce::ComboBox inputChannelChoice_, outputChannelChoice_;
 
     juce::Label inputMeterCaption_, outputMeterCaption_;
     MeterBar inputMeter_, outputMeter_;
+    juce::Label inputLevelLabel_, outputLevelLabel_;   ///< numeric level + peak, from the same view
+    juce::Label inputGainCaption_, outputGainCaption_;
     juce::Slider inputGainSlider_, outputGainSlider_;
-    juce::Label appliedInputLabel_, appliedOutputLabel_;
-    juce::TextButton inputMuteButton_ { "MUTE IN" };
-    juce::TextButton outputMuteButton_ { "MUTE OUT" };
+    juce::TextButton inputMuteButton_ { "MUTE INPUT" };
+    juce::TextButton outputMuteButton_ { "MUTE OUTPUT" };
 
     // ------------------------------------------------------------- translation
     juce::Label translationHeader_;
-    juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
+    juce::Label sourceCaption_, targetCaption_, arrowLabel_, pairWarningLabel_;
     juce::ComboBox sourceChoice_, targetChoice_;
-    juce::Label subtitleCaption_, currentSubtitleLabel_, historyLabel_;
+    juce::Label sessionLineLabel_;         ///< "Connected" beside the pair - the same state word
+    juce::Label currentSubtitleLabel_;     ///< the live line, quoted
+    juce::Label historyLabel_;             ///< compact tail of recent lines
 
     // -------------------------------------------------------------- live health
     juce::Label healthHeader_;
-    juce::Label latencyLabel_, healthLabel_;
+    juce::Label latencyCaption_, latencyValue_;
+    juce::Label jitterCaption_, jitterValue_;
+    juce::Label underrunCaption_, underrunValue_;
+    juce::Label reconnectCaption_, reconnectValue_;
+    juce::TextButton diagnosticsButton_ { "Diagnostics" };
 
-    juce::Label noteLabel_;
+    juce::Label noteLabel_;                ///< the operator's own last result
+
+    // ------------------------------------------------------------- command bar
+    juce::TextButton startButton_ { "Start" };
+    juce::TextButton stopButton_ { "Stop" };
+
+    // Card rectangles, computed in resized() and painted in paint().
+    juce::Rectangle<int> statusCard_, audioCard_, translationCard_, healthCard_;
 
     // Option caches: the window's only lists, mirrored from the panel.
     std::vector<UiOption> deviceCache_, sourceCache_, targetCache_;
