@@ -149,8 +149,17 @@ TEST_CASE("End to end through the mock: what came in, translated, goes out",
     // is observable the whole block sits in the jitter buffer.
     pump.feed(engine, 0.4f);
     REQUIRE(waitsFor([&] { return rig.mock->deliveredBlocks() >= 1; }));
-    REQUIRE(waitsFor([&] { return rig.controller.diagnostics().snapshot().translatedAudioFrames
-                                        >= static_cast<std::uint64_t>(kFrames); }));
+    // Wait for BOTH counters before the exact snapshot: the mock delivers
+    // inside submitAudio, so the sink-side translatedAudioFrames can become
+    // visible a few instructions before the worker counts its own
+    // translationSubmittedFrames after the call returns (the CI reproduction
+    // of this file hit exactly that window). Both counters rise at most once
+    // here, so waiting for both makes the equality checks race-free.
+    REQUIRE(waitsFor([&] {
+        const auto s = rig.controller.diagnostics().snapshot();
+        return s.translatedAudioFrames >= static_cast<std::uint64_t>(kFrames)
+            && s.translationSubmittedFrames >= static_cast<std::uint64_t>(kFrames);
+    }));
 
     const auto before = rig.controller.diagnostics().snapshot();
     CHECK(before.translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
