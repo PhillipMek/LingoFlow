@@ -19,7 +19,7 @@ namespace {
 constexpr int kMinBufferFrames = 64;
 constexpr int kMaxBufferFrames = 2048;
 constexpr int kMaxChannels = 128;  ///< one-based, the bound validate() and the UI share
-// SPEC "Input Gain" suggests -24..+24 dB and keeps the range configurable; the
+// spec "Input Gain" suggests -24..+24 dB and keeps the range configurable; the
 // validation window is wider so the console-side trim stays possible, but +24 dB
 // must never be rejected (it was -60..+12 before, which blocked a spec value).
 constexpr float kMinGainDb = -60.0f;
@@ -37,7 +37,7 @@ constexpr std::size_t kMaxIdentifierLength = 64;
 constexpr std::size_t kMaxDeviceIdLength = 256;
 constexpr std::size_t kMaxLanguageTagLength = 12;
 
-// Task 019 developer-mode bounds. The paths ride the same shape rule as device
+// the developer-mode bounds. The paths ride the same shape rule as device
 // identifiers (bounded, control-character-free) - a settings field is never a
 // license for an unbounded string, even a "only ever dev" one.
 constexpr int kMaxMockLatencyMs = 5000;
@@ -306,7 +306,7 @@ ConfigProblems validate(const AppConfig& candidate)
     if (translation.inputLanguage == translation.outputLanguage)
         problems.push_back(ConfigProblem{ "translation.outputLanguage", "input and output language must differ" });
 
-    // Optional since code review P1 (2026-10-05): "not set" is legal - the
+    // Optional since an earlier review: "not set" is legal - the
     // current translation model ignores this text entirely (docs section 12.1),
     // so requiring it only forced operators to author a setting that does
     // nothing. A value that IS present still has to survive the shape rules.
@@ -355,7 +355,7 @@ ConfigProblems validate(const AppConfig& candidate)
         problems.push_back(ConfigProblem{ "diagnostics.logLevel",
                                           "unknown log level '" + candidate.diagnostics.logLevel + "'" });
 
-    // Developer mode (task 019): the SHAPE is validated always - a nonsense
+    // Developer mode: the SHAPE is validated always - a nonsense
     // field is repaired even in the disabled state, so switching developer mode
     // on later cannot resurrect a typo the operator made months ago. Whether
     // the values MEAN anything is decided elsewhere (App/DeveloperMode.h),
@@ -591,7 +591,7 @@ bool fromJsonText(std::string_view text,
 
     // Absent section = every field keeps its default, and the defaults say
     // "developer mode off, real chain" - which is why files written before this
-    // section existed load into production behaviour untouched (task 019's
+    // section existed load into production behaviour untouched (the established
     // isolation rule works on the storage level too, not only at mount time).
     if (const auto* section = findSection(root, "developer", problems); section != nullptr)
     {

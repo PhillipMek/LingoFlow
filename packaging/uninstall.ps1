@@ -3,7 +3,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Task 026 - uninstall = remove what install.ps1 put: the program files and the
+# Design note - uninstall = remove what install.ps1 put: the program files and the
 # Start Menu shortcut. Deliberately does NOT touch %APPDATA%\LingoFlow (the
 # operator's settings and logs) or the Windows credential store (the key):
 # uninstalling the program must not erase a venue's setup or anyone's secret.

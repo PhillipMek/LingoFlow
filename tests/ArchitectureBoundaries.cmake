@@ -1,6 +1,6 @@
-# Architecture boundary audit (task 002 PASS criteria: "dependency direction is
+# Architecture boundary audit (the established PASS criteria: "dependency direction is
 # clean", "UI does not own protocol code", "audio boundary is clean"; extended in
-# task 004 for the JUCE platform adapters).
+# the platform layer for the JUCE adapters).
 #
 # Invoked by CTest as:
 #   cmake -DAUDIT_SRC_DIR=<repo>/src -P tests/ArchitectureBoundaries.cmake
@@ -10,7 +10,7 @@
 #   2. JUCE headers are allowed only in App (the UI) and Platform (the adapters).
 #   3. Protocol/transport headers (openai, websocket, json, asio, curl) are not
 #      allowed outside the module registered for them. Config and Network own
-#      nlohmann/json.hpp (Network registered in task 009 for the OpenAI backend).
+#      nlohmann/json.hpp (Network registered earlier for the OpenAI backend).
 #
 # Every failure line starts with a stable AUDIT_* code so the self-test can assert on
 # the reason without depending on prose or CMake's message wrapping.
@@ -33,7 +33,7 @@ set(AUDIT_ALLOWED_Audio       "Audio;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Translation "Translation;Utils;Diagnostics")
 set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Platform    "Platform;Audio;Utils;Diagnostics")
-# Task 009: the OpenAI protocol lives only here; it may see the contract
+# Design note: the OpenAI protocol lives only here; it may see the contract
 # (Translation), the credential store (Security) and logging (Utils), nothing
 # else. Only the App composition root may include Network.
 set(AUDIT_ALLOWED_Network     "Network;Translation;Security;Utils")

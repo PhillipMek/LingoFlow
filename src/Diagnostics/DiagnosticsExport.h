@@ -1,6 +1,6 @@
 #pragma once
 //
-// DiagnosticsExport - the structured snapshot of task 017: sections of
+// DiagnosticsExport - the structured snapshot: sections of
 // key/value facts plus the event ring, rendered to one text file and written
 // atomically.
 //
@@ -14,10 +14,10 @@
 //     layer) gathers and hands over, so this file stays unit-testable and no
 //     secret can sneak in through a dependency the format does not control.
 //   * "no secrets" is enforced three times: by structure (an API key never
-//     enters AppConfig and the gatherer passes presence, not values - AGENTS.md
+//     enters AppConfig and the gatherer passes presence, not values - the project rules
 //     10), by a redaction pass at render time (a value under a key that looks
 //     like a credential never ships, whatever gathered it), and by a value-side
-//     last net (task 021): the controller hands redactSecretValues the values
+//     last net: the controller hands redactSecretValues the values
 //     the credential store actually holds, and any occurrence of them - pasted
 //     into "instructions", "model_hint", an NDI stream name, anywhere in the
 //     text - is erased and counted. Defense in depth is not a claim of
@@ -27,7 +27,7 @@
 //     report, and a venue operator must never wonder which lines survived.
 //
 // Everything here allocates and touches the filesystem: UI/worker threads
-// only, by construction (AGENTS.md 5).
+// only, by construction.
 
 #include <cstdint>
 #include <filesystem>
@@ -76,7 +76,7 @@ RenderedExport renderExport(const std::string& appVersion,
                             std::uint64_t evictedEvents,
                             SecretKeyPredicate isSecretKey);
 
-/// The value-side last net (task 021). Free-form config fields ship their text
+/// The value-side last net. Free-form config fields ship their text
 /// verbatim, so a credential an operator pasted into one of them travels to a
 /// venue inside a receipt whose KEY name looks harmless - invisible to the
 /// key-shaped redactor above. This pass erases every occurrence of a value the

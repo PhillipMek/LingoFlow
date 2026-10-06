@@ -1,5 +1,5 @@
 //
-// lingoflow_openai_probe - the live validation tool for task 009 (HUMAN
+// lingoflow_openai_probe - the live validation tool for the live translation chain (HUMAN
 // CHECKPOINT support, protocol doc section 14/15 workflow).
 //
 // It exercises the EXACT backend the operator app will link, over the real
@@ -8,9 +8,9 @@
 // sink, close gracefully (the drain window included) and write the delivered
 // audio back to a WAV the operator can listen to.
 //
-// Credentials (AGENTS.md 10): process environment OPENAI_API_KEY first, then
+// Credentials: process environment OPENAI_API_KEY first, then
 // HKCU\Environment (the Windows user-variable the owner set); the value is
-// never printed, only its presence. Nothing here is a product path - task 015
+// never printed, only its presence. Nothing here is a product path - the product
 // owns the production credential store.
 //
 // Exit code 0 = connected, streamed, received translated audio, closed clean.
@@ -226,7 +226,7 @@ public:
         }
     }
 
-    // Sink since task 013: partial is a whole-line SNAPSHOT (replacement), a
+    // Sink since the text pipeline: partial is a whole-line SNAPSHOT (replacement), a
     // final closes a line. text_ accumulates closed lines; openLine_ holds the
     // line still in progress, so text() never double-counts and never loses an
     // unfinished tail.

@@ -1,6 +1,6 @@
 #pragma once
 //
-// NdiTimedText - the XML payload of our NDI subtitle metadata (task 016, SPEC 38
+// NdiTimedText - the XML payload of our NDI subtitle metadata (SPEC 38
 // Mode A).
 //
 // The format question was researched, not invented (docs/ndi-protocol.md, facts
@@ -15,7 +15,7 @@
 // is precisely that conversation with a real receiver.
 //
 // What "partial/final" means on the wire (contract + SPEC 38 note): every
-// publish sends the WHOLE current caption document (task 013's snapshot
+// publish sends the WHOLE current caption document (the snapshot
 // semantics - each document replaces what the receiver shows, which is exactly
 // "a receiver may replace the in-progress line"). TTML1 has no live-vs-final
 // marker and we do not invent one: `final` therefore governs persistence in OUR

@@ -27,8 +27,8 @@ namespace config {
 
     // ----------------------------------------------------------------- ranges
     // The UI builds selectors from these, not from lists of its own: validate()
-    // below and the controls on screen then cannot disagree (SPEC "single
-    // Settings area", task 014's "UI does not own audio logic").
+    // below and the controls on screen then cannot disagree (spec "single
+    // Settings area", the established "UI does not own audio logic").
 
     /// The exact Hz values validate() accepts for audio.sampleRate, ascending.
     std::vector<int> supportedSampleRates();
@@ -57,7 +57,7 @@ namespace config {
     /// instant; protocol docs section 4bis).
     std::pair<int, int> expiryMarginRange() noexcept;
 
-    /// Bounds validate() accepts for the task 019 developer fields: the mock
+    /// Bounds validate() accepts for the developer fields: the mock
     /// echo delay (ms), the test-tone frequency (Hz) and level (dBFS).
     std::pair<int, int> mockLatencyRange() noexcept;
     std::pair<double, double> toneFrequencyRange() noexcept;

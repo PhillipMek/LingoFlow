@@ -23,7 +23,7 @@ bool pollHasConsumer(void* sender)
 
     // Timeout 0: a poll, never a wait. This runs on the text worker thread at
     // publish time; a blocking query would be an NDI dependency on the show's
-    // clock, and that is exactly the dependency AGENTS.md forbids.
+    // clock, and that is exactly the dependency the project rules forbids.
     return runtime.api().send_get_no_connections(
                static_cast<NDIlib_send_instance_t>(sender), 0) > 0;
 }
@@ -106,7 +106,7 @@ bool NdiTimedTextOutput::publish(const SubtitleFrame& frame, std::string& error)
     if (frame.text.empty())
     {
         // Nothing to show: accepted as a no-op, not an error. The text pipeline
-        // never emits empty captions (task 013), so this guard only protects
+        // never emits empty captions, so this guard only protects
         // the seam against a future caller - it must not be counted as a failure.
         return true;
     }

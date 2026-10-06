@@ -1,7 +1,7 @@
-# Latency budget (task 018)
+# Latency budget
 
 Dated 2026-10-04. This file is where latency numbers may live once measured;
-**code never holds measured latency** (AGENTS.md 19), and this document holds
+**code never holds measured latency**, and this document holds
 none today either - every numeric here is definition or arithmetic, labeled as
 such, and the measurement fields are deliberately blank.
 
@@ -19,7 +19,7 @@ speaker/room -> [A] ASIO input -> [B] capture block -> [C] translator path
 |---|---|---|---|
 | A | ASIO input latency | whatever `getInputLatencyInSamples()` answers via `DeviceCapabilities`; ASIO cannot distinguish "zero" from "not reported", so a zero is rendered "not reported" and contributes 0.0 to the visible total | driver-reported |
 | B | capture block | `bufferFrames / sampleRate` - at the 48 kHz/480-frame defaults that is 10 ms **by arithmetic, not measurement** | arithmetic |
-| C | network + model | **one combined row, never split**: the live backlog = frames submitted (012 counter) minus frames that came back in any form (accepted + rejected + dropped), at device rate. This is a computed queue depth, not an RTT and not server time; splitting wire from model would need a provider-side timestamp that the API does not offer, and inventing one is exactly what AGENTS.md 19 forbids | live-computed |
+| C | network + model | **one combined row, never split**: the live backlog = frames submitted (streamer counter) minus frames that came back in any form (accepted + rejected + dropped), at device rate. This is a computed queue depth, not an RTT and not server time; splitting wire from model would need a provider-side timestamp that the API does not offer, and inventing one is exactly what the project rules forbids | live-computed |
 | D | jitter queue | live fill (atomic) plus the configured pre-roll target | live / configuration |
 | E | playback block | same arithmetic as B | arithmetic |
 | F | ASIO output latency | as A | driver-reported |
@@ -48,13 +48,13 @@ across conditions, and do not move any of these numbers into code as constants.
 | Fact | Observed | Date / device / settings |
 |---|---|---|
 | Mouth-to-ear, loopback (no translation): speak into input channel, hear the monitor | ____ | ____ |
-| Mouth-to-ear, live translation EN->RU (012 check), first words audible | ____ | ____ |
+| Mouth-to-ear, live translation EN->RU (live check), first words audible | ____ | ____ |
 | Session open (log: `connecting` -> `connected`) | ____ | ____ |
 | Delta arrival vs realtime (protocol doc section 15 burst facts refined with the rig) | ____ | ____ |
 | Jitter sweep (step 7) result for the pre-roll default | ____ | ____ |
 | ASIO reported latencies at the venue (A/F rows, values from the export) | ____ | ____ |
 
-The `diagnostics` export from the same press (017) already contains the [latency]
+The `diagnostics` export from the same press already contains the [latency]
 section - the receipt of what the software saw during the observation.
 
 ## Limitations, stated plainly

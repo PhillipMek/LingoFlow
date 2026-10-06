@@ -2,7 +2,7 @@
 
 // OpenAI-Safety-Identifier: the recommended optional header on the Realtime
 // connection request (docs/openai-realtime-protocol.md section 3; added by
-// code review P2 on 2026-10-05). The provider asks for "a stable,
+// An earlier review on 2026-10-05). The provider asks for "a stable,
 // privacy-preserving value, such as a hashed internal user ID" and warns
 // against sending identities in the clear. A single-operator live-show
 // product has no per-end-user ID, so the stable subject is the installation:
@@ -21,7 +21,7 @@ namespace network {
 
 /// Lowercase hex SHA-256 of the given bytes, computed by the OS crypto
 /// provider (advapi32 CryptoAPI - a library this link already carries; no
-/// hand-rolled digest, AGENTS.md 15). Returns an empty string on provider
+/// hand-rolled digest, the project rules). Returns an empty string on provider
 /// failure; callers must treat that as "no value", never as "the hash of
 /// nothing" (the empty input has its own well-known digest and is hashed
 /// faithfully when explicitly requested).

@@ -12,7 +12,7 @@
 //
 // Consequences accepted here:
 //   * machines without the NDI runtime get a clear, testable "unavailable"
-//     answer - the product still starts, only subtitles are off (AGENTS.md 12);
+//     answer - the product still starts, only subtitles are off;
 //   * the function table is read-only after loading; one process-wide instance
 //     (magic statics make it thread-safe);
 //   * the module is never freed: the v6 dynamic-load table exposes no cleanup

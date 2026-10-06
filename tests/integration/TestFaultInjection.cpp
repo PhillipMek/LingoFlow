@@ -17,7 +17,7 @@
 #include "Utils/Log.h"
 #include "support/MockTranslationBackend.h"
 
-// Task 023 - dedicated failure injection over the PRODUCTION wiring.
+// Purpose - dedicated failure injection over the PRODUCTION wiring.
 //
 // The unit suites (faults, reconnect, dispatch, config) prove each part survives
 // its own failure in isolation. This file drives the real controller - real
@@ -25,7 +25,7 @@
 // failures the task names, and asserts the three PASS clauses every time:
 //   * no crash, no deadlock (bounded waits; the test finishing IS the proof),
 //   * ASIO preserved (the simulated device thread keeps producing blocks while
-//     the network, NDI, or a config fault burns - AGENTS.md 12),
+//     the network, NDI, or a config fault burns - the project rules),
 //   * recovery visible (counters, transitions and event-ring lines a venue
 //     post-mortem can read - nothing swallowed).
 //
@@ -219,7 +219,7 @@ TEST_CASE("Injection: a network outage mid-show costs counted gaps, not the show
 
     // Pull the line: connection is the retryable category - the supervisor owns
     // this failure, the application must not even notice through the audio path.
-    rig.mock->injectError(TranslationErrorCategory::connection, "outage injected by task 023", true);
+    rig.mock->injectError(TranslationErrorCategory::connection, "outage injected by the fault suite", true);
 
     // Audio preserved: the device thread never stopped while the session died
     // and was rebuilt underneath it.
@@ -233,7 +233,7 @@ TEST_CASE("Injection: a network outage mid-show costs counted gaps, not the show
     REQUIRE(waitsFor([&] { return rig.mock->sessionsOpened() >= 2; }));
     REQUIRE(waitsFor([&] { return rig.controller.sessionState() == SessionState::connected; }));
     CHECK(rig.controller.diagnostics().snapshot().reconnects == 1);   // counted once, exactly
-    CHECK(mentionsEvent(rig.controller, "outage injected by task 023"));
+    CHECK(mentionsEvent(rig.controller, "outage injected by the fault suite"));
     CHECK(mentionsEvent(rig.controller, "session reconnected"));
 
     const auto blocks = rig.controller.engine().blockCount();
@@ -313,7 +313,7 @@ TEST_CASE("Injection: the NDI transport dies mid-subtitle, the audience keeps he
 
     REQUIRE(waitsFor([&] { return ndiRef->attempts() >= 4; }));
 
-    // NDI failure is not a show failure (AGENTS.md 12): counted, recorded, and
+    // NDI failure is not a show failure: counted, recorded, and
     // the rest of the machine could not care less.
     CHECK(ndiRef->publishedFrames() == 2);
     CHECK(ndiRef->publishErrors() >= 2);

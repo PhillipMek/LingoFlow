@@ -1,4 +1,4 @@
-// Code review P1 (2026-10-05): the OpenAI receiver thread feeds the jitter
+// An earlier review: the OpenAI receiver thread feeds the jitter
 // buffer AND ingests transcript events; the pipeline listener ran NDI SDK calls
 // on that thread. NdiDispatch moves every transport call to its own worker, so
 // the producer only ever enqueues. These tests fake a transport that STOPS

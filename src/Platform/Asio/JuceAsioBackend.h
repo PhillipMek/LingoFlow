@@ -2,7 +2,7 @@
 //
 // JuceAsioBackend - implements audio::IAudioBackend on top of a real ASIO device.
 //
-// Boundary (AGENTS.md 7): the engine sees IAudioBackend only; everything JUCE and
+// Boundary: the engine sees IAudioBackend only; everything JUCE and
 // driver specific stops in this file. The backend knows nothing about translation,
 // NDI or the UI.
 //

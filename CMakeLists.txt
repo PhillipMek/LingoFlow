@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Task 026 (release): the shipped executable must start on a clean Windows
+# Release: the shipped executable must start on a clean Windows
 # machine with no developer dependencies (the task's FAIL criterion). The
 # dependency scan of the old dynamic-CRT build measured imports of MSVCP140.dll,
 # VCRUNTIME140.dll and VCRUNTIME140_1.dll - the Visual C++ redistributable, i.e.
@@ -65,7 +65,7 @@ add_subdirectory("${LIVEAI_JUCE_PATH}" JUCE)
 
 # ---------------------------------------------------------------------------
 # nlohmann/json - used by the Config module and by the Network backend
-# (docs/openai-realtime-protocol.md consumer, task 009); both link it PRIVATE,
+# (docs/openai-realtime-protocol.md consumer); both link it PRIVATE,
 # so no other module can start parsing JSON (tests/ArchitectureBoundaries.cmake).
 # Pinned to an official release tag; fetched on demand, never vendored.
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ endif()
 # Project
 # ---------------------------------------------------------------------------
 
-# NDI SDK headers (task 016) are resolved once here so both src/ (targets) and
+# NDI SDK headers are resolved once here so both src/ (targets) and
 # tests/ (the live-output test) see the same path. License rule reminder: these
 # headers are for COMPILING only; the import library is never linked
 # (docs/licensing.md) - the runtime DLL is loaded at run time.

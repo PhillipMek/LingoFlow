@@ -1,8 +1,8 @@
 #pragma once
 //
-// ChainedSecretStore - one primary store with one read-only fallback (task 015).
+// ChainedSecretStore - one primary store with one read-only fallback.
 //
-// The product's credential order of truth (AGENTS.md 10):
+// The product's credential order of truth:
 //   * production: the operator's key lives in Windows secure storage;
 //   * development: an environment variable may provide a key.
 // A chain expresses exactly that: writes always go to the primary (the fallback
@@ -49,7 +49,7 @@ public:
     /// Names only, never values.
     std::vector<std::string> identifiers() const override;
 
-    /// The question the chain exists to make answerable (UI-03 §5): a key the
+    /// The question the chain exists to make answerable (the UI redesign §5): a key the
     /// primary holds is secure storage; one that only the environment provides
     /// is a development convenience the status line must say so about.
     Location secretLocation(std::string_view identifier) const override;

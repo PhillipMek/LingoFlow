@@ -2,7 +2,7 @@
 //
 // IAudioBackend - the only contract between the audio engine and a device.
 //
-// Boundary rules (AGENTS.md 5 and 7):
+// Boundary rules (the project rules and 7):
 //   * processAudio() runs on the device (realtime) thread. Implementations call
 //     it directly; it must not allocate, block, touch the network, disk, JSON or
 //     the UI.
@@ -10,7 +10,7 @@
 //     a non-realtime thread only.
 //   * Implementations must not know about translation or NDI.
 //
-// No device is implemented in this task: task 004/005 add the ASIO backend.
+// No device is implemented in this task: the ASIO stage adds the ASIO backend.
 
 #include <string>
 #include <string_view>
@@ -50,11 +50,11 @@ public:
     /// output buffer content as undefined, so on a multi-output geometry a
     /// partial fill is stale audio (or uninitialised memory) reaching the
     /// audience; AudioEngine::processAudio honours this on every path including
-    /// the malformed ones (code review P0, 2026-10-05, pinned by tests).
+    /// the malformed ones (An earlier review, 2026-10-05, pinned by tests).
     /// The pointer arrays are checked per channel, not just as wholes: ANY
     /// null among the promised channels is a malformed callback - one count,
     /// silence on every writable output, and the block never joins the
-    /// processed total (code review P2, 2026-10-05). A backend that loses a
+    /// processed total. A backend that loses a
     /// selected channel's buffer mid-show must read as that in the operator's
     /// counters, never as quiet-but-healthy audio.
     /// Realtime-safe by contract: the implementation must not allocate, block,

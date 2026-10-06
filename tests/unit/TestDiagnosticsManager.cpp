@@ -57,7 +57,7 @@ TEST_CASE("DiagnosticsManager: translation delivery counters keep the three ques
           "[diagnostics][translation]")
 {
     // Delivered, rejected (wrong rate or shape), and dropped by our own full
-    // buffer are three different facts (task 007): an operator reading these
+    // buffer are three different facts: an operator reading these
     // must be able to tell whose problem the frames were.
     DiagnosticsManager diagnostics;
 

@@ -23,7 +23,7 @@ ApplicationController
 
 Audio callback is isolated from network/UI/file operations.
 
-## Module layout and dependency direction (task 002)
+## Module layout and dependency direction
 
 Source directories under `src/` are the modules. An arrow means "may include";
 anything not listed is forbidden and is rejected by
@@ -34,7 +34,7 @@ Utils          -> (nothing)                       logging, no JUCE
 Config         -> Utils                           settings: schema, validation, atomic file I/O
 Security       -> Utils                           credential store boundary, no config access
 Diagnostics    -> Utils                           atomic counters + snapshot + bounded event
-                                                   ring (017) + key=value export renderer/writer
+                                                   ring + key=value export renderer/writer
 Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, gain stages,
                                                   meters, loopback, IAudioBackend,
                                                   ASIO model/policy, Null backend
@@ -66,7 +66,7 @@ One more dependency exception is registered in the audit: `nlohmann/json.hpp` ma
 included by `Config` only, and only in a `.cpp` - no header in the project exposes a
 JSON type, so the UI and the audio path cannot start parsing configuration or wire text.
 
-The NDI boundary has a second, licensing kind (task 016): the SDK's **headers** may be
+The NDI boundary has a second, licensing kind: the SDK's **headers** may be
 used only by `src/NDI/Real/` (a separate CMake target whose SDK include path is PRIVATE),
 and the SDK's **import library is never linked anywhere** - the product reaches NDI by
 loading the installed runtime DLL at run time through the SDK's dynamic-load entry
@@ -85,7 +85,7 @@ Rules that the audit enforces:
    translation core).
 3. **Protocol/transport headers only inside their owning module** (`openai`,
    `websocket`, `json`, `asio`, `curl`). Today that means one exception:
-   `nlohmann/json.hpp` in `Config`. Task 009 will register the OpenAI backend the same
+   `nlohmann/json.hpp` in `Config`. future integrations will register the OpenAI backend the same
    way; the UI and the audio engine still will not see protocol code. ASIO is reached
    through JUCE, which carries its own interface headers, so no ASIO SDK header is
    included from `src/`.
@@ -121,9 +121,9 @@ architecture is explicitly non-realtime:
 | `DiagnosticsManager::snapshot`, `note*` with strings | UI/worker | mutex-guarded, never from the audio thread |
 | `IAudioBackend::open/start/stop/close`, `AsioDiscovery::*` | control thread | may allocate and log; never called from the callback |
 
-## Realtime pipeline (tasks 005 and 006)
+## Realtime pipeline
 
-The pipeline is the one from SPEC "Audio Pipeline", with the two translation stages
+The pipeline is the one from spec "Audio Pipeline", with the two translation stages
 still to be filled in:
 
 ```text
@@ -132,7 +132,7 @@ ASIO input -> AudioEngine::processAudio
                   -> LevelMeter (input)      reads the post-gain block
                   -> AudioRingBuffer        (producer = audio thread)
                         |
-                  [loopback worker now (AudioLoopback); OpenAI streaming worker in task 012]
+                  [loopback worker now (AudioLoopback); OpenAI streaming worker earlier]
                         |
                   AudioJitterBuffer         (consumer = audio thread)
                   -> GainStage (output)      separate trim, separate mute
@@ -156,7 +156,7 @@ Design decisions, and why:
   is what turns a single network hiccup into a burst of audible glitches.
 * **The output has exactly one source.** Only `write()` on the jitter buffer can put
   audio on the wire, and that call belongs to the transport side (loopback today, task
-  012 later). Microphone audio therefore cannot reach the audience by a missing
+  later). Microphone audio therefore cannot reach the audience by a missing
   underrun branch - the silence path is the default, not an extra case.
 * **`LevelMeter`** publishes peak and RMS of the last block plus cumulative clipping
   and signalled-block counters, and it reads the *post-gain* signal on both sides: a knob
@@ -165,14 +165,14 @@ Design decisions, and why:
   the level down cannot hide a damaged console feed.
 * **Counters are engine-level, not buffer-level.** `deactivate()` releases the buffers,
   so dropped/underrun/overrun totals live in `AudioEngine`'s own atomics and stay
-  readable after shutdown - that is where the operator's diagnostics (task 017) and the
-  long-run test (task 024) will read them.
+  readable after shutdown - that is where the operator's diagnostics and the
+  long-run test will read them.
 * **Loopback is never implicit.** `AudioEngine` outputs silence until something writes
   to the jitter buffer, and the loopback worker has to be started on purpose (the probe
-  tool today; developer mode in task 019). Routing live microphone audio to the audience
+  tool today; developer mode earlier). Routing live microphone audio to the audience
   is an operator action.
 
-### Gain, mute and clipping (task 006)
+### Gain, mute and clipping
 
 `GainStage` is one class used in both positions of the SPEC pipeline, because both
 positions need the same three things: a dB value the operator sets, a mute, and the
@@ -197,7 +197,7 @@ guarantee that changing either makes no click.
   own trim created it on the way to the translator) and `outputGainClippedSamples()` (what
   is heading at the audience). Every `*Samples()` engine counter is channel-summed (one
   block of C channels and N frames adds C x N); `frameCount()` alone counts device frames
-  - the unit note of code review P2, 2026-10-05, which is invisible on the single-channel
+  - the unit note of an earlier review, 2026-10-05, which is invisible on the single-channel
   capture and misleading on a multi-channel one. A latching `takeInputClipIndicator()` /
   `takeOutputClipIndicator()` exists for the UI lamp, so the interface does not have to
   diff counters between frames.
@@ -220,7 +220,7 @@ guarantee that changing either makes no click.
 * **Oversized blocks are chunked, not overrun.** The input side needs scratch because the
   device hands the callback a const pointer, so `kGainChunkFrames` (4096) is preallocated
   per channel; a block larger than that is processed in chunks, still gained in full, and
-  counted in `oversizedCallbacks()`. Task 005 learned this the hard way, when a test's
+  counted in `oversizedCallbacks()`. the project learned this the hard way, when a test's
   badly sized buffer wrote past an array.
 
 ### How the realtime rule is enforced
@@ -252,18 +252,18 @@ blocking, and losing audio without counting it.
 
 `AudioEngine::processAudio` outputs silence while nothing feeds the jitter buffer, and
 that is still deliberate: the only sources are loopback (probe today, developer mode in
-task 019) and translated audio delivered through the task 007 contract. The probe tool
+the streaming worker) and translated audio delivered through the translation contract. The probe tool
 adds `--loopback`, which turns the same pipeline into a measurable end-to-end path on
 a real device.
 
-## Translation contract (task 007)
+## Translation contract
 
 `Translation/ITranslationBackend.h` is the whole seam between the product and any
 translation provider. It is a contract, not a skeleton: six lifecycle rules are stated
 in the header and enforced by the reference implementation the tests run against, so
-task 009 is written against behaviour that already has proof, not against comments.
+new code is written against behaviour that already has proof, not against comments.
 
-* **The shape** (SPEC "Translation Provider Interface"): `openSession(SessionRequest)` /
+* **The shape** (spec "Translation Provider Interface"): `openSession(SessionRequest)` /
   `submitAudio(float mono)` / `closeSession()` on the control side; five sink callbacks
   on the delivery side - translated audio, partial text, final text, session state and
   errors. Audio and text are separate methods on purpose (SPEC: "The audio callback and
@@ -274,34 +274,34 @@ task 009 is written against behaviour that already has proof, not against commen
   did not ask for; both numbers are in the request, and the delivered block repeats its
   actual rate in every call so the receiver never has to trust the setup. `model` is an
   opaque string - empty means "backend default", the set of legal values comes from
-  task 008's documentation research, not from the application's imagination (AGENTS.md 8).
+  the protocol documentation research, not from the application's imagination.
 * **`TranslationError`** has five categories (`connection`, `rejectedRequest`,
   `audioFormat`, `protocol`, `internal`) and a `fatal` flag. Categories are vocabulary
-  the product owns; task 009 maps provider-specific failures onto them, so no OpenAI
+  the product owns; the backend maps provider-specific failures onto them, so no OpenAI
   error name crosses this line. Fatal means "this session is over" - it never means
-  "stop anything": the controller logs, counts and records it, and AGENTS.md 12 holds
+  "stop anything": the controller logs, counts and records it, and the project rules holds
   the audio path running either way.
 * **Every transition reports exactly once, and a refusal that changes nothing reports
   nothing.** That is what makes the state trace assertable, which is what makes the
-  reconnect logic of task 010 testable.
+  reconnect logic testable.
 * **`closeSession()` guarantees no sink callbacks after it returns.** For a real
   backend that means joining or draining its worker inside close. This guarantee is
   load-bearing for shutdown order: `ApplicationController::stop()` closes the session
   before deactivating the device, so a late network callback can never write into a
   destroyed pipeline. The controller's own guards (checked drop into `outputJitter`,
-  counted in `rejectedAudioFrames`) are the second layer, for the callbacks task 010
+  counted in `rejectedAudioFrames`) are the second layer, for the callbacks the backend adds
   will one day race against a restart.
 * **Translated audio has exactly one delivery route.** The controller writes accepted
   blocks into the engine's output jitter buffer - the one source of audible audio from
-  task 005. Wrong-rate blocks are rejected and counted, never silently resampled or
-  played fast: a resampler does not exist yet and inventing one outside task 012/018
+  Wrong-rate blocks are rejected and counted, never silently resampled or
+  played fast: a resampler does not exist yet and inventing one outside the documented pipeline
   would change measured latency without telling anyone.
 * **Diagnostics answer three questions separately**: `translatedAudioFrames` (what was
   accepted), `rejectedAudioFrames` (what arrived unusable - rate, null, empty) and
   `translatedAudioDroppedFrames` (what our own full buffer dropped). "The translator
   stopped delivering" and "delivery went somewhere wrong" are different operator
   problems and get different numbers.
-* **Typed text is real since task 013, and the seam is still the string pair**:
+* **Typed text is real today, and the seam is still the string pair**:
   `Translation/TextPipeline.h` turns the sink's partial/final strings into
   `TranslationTextEvent`s with a product-owned sequence and arrival clock, a
   bounded history and duplicate-eating close rules. `partial` means whole-line
@@ -310,13 +310,13 @@ task 009 is written against behaviour that already has proof, not against commen
   close-session flush as the two line boundaries; both are documented product
   policy, not protocol, because the wire has no line-end event). The listener
   is NOT fired under the pipeline lock and NOT on the ingesting thread: since
-  code review P2 (2026-10-05) the pipeline queues events and its own dispatch
+  An earlier review the pipeline queues events and its own dispatch
   worker delivers them (bounded queue, drop-oldest under stall, counted), so
   the receiver thread never runs listener code and the listener never holds
   - or deadlocks on - the lock. `stop()` drains the queue before disabling
   NDI, which is what "the session's last words reach the audience" means once
   delivery is async.
-* **Deliberately not here yet**: `getCapabilities()` was task 011's (it exists
+* **Deliberately not here yet**: `getCapabilities()` was the established (it exists
   now as the frozen manifest), and a source-language text lane would be a
   contract decision, not an accident - the provider's source transcript stays
   ignored in the backend until someone asks for it.
@@ -330,10 +330,9 @@ contract obligation, not a convenience: the tests run the identical script twice
 compare whole callback traces, and the end-to-end suite asserts exact float values
 (0.4 in, -0.2 out) at the device output.
 
-It lives in the test tree because task 019 makes "mock behaviour leaking into
+It lives in the test tree because the mounting design makes "mock behaviour leaking into
 production" a FAIL criterion, and `src/` keeps only the Null backend - a shell that
-produces nothing, precisely so that no subsystem can mistake it for translation
-(AGENTS.md 19). Task 019's interactive mock is a different thing built on top of this
+produces nothing, precisely so that no subsystem can mistake it for translation. the developer-mode interactive mock is a different thing built on top of this
 contract.
 
 ### End to end without a provider
@@ -349,8 +348,8 @@ opens a fresh session whose first submit behaves like a first submit again.
 
 ## Status path to the UI
 
-The UI reads controller public API and nothing else. Since task 002 the rule has been
-"one object, one status type"; tasks 013/014 made that the whole shape of the screen:
+The UI reads controller public API and nothing else. The rule has been
+"one object, one status type"; the text pipeline and the operator screen made that the whole shape of the screen:
 
 ```text
 subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, engine
@@ -363,12 +362,12 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
 * `UiModel` is the tested half: selector lists come from the modules that own the data
   (`LanguageRegistry` languages, `ConfigSchema` ranges and rates, the device-lister cache
   on the controller), never from UI-side constants - the same single-source rule that
-  made the language list one list (task 011), now for every dropdown on the screen.
+  made the language list one list, now for every dropdown on the screen.
 * The window owns no logic: each control is one controller call (`updateSettings`,
   the live knob forwards, `start`/`stop`/`clearFault`/`refreshDevices`). The only
   persistence path is `updateSettings` - validate, then apply live, then save, and the
   returned note says what waits for a Stop/Start. A refused candidate changes nothing.
-* Task 015 adds the third operator channel, deliberately the shortest: the credential.
+* the credentials work added the third operator channel, deliberately the shortest: the credential.
   `storeApiSecret`/`removeApiSecret`/`hasApiSecret`/`secretStoreName` on the controller
   put `ISecretStore` behind the same one-call rule as everything else, and the value's
   path never crosses the settings area, the log or the status: UI field -> store ->
@@ -376,7 +375,7 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   the Settings dialog's field masks its echo and is cleared on a successful store, so
   the screen itself does not hold the key either. The production store is the Windows
   Credential Manager behind a `ChainedSecretStore` (store first, environment fallback -
-  AGENTS.md 10's development path); writes go only to the primary, because the
+  the development-only path); writes go only to the primary, because the
   application must not rewrite the developer's environment.
 * The 100 ms timer is a repaint clock over atomics: reads cannot block, so the UI
   freezing is limited to JUCE itself, and the FAIL criterion "UI owns backend/audio
@@ -384,12 +383,12 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   read all modules): the window contains no decision the tests do not cover - every
   value it paints and every branch it shows is `UiModel` output, asserted headless
   against the real controller.
-* Task 018's latency accounting continues the one-function rule: `latencyAccounting`
+* the latency accounting continues the one-function rule: `latencyAccounting`
   (App/UiModel) renders rows with their KINDS, the screen and the export both consume
   it, driver answers pass through `DeviceCapabilities`, and the network+model row is
   one computed backlog because the provider API offers no timestamp to split it with
   - an honest combination, not an invented separation.
-* Task 019's developer/mock mode is isolation by construction, not by care: the
+* the developer/mock mode is isolation by construction, not by care: the
   simulated devices (`Audio/Dev`), the echo translator (`Translation/Mock`) and the
   WAV module (`Utils`) obey the existing include direction and the realtime audit's
   function table unchanged (they are worker-thread code, and the audit table is the
@@ -400,7 +399,7 @@ subsystems -> atomics/snapshots -> ApplicationController (status, diagnostics, e
   (tested), and `--dev` never reaches loopback (tested). The mock names itself in
   every event because a mock mistaken for a translation is the failure this boundary
   exists to prevent.
-* Task 017 extends the same one-funnel idea downward into diagnostics: the audio
+* diagnostics extends the same one-funnel idea downward into diagnostics: the audio
   callback's only voice remains the relaxed-atomic counters, transitions are
   *narrated* into the bounded event ring from worker/UI threads (`noteEvent`, and
   `noteError` as a single write site for both last-error and ring), and the export

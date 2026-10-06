@@ -12,7 +12,7 @@ namespace liveai {
 namespace audio {
 
 /// Sample layout handled by the engine. MVP uses float32 mono 48 kHz
-/// (SPEC "Audio"); other formats exist so conversion can be added without
+/// (spec "Audio"); other formats exist so conversion can be added without
 /// changing interfaces.
 enum class SampleFormat
 {
@@ -47,7 +47,7 @@ struct DeviceCapabilities
 
     /// The full channel names the driver reports (device totals, not the engine's
     /// selection - `inputChannels`/`outputChannels above stay the ACTIVE count).
-    /// Known while a device is open, empty whenever none is: UI-01's discrete
+    /// Known while a device is open, empty whenever none is: the UI redesign's discrete
     /// channel selector enumerates these, and an empty list honestly means
     /// "not opened yet" - the selector falls back to generic numbering instead
     /// of inventing names.
@@ -55,7 +55,7 @@ struct DeviceCapabilities
     std::vector<std::string> outputChannelNames;
 
     /// What the driver itself reports as its input/output latency, in samples
-    /// (task 018's accounting). 0 means "no usable answer": the backend did not
+    /// (the latency accounting). 0 means "no usable answer": the backend did not
     /// ask, or the driver's query answered zero - ASIO's zero conflates "no
     /// latency" with "I do not report", and the accounting labels it "not
     /// reported" rather than choosing a story. Only a positive value is taken

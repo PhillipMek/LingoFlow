@@ -1,12 +1,12 @@
 # Licensing decisions
 
 Decided by the product owner on 2026-10-01 and recorded here as binding for all
-later tasks. This file is the reference for the release/audit tasks (026, 027) and
-for any dependency added by tasks 015/016/020.
+later tasks. This file is the licensing reference for the release and for
+any dependency added later.
 
 | Dependency | Chosen licence | Consequence for this project |
 |---|---|---|
-| JUCE 9.0.3 | **AGPLv3** | The application is a GPL-family work. Source for the whole combined work must be offered to every recipient; a `LICENSE` (AGPLv3) plus third-party notices must ship with it; the About/Settings area must show the licence and where to get the source (task 014/015), and the installer must not hide it (task 026). |
+| JUCE 9.0.3 | **AGPLv3** | The application is a GPL-family work. Source for the whole combined work must be offered to every recipient; a `LICENSE` (AGPLv3) plus third-party notices must ship with it; the About/Settings area must show the licence and where to get the source (the Settings work), and the installer must not hide it. |
 | Steinberg ASIO SDK 2.3.4 | **GPLv3** | Compatible with the AGPLv3 combination. Headers/sources used from `third_party/asiosdk` stay GPLv3; the ASIO logo may not be used without Steinberg's separate trademark rules, so no "ASIO compatible" branding in the UI unless that agreement is signed. |
 | nlohmann/json 3.12.0 | MIT | Fine. Keep the MIT licence text in the third-party notices. |
 | Catch2 v3.16.0 | BSL-1.0 | Test-time only, not linked into the product. Fine. |
@@ -29,12 +29,12 @@ does not allow. Therefore, with JUCE under AGPLv3:
    redistribution terms at that moment allow it; the installer should instead
    require NDI runtime/tools to be present.
 
-This is a task 016 implementation requirement, not a suggestion, and the
+This is a a binding implementation requirement, not a suggestion, and the
 `INdiOutput` design already supports it (no NDI type in any header).
 
 ## Source-offer obligation (AGPLv3)
 
-Because the product is distributed as AGPL, before the release build (task 026) we
+Because the product is distributed as AGPL, before the release build we
 must have:
 
 * `LICENSE` with the AGPLv3 text and a `NOTICE`/`THIRD_PARTY_NOTICES` listing JUCE,

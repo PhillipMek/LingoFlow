@@ -1,7 +1,7 @@
 #pragma once
 //
 // AudioEngine - the realtime stage between a device backend and the rest of the
-// product (SPEC "Audio Pipeline", task 005).
+// product (spec "Audio Pipeline").
 //
 //   ASIO Input -> GainStage (input) -> AudioRingBuffer -> translation worker
 //   translated audio -> AudioJitterBuffer -> GainStage (output) -> ASIO Output
@@ -10,7 +10,7 @@
 // underrun/overrun counters. Everything is allocated in activate(), on a non-realtime
 // thread, before the device is started: the callback only ever touches preallocated
 // memory, does fixed work and publishes relaxed atomics. It never allocates, locks,
-// logs, sleeps or waits for the network (AGENTS.md 5).
+// logs, sleeps or waits for the network.
 //
 // Gain stages are the exception to "released with the pipeline": they carry the
 // operator's settings and the clipping history rather than device geometry, so they
@@ -22,13 +22,13 @@
 // audio can therefore never leak to the audience - an underrun plays silence, not the
 // microphone.
 //
-// The input rings are drained by whoever is consuming translation: task 005 ships the
-// loopback worker, task 012 the OpenAI streaming worker. While nobody is attached, the
+// The input rings are drained by whoever is consuming translation: the Windows build ships the
+// loopback worker; in production the OpenAI streaming worker. While nobody is attached, the
 // engine still measures the input but does not write it into the rings, and counts
 // those samples separately (inputSamplesNotForwarded) instead of reporting a fake
 // overrun.
 //
-// Dependency direction (AGENTS.md 7): AudioEngine knows IAudioBackend only. It does
+// Dependency direction: AudioEngine knows IAudioBackend only. It does
 // not know about OpenAI, NDI or JUCE.
 
 #include <atomic>
@@ -85,14 +85,14 @@ public:
     void setJitterBufferMs(int jitterBufferMs) noexcept;
     int jitterBufferMs() const noexcept { return jitterMs_.load(std::memory_order_relaxed); }
 
-    /// Buffer-delay arithmetic from the live geometry (task 017's single source,
+    /// Buffer-delay arithmetic from the live geometry (the single source,
     /// used by the UI line and the diagnostics export alike): one input block +
     /// one output block + the jitter pre-roll, in ms, from exactly the numbers
     /// the running pipeline reports (zeros before activation). This is NOT a
     /// latency measurement and says nothing about the translation - the honest
-    /// component model and the mouth-to-ear blanks live in task 018's
+    /// component model and the mouth-to-ear blanks live earlier's
     /// docs/latency-budget.md, and every user of these numbers must carry that
-    /// sentence with it (AGENTS.md 19).
+    /// sentence with it.
     int bufferBlockMs() const noexcept;
     int pipelineBufferDelayMs() const noexcept;
 
@@ -103,7 +103,7 @@ public:
     bool inputConsumerAttached() const noexcept { return consumerAttached_.load(std::memory_order_relaxed); }
 
     // ------------------------------------------------------------------ gain (006)
-    /// SPEC "Input Gain" and "Output Gain": two independent digital trims, settable at
+    /// spec "Input Gain" and "Output Gain": two independent digital trims, settable at
     /// any time, including from the UI while the device runs. Both glide to the new
     /// coefficient instead of jumping, so turning a knob cannot click.
     ///
@@ -117,7 +117,7 @@ public:
     float inputGainDb() const noexcept { return inputGainDb_.load(std::memory_order_relaxed); }
     float outputGainDb() const noexcept { return outputGainDb_.load(std::memory_order_relaxed); }
 
-    /// SPEC "Input Gain" mute control. Input mute stops audio reaching the translator;
+    /// spec "Input Gain" mute control. Input mute stops audio reaching the translator;
     /// output mute stops audio reaching the audience. They are different actions, so the
     /// engine keeps them apart instead of having one "mute" mean whichever the operator
     /// needed.
@@ -158,7 +158,7 @@ public:
     std::uint64_t gainRequestsClamped() const noexcept { return gainClamped_.load(std::memory_order_relaxed); }
     std::uint64_t gainRequestsRejected() const noexcept { return gainRejected_.load(std::memory_order_relaxed); }
 
-    /// Latching indicators for the operator UI (SPEC "clipping indication"): true when
+    /// Latching indicators for the operator UI (spec "clipping indication"): true when
     /// anything reached full scale since this was last called.
     bool takeInputClipIndicator() noexcept;
     bool takeOutputClipIndicator() noexcept;
@@ -175,7 +175,7 @@ public:
     // ---------------------------------------------------------------- live readouts
     //
     // Counter units, stated because two natural units live in this class and the
-    // difference only bites on multi-channel geometry (code review P2, 2026-10-05):
+    // difference only bites on multi-channel geometry:
     //   DEVICE FRAMES  - frameCount() adds the callback's frameCount once per
     //     block: 480 means 480 frames of room time whatever the channel count.
     //   CHANNEL SAMPLES - every *Samples counter accumulates per channel inside
@@ -271,7 +271,7 @@ private:
 
     /// kGainChunkFrames floats per input channel. The callback copies the device block
     /// here because the device hands it over read-only and gain has to be applied before
-    /// the ring write (SPEC "Audio Ring Buffer").
+    /// the ring write (spec "Audio Ring Buffer").
     std::vector<float> gainScratch_;
 
     /// Frames per channel that a ring/jitter must be able to hold without dropping.

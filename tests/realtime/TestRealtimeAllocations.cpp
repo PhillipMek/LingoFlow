@@ -15,7 +15,7 @@
 #include "Audio/GainStage.h"
 #include "Audio/Null/NullAudioBackend.h"
 
-// Proof for the PASS criterion "no allocations in callback" (AGENTS.md 5).
+// Proof for the PASS criterion "no allocations in callback".
 //
 // Counting is done by replacing global operator new/delete for this test binary only
 // (tests/CMakeLists.txt builds a separate executable for it, so no other suite is
@@ -194,7 +194,7 @@ TEST_CASE("Realtime path: a gain change costs no allocations and no locks", "[au
 
     // An operator dragging the slider is the case that has to be proven: the request is
     // published as atomic state and the callback picks it up, with no allocation on either
-    // side (SPEC "Input Gain DSP Requirements").
+    // side (spec "Input Gain DSP Requirements").
     beginCounting();
 
     for (int block = 0; block < 2000; ++block)

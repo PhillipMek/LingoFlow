@@ -2,9 +2,9 @@
 // NullSecretStore - deliberately stores nothing.
 //
 // Reporting "stored" for a write that was not persisted would be fake success
-// (AGENTS.md 19), so every operation answers "unavailable". The application must
+//, so every operation answers "unavailable". The application must
 // treat that as "translation backend cannot be started yet", not as an error that
-// stops audio (AGENTS.md 12).
+// stops audio.
 
 #include <optional>
 #include <string>

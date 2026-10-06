@@ -1,6 +1,6 @@
 #pragma once
 //
-// ReconnectSupervisor - session recovery without touching anything else (task 010).
+// ReconnectSupervisor - session recovery without touching anything else.
 //
 // It sits between the application and any ITranslationBackend: to the application
 // it is a backend, to the backend it is the sink. When a session dies for a
@@ -8,16 +8,16 @@
 // SessionRequest (protocol doc section 10: reconnection for translation means a
 // fresh session, there is nothing to resume), and reports the composite state to
 // the application. The audio device is not part of this file and cannot be
-// affected through it (SPEC "Reliability": a network failure must not close
+// affected through it (spec "Reliability": a network failure must not close
 // ASIO) - the engine keeps running, the jitter buffer drains its tail and
 // underruns into counted silence while recovery runs.
 //
-// Policy decided here, from the protocol doc section 9 table (task 010 owns the
+// Policy decided here, from the protocol doc section 9 table (the supervisor owns the
 // "when"; the docs deliberately do not choose for the product):
 //   * retryable: `connection` (transport death, refused upgrade with 500) and
 //     `protocol` (the event stream broke its shape - a new session is the cure,
 //     and the docs' stance is that a broken stream says nothing about the request
-//     being valid) - plus, since code review P2 (2026-10-05), the provider's own
+//     being valid) - plus, since an earlier review, the provider's own
 //     transient vocabulary: `rateLimited` (429/slow_down - Retry-After is the
 //     floor of the wait, the policy's backoff when no hint came) and
 //     `serviceOverloaded` (503/server_is_overloaded - transient by the provider's
@@ -47,7 +47,7 @@
 //
 // Threading: one worker thread owns the retry timer and the reopen attempts.
 // All methods are callable from non-realtime threads; nothing here runs on or
-// blocks an audio callback (AGENTS.md 5). The supervisor holds its own lock only
+// blocks an audio callback. The supervisor holds its own lock only
 // for state bookkeeping - never across a call into the wrapped backend or the
 // application sink, so neither can observe it mid-update.
 //
@@ -79,7 +79,7 @@ public:
         int maxBackoffMs = 15000;        ///< exponential backoff cap (doubling)
         int sessionMaxAgeMs = 3300000;   ///< proactive reopen before the provider ceiling; 0 = off
         /// Safety margin applied to a SERVER-announced expiry before reopening
-        /// (protocol docs section 4bis; code review P1, 2026-10-05): reopen
+        /// (protocol docs section 4bis; An earlier review, 2026-10-05): reopen
         /// starts this far ahead of the announced deadline, so the controlled
         /// close→reopen lands before the provider cuts the session mid-sentence.
         /// 0 means "reopen exactly at the announced instant" - permitted, not
@@ -87,9 +87,9 @@ public:
         int expirySafetyMarginMs = 300000;
     };
 
-    /// Recovery metrics (SPEC "Diagnostics": reconnect count, session
-    /// duration). A snapshot for the UI (task 014) and the diagnostics export
-    /// (task 017); counters keep accumulating across operator stop/start runs.
+    /// Recovery metrics (spec "Diagnostics": reconnect count, session
+    /// duration). A snapshot for the UI and the diagnostics export
+    ///; counters keep accumulating across operator stop/start runs.
     struct Stats
     {
         bool recovering = false;        ///< recovery is in progress right now
@@ -135,7 +135,7 @@ public:
     Stats stats() const noexcept;
 
     /// Whether a category is one a fresh session can fix (docs section 9).
-    /// Public for tests and the task 017 export; the policy above explains why.
+    /// Public for tests and the diagnostics export; the policy above explains why.
     static bool isRetryable(TranslationErrorCategory category) noexcept;
 
 private:

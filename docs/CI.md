@@ -20,8 +20,8 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
      secret stores, diagnostics export, UI model (headless), fault injection
      suite, performance headroom bounds;
    - the realtime allocation gate binary (`lingoflow_realtime_tests`);
-   - the static gates and their self-tests, which are exactly the AGENTS.md 5
-     regression protection: `realtime_safety_audit(+selftest)`,
+   - the static gates and their self-tests, which are exactly the project's
+     realtime-safety regression protection: `realtime_safety_audit(+selftest)`,
      `architecture_boundary_audit(+selftest)`;
    - `asio_discovery_verify`/`asio_discovery_list` - registry enumeration only,
      never loads a driver.
@@ -32,7 +32,7 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
 4. **Smoke modes** (Release executable):
    - `--dev --smoke` must exit 0. This is the hardware-independent proof that
      the production wiring starts end to end without device/key/network
-     (AGENTS.md 15's `--dev` mode).
+     (the built-in `--dev` mode).
    - `--smoke` (plain) is classified, never swallowed: exit 0 = PASS,
      exit 2 = **EXPECTED-HARDWARE-SKIP** - the documented semantics of 2 in
      `src/App/Main.cpp` is "a subsystem refused to start", and on a runner with
@@ -45,10 +45,10 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
 | Left to | Because |
 |---|---|
 | opening a real ASIO device (Waves SoundGrid) | no hardware on runners; `docs/rig-checklist.md` |
-| a real OpenAI session | no API key by design - and none needed: the protocol surface is tested against scripted transports (AGENTS.md 13/15); live round trip = 012 venue checkpoint |
-| a real NDI receiver | needs a receiver on the network; transport failure paths are injected in tests; live = 016 checkpoint |
-| long-run 1h/4h/8h+ | time + real hardware; `docs/performance.md` protocol, 024 checkpoint |
-| clean-machine install test | the runner is neither clean nor the installed target; `docs/release.md` four-step protocol, 026 checkpoint |
+| a real OpenAI session | no API key by design - and none needed: the protocol surface is tested against scripted transports (the project rules); live round trip = the venue translation checkpoint |
+| a real NDI receiver | needs a receiver on the network; transport failure paths are injected in tests; live = the venue NDI checkpoint |
+| long-run 1h/4h/8h+ | time + real hardware; `docs/performance.md` protocol, the long-run venue checkpoint |
+| clean-machine install test | the runner is neither clean nor the installed target; `docs/release.md` four-step protocol, the clean-machine checkpoint |
 | branch protection configuration | GitHub setting, owner's decision, not a repository file |
 
 A green CI run means: everything deterministic without hardware and secrets
@@ -92,8 +92,8 @@ cmake --test-dir build-release -C Release --output-on-failure
 & build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe --smoke;         $LASTEXITCODE  # 0 = hardware present and worked, 2 = EXPECTED-HARDWARE-SKIP
 ```
 
-The single-build-tree alternative (`build/`, as documented in AGENTS.md and
-AGENT_STATE.md) is equivalent for developers:
+The single-build-tree alternative (`build/`, as the local developer workflow
+uses it) is equivalent for developers:
 
 ```powershell
 cmake -S . -B build
@@ -111,7 +111,7 @@ Release exe would be file-locked); stop external ASIO hosts if you want plain
 ## Artifacts
 
 - `ci-diagnostics` (always, 7 days): build logs, ctest output, smoke logs,
-  and the app's own log file from the run (secret-free by the 021 design; the
+  and the app's own log file from the run (secret-free by design; the
   settings file is not collected).
 - `LingoFlow-Windows-Release` (success only, 14 days): the Release executable
   as built by CI. CI is not a release pipeline - nothing is published.

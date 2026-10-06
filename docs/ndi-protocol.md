@@ -1,4 +1,4 @@
-# NDI Integration Facts (normative source for task 016)
+# NDI Integration Facts (normative source for the NDI implementation)
 
 Dated: 2026-10-04. Anything here that comes from headers was read from the SDK
 installed on the development machine; anything from the official documentation
@@ -15,7 +15,7 @@ SPEC 38 defines two modes:
   metadata frames.
 * **Mode B - rendered subtitle video** (future, per SPEC: "can be implemented
   after the metadata mode"): our app renders text into a video source. Not
-  built; AGENTS.md 16 (build the current task, not the future one).
+  built; the project rules (build the current task, not the future one).
 
 SPEC 38's own warning is carried into our docs and UI: NDI metadata transmission
 does not guarantee that every NDI receiver renders captions - which is exactly
@@ -72,7 +72,7 @@ and we use it verbatim (pattern from
    `recv_create_v3`, `recv_capture_v3`, `recv_free_metadata`, `recv_destroy`);
 3. fallback `LoadLibraryA(NDILIB_LIBRARY_NAME)` through the normal search path;
 4. if none of that works: `start()` answers false with an actionable sentence and
-   the show continues without subtitles (AGENTS.md 12).
+   the show continues without subtitles.
 
 Two table-level facts that shaped the code (both verified against
 `Processing.NDI.DynamicLoad.h`, not assumed): `initialize` is marked deprecated
@@ -107,7 +107,7 @@ of the set - in the minimal shape
 ```
 
 one complete snapshot document per `INdiOutput::publish` (SPEC 38 "a receiver may
-replace" + task 013 snapshot semantics: last document wins). `xml:id` carries our
+replace" + the snapshot semantics: last document wins). `xml:id` carries our
 own pipeline sequence - a standard attribute used for identity, not an invented
 protocol field. Text content is XML-escaped (& < >) and XML-1.0-forbidden
 characters become spaces (a document a receiver cannot parse is the failure mode
@@ -117,7 +117,7 @@ alternative rendering mode [Mode B] rather than assuming display" make the venue
 receiver's answer the next evidence step, recorded where it belongs - in the
 human checkpoint below, not in the code.
 
-## Live facts measured on the development machine (2026-10-04)
+## Live facts measured on the development machine
 
 * The runtime loads and reports: `NDI SDK WIN64 16:38:09 Apr 14 2026 6.3.2.0`
   (probe stdout). Real `send_create` + `send_send_metadata` +
@@ -146,7 +146,7 @@ human checkpoint below, not in the code.
 
 ## Open by design (the checkpoint)
 
-The REQUIRED human checkpoint of task 016, run sheet `docs/rig-checklist.md`
+The REQUIRED human checkpoint for subtitles, run sheet `docs/rig-checklist.md`
 (step 11): on the venue network - `probe selfcheck` green, the operator's
 receiver (the graphics/vision tool actually in the show) displays the live
 captions, and unplugging that receiver leaves audio and translation untouched

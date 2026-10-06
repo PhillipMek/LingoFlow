@@ -1,6 +1,6 @@
 #pragma once
 //
-// NetworkLimits - the product's size refusals (code review P1, 2026-10-05).
+// NetworkLimits - the product's size refusals.
 // The realtime backend sits one step before audio delivery: an event stream
 // that can grow without a bound is not "unlikely" (the reviewer's own framing
 // - OpenAI is not the threat model), it is a production robustness hole. So
@@ -9,7 +9,7 @@
 //
 //   * Transport reassembly (kMaxInboundMessageBytes): a fragmented message
 //     that outgrows the budget is severed as a transport error - the
-//     established death path (the supervisor recovers per task 010 policy).
+//     established death path (the supervisor recovers per the supervisor policy).
 //     16 MiB is roughly 250x the largest documented event: a 400 ms audio
 //     delta measured live was 19200 PCM16 bytes (protocol docs section 15),
 //     base64 ~26 KB of JSON. Legitimate traffic never brushes the ceiling;

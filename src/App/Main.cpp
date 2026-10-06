@@ -1,6 +1,6 @@
 // LingoFlow - operator application.
 //
-// Task 012: the credential read below uses getenv and the registry; suppress the
+// Design note: the credential read below uses getenv and the registry; suppress the
 // deprecation the same way lingoflow_openai_probe does, and take the Windows
 // headers before JUCE pulls its own (both must precede every standard header).
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
@@ -10,7 +10,7 @@
 
 // The UI talks to exactly one object (ApplicationController) and reads exactly
 // one type (AppStatus). It has no knowledge of audio devices, wire protocols or
-// subtitle transports (AGENTS.md 7).
+// subtitle transports.
 //
 // Command line:
 //   --smoke   start the subsystems, log the resulting status, stop, quit without
@@ -19,7 +19,7 @@
 //             the Null translation backend: a startup check must not open network
 //             sockets or provider sessions (deterministic, cost-free, offline-
 //             capable), the windowed run is what mounts the real chain.
-//   --dev     developer mode (task 019) regardless of the settings file: the test
+//   --dev     developer mode regardless of the settings file: the test
 //             tone becomes the "device", the mock echo becomes the translator,
 //             no OpenAI session is opened and no ASIO device is touched. It does
 //             NOT rewrite the settings file, and it never enables loopback - a
@@ -28,9 +28,9 @@
 //             with --smoke it is the offline proof that the core runs without
 //             hardware and without an API key.
 //
-// The windowed run (task 014) opens the operator screen: status chips, device /
+// The windowed run opens the operator screen: status chips, device /
 // language / format selectors, live meters and gain, jitter pre-roll, counters
-// and the subtitle model. Task 015 adds the Settings dialog: the translation
+// and the subtitle model. The application adds the Settings dialog: the translation
 // instructions, recovery policy, NDI and diagnostics fields, and the masked
 // API-key entry that is stored in the Windows Credential Manager (the value
 // never touches settings, logs or the screen after a successful store). It
@@ -67,8 +67,8 @@
 #include "Utils/Log.h"
 
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
-// Task 012: the production translation chain (the contract implementation of
-// task 009 behind the recovery supervisor of task 010). Only App may include
+// Design note: the production translation chain (the contract implementation of
+// the OpenAI backend behind the recovery supervisor). Only App may include
 // Network (docs/architecture.md); the core keeps speaking the contract.
 #include <cstdlib>
 #include <vector>
@@ -82,11 +82,11 @@
 #endif
 
 #ifdef LINGOFLOW_WITH_NDI
-// Task 016: the production subtitle transport. App may include NDI (the module
+// Design note: the production subtitle transport. App may include NDI (the module
 // boundary forbids SDK types only inside the INdiOutput contract, and this
 // header keeps them on its .cpp side). NdiDispatch is core-portable (no SDK
 // types) and moves every transport call off the thread that feeds the jitter
-// buffer (code review P1, 2026-10-05).
+// buffer.
 #include "NDI/NdiDispatch.h"
 #include "NDI/Real/NdiTimedTextOutput.h"
 #endif
@@ -129,9 +129,9 @@ std::optional<std::string> readEnvironmentApiKey()
     return std::nullopt;
 }
 
-/// Development credential store (AGENTS.md 10 allows an environment variable for
+/// Development credential store (the project rules allows an environment variable for
 /// development). The value is never logged and never written anywhere - the app
-/// reports only its presence. Since task 015 this is the documented FALLBACK:
+/// reports only its presence. This is the documented FALLBACK:
 /// production keys live in the Windows Credential Manager and are read first;
 /// the environment stays a convenience for development, not a storage story.
 class EnvironmentSecretStore final : public liveai::security::ISecretStore
@@ -219,7 +219,7 @@ public:
         liveai::log::configure(makeLogConfig(liveai::config::defaults(), /*writeConsole = */ false));
 
         // The build metadata belongs to the JUCE shell; the diagnostics export
-        // header asks the controller for it (task 017) - the core does not
+        // header asks the controller for it - the core does not
         // invent version numbers.
         controller_.setApplicationVersion(juce::String(JUCE_APPLICATION_VERSION_STRING).toStdString());
 
@@ -233,7 +233,7 @@ public:
 
         // A settings file written before the rename lives in %APPDATA%\Live AI Interpreter.
         // Read it if that is all there is, and persist it once into the LingoFlow folder;
-        // the old copy is never deleted (AGENTS.md 12: recover, do not destroy).
+        // the old copy is never deleted (the project rules: recover, do not destroy).
         bool fromLegacy = false;
         const auto startupFile = liveai::config::ConfigStore::startupFile(fromLegacy);
         const auto migrateTo = fromLegacy ? liveai::config::ConfigStore::defaultFile()
@@ -255,7 +255,7 @@ public:
 
         // The platform adapter is created here, in the JUCE layer: the core only knows
         // that a device name from settings has to become an IAudioBackend, not how an
-        // ASIO device is opened (AGENTS.md 7). Without this factory a configured device
+        // ASIO device is opened. Without this factory a configured device
         // is reported as an error rather than silently ignored.
         controller_.setAudioBackendFactory(
             [](const liveai::audio::DeviceRequest& request, std::string& factoryError)
@@ -265,13 +265,13 @@ public:
                 return std::make_unique<liveai::platform::JuceAsioBackend>(request.deviceId);
             });
 
-        // Task 014: the operator picks devices in the UI, so the enumeration seam
+        // Design note: the operator picks devices in the UI, so the enumeration seam
         // gets its platform adapter here - the same "the core knows a name can
         // become a backend, not how" logic as the factory above. The scan reads
         // the ASIO registry only; it never loads a driver.
         controller_.setDeviceLister([] { return liveai::platform::scanAsioDevices().devices; });
 
-        // Task 019: one plan, computed here from the loaded settings (plus the
+        // Design note: one plan, computed here from the loaded settings (plus the
         // --dev forcing), handed to the controller as the mounted authority and
         // executed by the mounts below. Production defaults - no forcing, and a
         // settings file whose developer section is absent or off - produce a
@@ -407,10 +407,10 @@ public:
 
 private:
 #ifdef LINGOFLOW_WITH_OPENAI_BACKEND
-    /// Mounts the credential store chain (task 015): the Windows Credential
+    /// Mounts the credential store chain: the Windows Credential
     /// Manager is the primary store - a key the operator enters in Settings is
     /// written there by the OS, encrypted and restart-proof - and the
-    /// environment variable keeps the exact role AGENTS.md 10 gave it: a
+    /// environment variable keeps the exact role the project rules gave it: a
     /// development path. The chain reads the store first (a stored key wins)
     /// and writes only to the store (the environment is not the product's to
     /// rewrite). Idempotent: whoever needs the store calls this first.
@@ -429,9 +429,9 @@ private:
         // anywhere else in the process.
         controller_.setSecretStore(*secretStore_);
 
-        // Presence only, never the value (AGENTS.md 10). Without a key the session
+        // Presence only, never the value. Without a key the session
         // open will refuse - the controller already treats that as a recorded,
-        // recoverable failure that leaves the audio path running (AGENTS.md 12).
+        // recoverable failure that leaves the audio path running.
         if (secretStore_->identifiers().empty())
             liveai::log::warning(kLogComponent,
                                  "translation: no API key found - enter it in Settings (it will be "
@@ -444,8 +444,8 @@ private:
                                   + std::string(secretStore_->name()) + ")");
     }
 
-    /// Mounts the production translation chain (task 012): the real backend of
-    /// task 009 inside the recovery supervisor of task 010, its policy built from
+    /// Mounts the production translation chain: the real backend of
+    /// the OpenAI backend inside the recovery supervisor, its policy built from
     /// the operator's settings. From here up the application sees only the task
     /// 007 contract - the OpenAI names stop at this composition root.
     void installProductionTranslation()
@@ -456,12 +456,12 @@ private:
 
         liveai::network::OpenAIRealtimeOptions options; // documented defaults, no invented overrides
 
-        // Docs section 3 (code review P2, 2026-10-05): send the recommended
+        // Docs section 3: send the recommended
         // OpenAI-Safety-Identifier when this machine exposes an installation
         // identity - the SHA-256 digest of the Windows installation GUID, so
         // the wire carries neither a username, nor a hostname, nor the GUID
         // itself. An unavailable identity simply means the optional header is
-        // not sent; this is an identifier, not a credential (AGENTS.md 10).
+        // not sent; this is an identifier, not a credential.
         options.safetyIdentifier = liveai::network::deriveInstallationIdentifier();
         liveai::log::info(kLogComponent,
                           "translation: safety identifier "
@@ -496,13 +496,13 @@ private:
 #endif
 
 #ifdef LINGOFLOW_WITH_NDI
-    /// Mounts the production subtitle transport (task 016, SPEC 38 Mode A):
+    /// Mounts the production subtitle transport (SPEC 38 Mode A):
     /// caption snapshots as TTML1 metadata over NDI, through the runtime the
     /// machine provides - loaded dynamically per docs/licensing.md, the SDK's
     /// import library never linked. When the runtime is absent the controller's
     /// honest NDI-failure path takes over: the log and the operator chip say
-    /// what is wrong, and audio and translation keep running (AGENTS.md 12).
-    /// The transport itself is mounted behind NdiDispatch (code review P1):
+    /// what is wrong, and audio and translation keep running.
+    /// The transport itself is mounted behind NdiDispatch:
     /// every SDK call runs on the dispatch worker, never on the OpenAI receiver
     /// thread that feeds the jitter buffer.
     void installProductionNdi()

@@ -30,7 +30,7 @@ private:
     std::string streamName_;
     /// Publishes run on the caller's worker thread (sink path) while the
     /// operator/tests read the count from another thread: atomic relaxed, the
-    /// same rule the real NDI output will follow in task 016.
+    /// same rule the real NDI output will follow earlier.
     std::atomic<std::uint64_t> published_ { 0 };
 };
 

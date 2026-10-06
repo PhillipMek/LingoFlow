@@ -1,13 +1,13 @@
 #pragma once
 //
-// Translation backend contract (task 007). This header is the whole seam between
+// Translation backend contract. This header is the whole seam between
 // the product and any translation provider: lifecycle, translated audio output,
 // text events, errors and session state.
 //
-// Boundary rules (AGENTS.md 7, 8):
+// Boundary rules (the project rules, 8):
 //   * This header is protocol-neutral: no event names, session fields, model
 //     identifiers or wire formats. OpenAI specifics live only inside the
-//     Network/OpenAIRealtime* backend (task 009) and are mapped onto the types
+//     Network/OpenAIRealtime* backend and are mapped onto the types
 //     below. A provider rejection becomes TranslationErrorCategory, not a copy
 //     of the provider's error vocabulary.
 //   * AudioEngine never includes this header. Translated audio reaches the
@@ -17,18 +17,18 @@
 //   * Callbacks arrive on a network/worker thread, never on the audio thread.
 //   * Audio handed to the backend is copied by the backend: the caller's buffer
 //     is only valid for the duration of the call.
-//   * A backend failure must never close the audio device (AGENTS.md 12). The
+//   * A backend failure must never close the audio device. The
 //     contract makes that possible: errors and state are events to the sink,
 //     and nothing in this interface can reach a device.
 //
 // Deliberately NOT here yet:
-//   * getCapabilities() (SPEC "Translation Provider Interface") - task 011
+//   * getCapabilities() (spec "Translation Provider Interface") - deferred
 //     creates TranslationCapabilities/LanguageRegistry; a half-defined
 //     capability type here would be re-invented by that task. Backend-specific
 //     pair validation in the meantime is minimal and honest: reject what you
 //     cannot do, with a message.
 //
-// What task 013 added around this seam (typed text, bounded history):
+// What the text pipeline added around this seam (typed text, bounded history):
 //   Translation/TextPipeline.h defines TranslationTextEvent (sequence, arrival
 //   stamp, partial/final) and the pipeline that owns them. The sink itself
 //   still carries the string pair below - deliberately: identities belong to
@@ -49,7 +49,7 @@ enum class SessionState
     closed = 0,     ///< no session, nothing is streamed
     connecting,     ///< session being established
     connected,      ///< streaming normally
-    reconnecting,   ///< lost connection, recovery in progress (task 010); submitAudio
+    reconnecting,   ///< lost connection, recovery in progress; submitAudio
                     ///< may refuse while in this state and must not be treated as fatal
     faulted         ///< this session is over; the application keeps running and a new
                     ///< openSession() is the way back
@@ -58,7 +58,7 @@ enum class SessionState
 std::string_view nameOf(SessionState state) noexcept;
 
 /// Language pair as opaque tags. Vocabulary and validation belong to
-/// LanguageRegistry (task 011); the contract only carries what the caller asked
+/// LanguageRegistry; the contract only carries what the caller asked
 /// for.
 struct LanguagePair
 {
@@ -79,23 +79,23 @@ struct SessionRequest
     /// fact, not a contract promise: gpt-realtime-translate accepts no custom
     /// prompting (protocol docs section 12.1), so that backend says so in the
     /// log and never fakes it; a model that does honour instructions uses this
-    /// same field. Empty means "nothing configured" (code review P1, 2026-10-05
+    /// same field. Empty means "nothing configured" (An earlier review, 2026-10-05
     /// - the config made it required while the provider ignored it).
     std::string instructions;
 
     /// Opaque provider model identifier, empty = "backend default". The set of
-    /// legal values comes from the official documentation research (task 008)
-    /// and the capability manifest (task 011); nothing here invents one.
+    /// legal values comes from the official documentation research
+    /// and the capability manifest; nothing here invents one.
     std::string model;
 
     /// Sample rate of the mono float32 frames submitAudio() will carry, Hz.
     /// Zero means the caller does not know - a backend that needs to know
-    /// refuses the session with an error instead of guessing (AGENTS.md 8).
+    /// refuses the session with an error instead of guessing.
     int inputSampleRate = 0;
 
     /// Sample rate the application will play delivered audio at, Hz. Blocks
     /// arriving at any other rate are the receiver's to reject and count -
-    /// resampling is a backend's job on its own threads (task 009), never
+    /// resampling is a backend's job on its own threads, never
     /// something the receiver does silently, and playing audio at the wrong
     /// speed is not an option.
     int outputSampleRate = 0;
@@ -106,7 +106,7 @@ struct SessionRequest
     friend constexpr bool operator==(const SessionRequest&, const SessionRequest&) = default;
 };
 
-/// What can go wrong, in vocabulary that survives changing providers. Task 009
+/// What can go wrong, in vocabulary that survives changing providers. The supervisor
 /// maps protocol-specific failures onto these categories; nothing in the
 /// application learns the provider's own error names.
 enum class TranslationErrorCategory
@@ -117,18 +117,18 @@ enum class TranslationErrorCategory
                       ///< documented account/billing refusals (the request is fine,
                       ///< the access is not - a fresh session fixes neither)
     audioFormat,      ///< audio cannot be used: bad rate or format on either side
-    protocol,         ///< event stream broke the agreed shape (task 010 decides what
+    protocol,         ///< event stream broke the agreed shape (the backend decides what
                       ///< is recoverable)
     rateLimited,      ///< the provider said "come back later" (429 / slow_down,
                       ///< protocol docs section 9): transient by description, and a
                       ///< Retry-After hint travels with it when one was sent -
-                      ///< task 010 must honour it and must NOT declare death
+                      ///< the supervisor must honour it and must NOT declare death
     serviceOverloaded,///< the service is temporarily saturated (503 /
                       ///< server_is_overloaded, section 9): the machine to keep
                       ///< backing off against, not the machine to fault on
     authentication,   ///< the account gate refused us (401/403: key, org, region):
                       ///< operator-actionable; retrying without an operator change
-                      ///< repeats the identical refusal, so task 010 stops
+                      ///< repeats the identical refusal, so the supervisor stops
     internal          ///< anything else; the message is the whole truth we have
 };
 
@@ -139,18 +139,18 @@ struct TranslationError
     TranslationErrorCategory category = TranslationErrorCategory::internal;
 
     /// Human-readable, for the log and the operator's diagnostics. Never
-    /// contains credentials (AGENTS.md 10); provider payload worth keeping
-    /// belongs in the diagnostics dump (task 017), not in this string.
+    /// contains credentials; provider payload worth keeping
+    /// belongs in the diagnostics dump, not in this string.
     std::string message;
 
     /// true  = this session cannot continue. The backend also reports the state
     ///         change (normally to faulted). The application does not stop
-    ///         anything - it may open a new session (task 010 owns when).
+    ///         anything - it may open a new session (the supervisor owns when).
     /// false = an event, not a death sentence: the backend keeps the session or
-    ///         is retrying (task 010). The sink records and moves on.
+    ///         is retrying. The sink records and moves on.
     bool fatal = false;
 
-    /// Recovery hint (task 010): when non-zero the backend learned from the
+    /// Recovery hint: when non-zero the backend learned from the
     /// service that retrying sooner than this is pointless ("wait at least as
     /// long as Retry-After specifies", protocol doc section 9). A wait at
     /// least this long is the minimum the recovery policy must honour; 0 means
@@ -167,7 +167,7 @@ struct TranslationError
 ///   * All methods can be called from any backend thread at any time, one at a
 ///     time per backend instance is NOT guaranteed - implementations must
 ///     tolerate interleaving.
-///   * Audio and text are independent channels (SPEC "Translation Provider
+///   * Audio and text are independent channels (spec "Translation Provider
 ///     Interface"): either can arrive without the other, at any pace, and the
 ///     sink must not couple them. A sink that drops text must not drop audio
 ///     because of it, and vice versa.
@@ -186,13 +186,13 @@ public:
 
     /// The translated line as it currently reads: a whole-line snapshot, not a
     /// fragment - the backend assembles whatever its provider streams before
-    /// it crosses this seam (task 013). Every call replaces the previous one
+    /// it crosses this seam. Every call replaces the previous one
     /// for the same line; may arrive many times per utterance.
     virtual void onPartialText(std::string_view text) = 0;
 
     /// Completed text; final events are authoritative for history and NDI. An
     /// empty final closes the open line with its own last-known words (the
-    /// TextPipeline rule task 013 defined); a final with words replaces the
+    /// TextPipeline rule defined); a final with words replaces the
     /// draft as the authoritative text of that line.
     virtual void onFinalText(std::string_view text) = 0;
 
@@ -201,13 +201,13 @@ public:
     virtual void onSessionStateChanged(SessionState state) = 0;
 
     /// Something went wrong. The sink records it; deciding whether and when to
-    /// retry or reopen is task 010, and nothing here may stop the audio device.
+    /// retry or reopen is the supervisor's, and nothing here may stop the audio device.
     virtual void onTranslationError(const TranslationError& error) = 0;
 };
 
 /// Control side of the backend. All methods are called from non-realtime
 /// threads. Lifecycle rules that implementations MUST honour, because the
-/// integration tests and the reconnect logic of task 010 build on them:
+/// integration tests and the reconnect logic build on them:
 ///
 ///   1. setSink() before openSession(); without a sink, openSession() refuses
 ///      with an error rather than producing an unusable session.
@@ -219,7 +219,7 @@ public:
 ///      and a refusal that changed nothing reports nothing.
 ///   4. submitAudio() succeeds only while connected. Outside that it returns
 ///      false and sets `error`; the caller keeps operating - refused audio is
-///      not a fault (AGENTS.md 12).
+///      not a fault.
 ///   5. closeSession() is idempotent and guarantees that no sink callback is
 ///      invoked after it returns. In-flight worker callbacks are joined or
 ///      dropped inside closeSession(), not left to race with the caller's
@@ -242,7 +242,7 @@ public:
     virtual void setSink(ITranslationSink& sink) noexcept = 0;
 
     /// Establishes a translation session. Credentials are resolved by the
-    /// backend from the credential store (AGENTS.md 10) - they are never passed
+    /// backend from the credential store - they are never passed
     /// through this interface as a plain string in logs or config.
     virtual bool openSession(const SessionRequest& request, std::string& error) = 0;
 
@@ -259,7 +259,7 @@ public:
     /// Does the provider know when this session actually ends? True with
     /// `remainingMsOut` = milliseconds until the server-announced expiry,
     /// measured on this machine's steady clock from the moment the announcement
-    /// arrived (code review P1, 2026-10-05; protocol docs section 4bis). The
+    /// arrived (An earlier review, 2026-10-05; protocol docs section 4bis). The
     /// value may already be non-positive - a server that says "it ended" says
     /// "act now". The default says "this backend announces nothing", which is
     /// the honest answer for Null, Mock and any provider omitting the optional

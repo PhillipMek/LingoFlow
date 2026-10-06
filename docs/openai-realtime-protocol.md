@@ -1,17 +1,17 @@
 # OpenAI Realtime Protocol — verified facts for the translation backend
 
-Task 008 deliverable. This file replaces the placeholder: "Task 008 must replace
+protocol research deliverable. This file replaces the placeholder: "must replace
 this file with information verified against current official OpenAI documentation."
 
-**Every protocol assumption made by tasks 009-018 must come from this file.** Where
+**Every protocol assumption made by the backend and the pipeline must come from this file.** Where
 the documentation is silent, section 14 says so explicitly, and the code must not fill
-the gap with guesses (AGENTS.md 8, 19).
+the gap with guesses (the project rules, 19).
 
 - Verified: 2026-10-02, by fetching the live official documentation pages listed in
   section 15. No statement here is recalled from memory or from older protocol
   versions; the pre-GA beta protocol is marked invalid below.
 - Re-verification: every page has a Markdown twin - append `.md` to the URL - and the
-  index is `https://developers.openai.com/api/llms.txt`. If task 009 hits behavior
+  index is `https://developers.openai.com/api/llms.txt`. If future verification hits behavior
   that contradicts this file, re-fetch the pages before believing either side.
 
 ---
@@ -38,7 +38,7 @@ receives raw audio, such as ... broadcast ingest, or a media worker" [R1]. The W
 path (`POST /v1/realtime/translations/calls`, SDP offer/answer) exists for browser
 media capture [R1][R8]; **we do not use it**, and consequently we do not need
 `client_secrets` (those exist to avoid exposing a key to browsers; our key stays in the
-local process behind the credential store, task 015).
+local process behind the credential store).
 
 ## 2. Endpoint and connection
 
@@ -57,7 +57,7 @@ local process behind the credential store, task 015).
 - Header on the WebSocket upgrade request: `Authorization: Bearer <API key>` [R1][R6][R8].
 - `OpenAI-Safety-Identifier` header: optional, recommended by OpenAI, "doesn't require
   them"; value should be a stable privacy-preserving hash, not an identity [R5][R6].
-  Implemented 2026-10-05 (code review P2): the product value is the lowercase SHA-256
+  Implemented 2026-10-05: the product value is the lowercase SHA-256
   hex digest of the Windows installation GUID (`HKLM\SOFTWARE\Microsoft\Cryptography\
   MachineGuid`) derived once at the composition root - the wire carries neither the
   GUID, nor a username, nor a hostname, and no plaintext personal or operator
@@ -78,7 +78,7 @@ stream itself. Keep appending audio, including silence between phrases, and hand
 output events as they arrive" - and "You don't call `response.create`" [R1][R8]. There is
 no assistant turn, no tool call and no conversation state [R8].
 
-Mapping to the task 007 contract (our six lifecycle rules in `ITranslationBackend.h`):
+Mapping to the translation contract (our six lifecycle rules in `ITranslationBackend.h`):
 
 | Contract rule | Protocol fact |
 | --- | --- |
@@ -92,13 +92,13 @@ Mapping to the task 007 contract (our six lifecycle rules in `ITranslationBacken
 The `session.close` client event is "only supported for translation sessions" [R1] -
 another reason the voice-agent docs must not be copied into our backend.
 
-### 4bis. Session expiry - the server's own deadline (recheck 2026-10-05, code review P1)
+### 4bis. Session expiry - the server's own deadline (recheck 2026-10-05, An earlier review)
 
 The realtime session object carries `expires_at`: "Expiration timestamp for the
 session, in seconds since epoch" [R10]. It is documented OPTIONAL - a server that
 fills `session.updated` without it is behaving as documented, not failing - and the
 conversations guide separately states "the maximum duration of a Realtime session is
-60 minutes" [R11], the fact task 010's `sessionMaxAgeMs` policy was built to predict.
+60 minutes" [R11], the fact the `sessionMaxAgeMs` policy was built to predict.
 
 Decision (supervisor policy): where the server announces a concrete expiry, that
 announcement is authoritative, and a controlled reopen is started at
@@ -132,7 +132,7 @@ else is not protocol and must not be invented:
    (`{type: "near_field" | "far_field"}` or `null`). `type` and `model` cannot be
    changed. Optional `event_id`. Successful update returns `session.updated` [R2][R3].
    **Mid-session language change is supported**: update `audio.output.language` on an
-   open session (relevant to task 015's UI; no reconnect needed).
+   open session (relevant to the UI; no reconnect needed).
 2. **`session.input_audio_buffer.append`** — `{audio: <base64 PCM16 mono 24 kHz
    little-endian>, event_id?}`. Section 7 defines the byte contract [R2].
 3. **`session.close`** — `{event_id?}`; graceful flush-and-close (section 4) [R2].
@@ -140,7 +140,7 @@ else is not protocol and must not be invented:
 ## 6. Server events - the complete list
 
 The reference page for translation server events contains exactly seven [R3]. Sink
-mapping for tasks 009/012/013:
+mapping for the backend, the streaming worker and the text pipeline:
 
 | Event | Payload (verified fields) | Goes to |
 | --- | --- | --- |
@@ -148,9 +148,9 @@ mapping for tasks 009/012/013:
 | `session.created` | `session{id "sess_…", type "translation", model, expires_at, audio{…}}`, first event on connect | state → connected (after our `session.update` is confirmed by `session.updated` — decision, section 14.3) |
 | `session.updated` | same `session` object, resolved config | state → configured / language-changed |
 | `session.closed` | nothing else | state → closed; end of callbacks (rule 5) |
-| `session.input_transcript.delta` | `delta` (source-language text), `elapsed_ms?` | source subtitles (013), only if `audio.input.transcription` configured [R2][R3] |
-| `session.output_transcript.delta` | `delta` (translated text), `elapsed_ms?` | translated subtitles (013) |
-| `session.output_audio.delta` | `delta` (base64), optional `sample_rate`, `channels`, `format: "pcm16"`, `elapsed_ms?` | `onTranslatedAudio` via controller → jitter buffer (012) |
+| `session.input_transcript.delta` | `delta` (source-language text), `elapsed_ms?` | source subtitles, only if `audio.input.transcription` configured [R2][R3] |
+| `session.output_transcript.delta` | `delta` (translated text), `elapsed_ms?` | translated subtitles |
+| `session.output_audio.delta` | `delta` (base64), optional `sample_rate`, `channels`, `format: "pcm16"`, `elapsed_ms?` | `onTranslatedAudio` via controller → jitter buffer |
 
 No `*.done` events exist in the reference. Do not wait for one; do not invent one.
 
@@ -169,13 +169,13 @@ No `*.done` events exist in the reference. Do not wait for one; do not invent on
   previous audio rather than as a real-world pause" [R2]. A stall is not a pause: the
   translation drifts. Our streaming worker must therefore produce a steady 200 ms
   cadence (or the equivalent bytes/time) whenever the session is open - this is an
-  explicit task 012 design constraint.
+  explicit an explicit design constraint.
 
 **Output (what we can expect back)**:
 
 - `session.output_audio.delta` carries PCM16 whose "length can vary"; clients must decode
   and queue the whole delta, never assume a fixed size [R3]; that trust is bounded by
-  the client (code review P1, 2026-10-05): a reassembled WebSocket message must fit the
+  the client: a reassembled WebSocket message must fit the
   16 MiB transport budget (larger severs the connection as a transport fault, which the
   supervisor recovers), and a decoded audio delta must fit 256 KiB (larger is dropped as
   a section-7 shape anomaly, session untouched) - both margins are 13x-250x the live
@@ -190,9 +190,9 @@ No `*.done` events exist in the reference. Do not wait for one; do not invent on
   treat them as authoritative when present and validate against what it assumed; the
   value the real API sends must be observed at the human checkpoint (14.2).
 
-**Device-rate envelope (code review P1, 2026-10-05)**: this backend accepts on
+**Device-rate envelope**: this backend accepts on
 either side exactly the product's config set - 24000, 44100, 48000, 88200, 96000 Hz -
-against the 24 kHz wire, and nothing else (AGENTS.md 8: no invented rates, 32000 Hz
+against the 24 kHz wire, and nothing else (the project rules: no invented rates, 32000 Hz
 stays a refusal). 44.1/88.2 were legal in `ConfigSchema` while the backend rejected
 them, so a lawful operator choice used to die at Start Translation. Power-of-two
 relations run through the halfband cascade; 24 <-> 44.1 (147/80) and 24 <-> 88.2
@@ -206,11 +206,11 @@ range, and nothing legitimate can live there - pure leakage), every
 polyphase row is DC-normalised to unity, and chunked streaming equals one-shot
 bit for bit.
 
-**Sample-rate consequences for task 009** (contract mapping, section 13): the engine
+**Sample-rate consequences for the backend** (contract mapping, section 13): the engine
 runs at its device rate (48 kHz in dev defaults [R-doc]); the provider speaks 24 kHz in
 both directions. A resampler is therefore mandatory **inside the backend**, on the
 network/worker thread (2:1 both ways with 48k devices). It must never be in the audio
-callback (AGENTS.md 5), and the existing no-resampling-in-the-controller rule (007) is
+callback, and the existing no-resampling-in-the-controller rule is
 compatible: the controller compares delivered blocks against `outputSampleRate`, and
 the backend's job is to deliver at that rate or refuse.
 
@@ -223,7 +223,7 @@ the backend's job is to deliver at that rate or refuse.
 - `elapsed_ms` (both transcript events and audio delta): alignment metadata derived from
   the translation frame, advances in 200 ms increments, **may repeat across events** -
   "Treat it as alignment metadata, not a unique transcript-delta identifier" [R3].
-  Task 013 may use it to align subtitles with audio; it must not key state on it.
+  later text work may use it to align subtitles with audio; it must not key state on it.
 - Source transcripts exist only when `audio.input.transcription.model` is configured
   [R2][R3]; the documented example model is `gpt-realtime-whisper` (released same day
   as the translate model, "streaming speech-to-text") [R7][R8].
@@ -254,25 +254,25 @@ Sep 2, 2026 changelog change [R7]:
 `Retry-After` header: "When the header is present, wait at least as long as it
 specifies... If it's missing, use exponential backoff" [R7][R9]. Billing/quota 429s are
 the documented exception: "Retrying billing, spend, or quota errors won't restore API
-access" [R9] - treat as operator-actionable, retrying is pointless (task 010 policy).
+access" [R9] - treat as operator-actionable, retrying is pointless (a documented policy).
 
 In-session `error` events may carry the same transient vocabulary in `error.code`
 ([R7] Sep 2 2026 separates `slow_down` from `server_is_overloaded`): the codes classify
 to `rateLimited` / `serviceOverloaded` before the coarse `error.type` is consulted, and
 an in-session error event alone never faults the session (the official stance above).
 
-**Mapping rule for task 009**: provider error names/types (`invalid_request_error`,
+**Mapping rule for the backend**: provider error names/types (`invalid_request_error`,
 `server_error`, `slow_down`, `server_is_overloaded`, ...) are translated **only** into
 the product `TranslationErrorCategory` values (`connection`, `rejectedRequest`,
 `audioFormat`, `protocol`, `rateLimited`, `serviceOverloaded`, `authentication`,
 `internal`) plus `fatal`; nothing provider-named crosses the sink seam (contract header,
-AGENTS.md 8). `audioFormat` on our side means the 24 kHz PCM16 contract was violated
+the project rules). `audioFormat` on our side means the 24 kHz PCM16 contract was violated
 locally; a provider validation error about our audio maps to `audioFormat`, everything
 else the provider refuses about the request maps to `rejectedRequest`, the account gate
 refusing us maps to `authentication`, the provider asking us to come back later maps to
 `rateLimited`/`serviceOverloaded`, transport death maps to `connection`, and anything we
 cannot classify maps to `internal` - never dropped silently.
-(Task 010 policy over this vocabulary: `connection`, `protocol`, `rateLimited`,
+(a documented policy over this vocabulary: `connection`, `protocol`, `rateLimited`,
 `serviceOverloaded` are recoverable by a fresh session; `authentication`,
 `rejectedRequest`, `audioFormat` and `internal` stop at `faulted` for the operator.)
 
@@ -290,19 +290,19 @@ What it does **not** provide (do not invent):
 - no documented session duration value or expiry behavior beyond the presence of
   `expires_at` (seconds since epoch) [R3]; the live probe observed `expires_at` =
   creation + 3600 s on every session (section 15) - treat one hour as the practical
-  session ceiling and reopen proactively (task 010); what the server does AT expiry is
+  session ceiling and reopen proactively; what the server does AT expiry is
   still unobserved;
 - no documented WebSocket close-code semantics for this endpoint;
 - no "flush done" signal other than `session.closed` itself.
 
-Consequences for task 010 (kept in product vocabulary): after a dropped transport the
+Consequences for the supervisor (kept in product vocabulary): after a dropped transport the
 backend reopens a session per contract rule 6 (state reset), replays the stored
 `SessionRequest` (pair + rates + language), and the application decides what to do with
 audio that was queued during the gap. Since provider time is contiguous over appended
-audio (section 7), the honest options at 010 were: drop the gap buffer (translate drifts
+audio (section 7), the honest options were: drop the gap buffer (translate drifts
 but stays aligned with "now") - the docs do not choose it for us.
 
-**Chosen by task 010 (owner decision, 2026-10-02), now implemented in
+**Chosen by the recovery design (owner decision), now implemented in
 `src/Translation/ReconnectSupervisor`:**
 
 - **Gap policy = drop.** Audio arriving while the session is down is refused at the seam
@@ -326,10 +326,10 @@ but stays aligned with "now") - the docs do not choose it for us.
 - **Proactive reopen before the ceiling:** with the default age policy (55 minutes,
   below the 3600 s `expires_at` observed in section 15) the supervisor runs a normal
   close→open cycle before the provider expires the session, so a long event never reaches
-  that path blind. What the server does AT expiry is still unobserved (024 confirms on a
+  that path blind. What the server does AT expiry is still unobserved (the long-run check confirms on a
   real event); with the age policy on, production should not hit it.
 - **Recovery is transparent to the audio device and the engine:** the supervisor only
-  speaks `ITranslationBackend`; it cannot touch ASIO (SPEC "Reliability"). It reports
+  speaks `ITranslationBackend`; it cannot touch ASIO (spec "Reliability"). It reports
   `reconnecting` to the application and hides the transient `faulted`/`closed`/`connecting`
   churn of the sessions it replaces, so the UI sees "connected -> reconnecting -> connected",
   not a machine-gun of internal state. Non-fatal errors, audio and text pass through.
@@ -340,7 +340,7 @@ but stays aligned with "now") - the docs do not choose it for us.
 ## 11. Model identity and operating envelope
 
 - Model ID: `gpt-realtime-translate`; default snapshot `gpt-realtime-translate`; the
-  snapshots list contains exactly this one entry [R4]. Task 009's default value for the
+  snapshots list contains exactly this one entry [R4]. the product's default value for the
   contract's opaque `model` string is therefore `gpt-realtime-translate`, and any other
   value is a `rejectedRequest`-style config error until docs say otherwise.
 - Capabilities: input modalities audio; output audio + text; "streaming" is the only
@@ -352,22 +352,22 @@ but stays aligned with "now") - the docs do not choose it for us.
   audio per minute; the envelope matters for aggressive reconnect loops and for multiple
   simultaneous sessions (one per target language, section 12).
 - No documented numeric latency guarantee for this model. The SPEC's 0.7-1.5 s end-to-end
-  target stays a measured property of the rig (task 018, HUMAN CHECKPOINT), not a
+  target stays a measured property of the rig (HUMAN CHECKPOINT), not a
   protocol promise.
 
 ## 12. Behavioral constraints that shape the product (verified)
 
 1. **No custom prompting.** "This model does not currently support custom prompting or
-   voice selection parameters" [R8]. ⚠️ **Conflict flag**: task 012's wording
+   voice selection parameters" [R8]. ⚠️ **Conflict flag**: the docs' wording
    ("translation instructions") and `SessionRequest.instructions` cannot be honored by
-   this endpoint. The 009 backend must not fake instruction support: accept the field,
+   this endpoint. The backend must not fake instruction support: accept the field,
    ignore with a warning (and count/report it as not applied). **Resolved by the owner
-   2026-10-03 (task 012)**: the notice is a LOG warning only - no `TranslationError`
+   2026-10-03**: the notice is a LOG warning only - no `TranslationError`
    crosses the seam for it. The request itself is not refused, and `rejectedRequest` is
    the supervisor's terminal category (section 10), so an ordinary every-start capability
    fact must not appear as a failure in the operator's status. The field itself stays in
    the contract because other backends may support it.
-   **Second half resolved by code review P1 (2026-10-05)**: requiring an
+   **Second half resolved by an earlier review**: requiring an
    operator to author a text the provider ignores is its own fake contract.
    `translation.instructions` became OPTIONAL with an empty default (the field
    round-trips and future models reuse it), the Settings dialog shows it
@@ -382,14 +382,14 @@ but stays aligned with "now") - the docs do not choose it for us.
 3. **Source language is auto-detected**; the client only sets the target language [R8].
    Our `LanguagePair.input` is therefore a UI/config statement, not a wire field: the
    translation session request has no input-language parameter in `session.update`
-   [R2]. Capability validation (011) must reflect that EN→X and RU→X both work by
+   [R2]. Capability validation must reflect that EN→X and RU→X both work by
    detection, not by declaration.
 4. **Dynamic voice adaptation**: translated speech follows the source speaker's tone,
    pitch and style; in multi-speaker audio the output voice changes with the input [R8].
 5. **Same-language speech may produce silence**: the model "tries not to translate
    speech that is already in the selected output language" [R8]. Documented production
    pattern: duck (not mute) the original audio and keep source captions available [R8].
-   For our output path (012/016 NDI) this means the operator needs to understand why
+   For our output path (the streaming pipeline and NDI) this means the operator needs to understand why
    "nothing" comes back during an already-in-target-language segment; it is not an
    error and must not be counted as one.
 6. **One session per target language** for multi-language audiences [R1]. Our MVP
@@ -398,10 +398,10 @@ but stays aligned with "now") - the docs do not choose it for us.
    `audio.input.transcription.model` (`gpt-realtime-whisper` in every example
    [R2][R8]) and `audio.input.noise_reduction.type` (`near_field` for close-talk mics
    like headsets, `far_field` for conference mics) [R2]. For a console feed via
-   SoundGrid, neither default is documented; 009 must make both configurable or omit
+   SoundGrid, neither default is documented; the backend must make both configurable or omit
    them (omit = don't send).
 
-## 13. Capabilities manifest content for task 011
+## 13. Capabilities manifest content for the registry
 
 From [R8], the authoritative current language envelope:
 
@@ -417,10 +417,10 @@ From [R8], the authoritative current language envelope:
 
 The docs name languages in English and show ISO-style codes (`"es"`, `"fr"`) in
 examples [R1][R2]; the exact accepted code strings for all 13 targets are **not**
-published as a code list. The manifest in 011 should carry codes for `"en"`/`"ru"` (used
+published as a code list. The registry manifest carries codes for `"en"`/`"ru"` (used
 pattern) and each code must be confirmed at the live checkpoint (14.4) before wider use.
 
-**Frozen by task 011 (2026-10-03), as `src/Translation/LanguageRegistry` v1.** The live
+**Frozen as `src/Translation/LanguageRegistry` v1.** The live
 checkpoint 14.4 closed the code question first (section 15): all 13 targets accepted as
 ISO 639-1. The manifest therefore carries: `targets` = the 13 live-verified ISO 639-1
 codes (`es pt fr ja ru zh de ko hi id vi it en`), `sources` = the [R8] enumeration
@@ -433,7 +433,7 @@ Consumers of this single list: `ApplicationController::startSession` (operator g
 `OpenAIRealtimeBackend::openSession` (offline refusal, with
 `OpenAIRealtimeOptions::capabilities` as the seam a future dynamic manifest would
 replace it through - dynamic discovery is not available with this key, section 15), and
-from task 014 the UI dropdowns. Nothing else may carry a language list (FAIL criterion).
+feed the UI dropdowns. Nothing else may carry a language list (FAIL criterion).
 
 **UI consequence (P1 fix, 2026-10-06).** Because the source code never crosses the wire,
 no operator-facing surface may present it as if it did. The main screen shows the target
@@ -449,7 +449,7 @@ separately: `source_expectation` and `provider_source_detection: automatic`.
 ## 14. Explicitly unverified — needs the live API (HUMAN CHECKPOINT)
 
 This task verified documentation, not traffic; there is no `OPENAI_API_KEY` on this
-machine. Before or during task 009/012, on a networked rig with a key:
+machine. Before or during the live-venue pass, on a networked rig with a key:
 
 1. **Model acceptance**: WS connect with `?model=gpt-realtime-translate` yields
    `session.created` with `type:"translation"`, `model:"gpt-realtime-translate"`.
@@ -460,11 +460,11 @@ machine. Before or during task 009/012, on a networked rig with a key:
 4. **Language code set**: submit each of the 13 target codes as `audio.output.language`
    and record accept/refuse (and the `error` shape when refused).
 5. **Silence behavior** (12.5) and **flush latency of `session.close`** (rule 5): audible,
-   operator-level checks at 012/018.
-6. **`expires_at` semantics** and any idle-timeout: observe over a long session (024).
+   operator-level checks at живого аудио.
+6. **`expires_at` semantics** and any idle-timeout: observe over a long session.
 
-None of these block writing 009 (the backend can implement exactly what is documented);
-they block declaring 009/012 PASS on real traffic.
+None of these block writing the backend (it can implement exactly what is documented);
+they block declaring the live chain PASS on real traffic.
 
 *Update 2026-10-02: the owner supplied a key; items 1, 3, 4, 6 and 2 were verified live
 the same day (2 fully, including an owner ear-check of the delivered stream) - results in
@@ -483,7 +483,7 @@ logged or committed). Probes run against the live service, closing parts of sect
   ours to rely on.
 - **14.3 CLOSED (ordering)**: `session.update` sent immediately after `session.created`
   was answered by `session.updated` with the resolved config (~0.2 s round trip). Either
-  event may be the "usable" trigger; 009 will treat `session.updated` as usable because
+  event may be the "usable" trigger; the backend treats `session.updated` as usable because
   our configuration must be confirmed before audio flows (this is now a documented
   product decision, not a protocol fact).
 - **14.4 CLOSED - language codes**: all 13 target languages accepted as ISO 639-1 codes
@@ -491,10 +491,10 @@ logged or committed). Probes run against the live service, closing parts of sect
   session echoing `language:"ru"`. Most ISO 639-3 forms (`spa`, `rus`, `deu`…) are also
   accepted; `zho` is REJECTED with `invalid_request_error/invalid_value`, and the error
   message itself disclosed the supported-value set (the 2-letter list incl. `af ar az be
-  bg bs …` - the 70+ input languages of [R8] as codes). The 011 manifest should use
+  bg bs …` - the 70+ input languages of [R8] as codes). The registry manifest uses
   ISO 639-1 two-letter codes only.
 - **14.6 CLOSED (initial value)**: `expires_at` = creation time + 3600 s on every observed
-  session. Session max duration 60 minutes: 010 MUST schedule a proactive reopen shortly
+  session. Session max duration 60 minutes: the supervisor MUST schedule a proactive reopen shortly
   before expiry (an operator-visible requirement for events longer than one hour).
 - **14.2 CLOSED - output format**: 171 delivered `session.output_audio.delta`
   events across two complete runs (11 s of English TTS speech in, target `ru`). EVERY
@@ -512,14 +512,14 @@ logged or committed). Probes run against the live service, closing parts of sect
   ear-check 2026-10-02, decisive**: `out_as_24k_mono.wav` sounds normal, while
   `out_as_48k_mono.wav` and `out_as_24k_stereo.wav` both play ~2x fast - exactly the
   pattern of mislabeled 24 kHz mono. Translation QUALITY checks (real voice, latency)
-  stay with 012/018.
+  stay with живого аудио.
 - **NEW (measured) - delivery rate is bursty, above real time**: each delta advanced
   `elapsed_ms` by 200 ms while carrying 400 ms of PCM (2x), and after `session.close`
   the drain delivered ~200 KB/s (~4.7x real time). Arrival therefore runs consistently
-  and burstily AHEAD of consumption. Consequences fixed for 012: the jitter buffer's
+  and burstily AHEAD of consumption. Consequences fixed by the pipeline: the jitter buffer's
   default target (120 ms) and capacity (target+360 ms) are marginal for a single 400 ms
-  delta - defaults must be re-sized, and overflow policy (007's counted drops) is the
-  safety net, not an error path. This is measurement, not OpenAI documentation; 018
+  delta - defaults must be re-sized, and overflow policy (the contract's counted drops) is the
+  safety net, not an error path. This is measurement, not OpenAI documentation; the latency budget
   re-measures on real audio.
 - **Transcript deltas live**: `session.output_transcript.delta` (Russian text, 32 append-only
   deltas, spacing included in the fragments) and `session.input_transcript.delta` (source
@@ -528,26 +528,26 @@ logged or committed). Probes run against the live service, closing parts of sect
   `audio.input.transcription.model`.
 - **Graceful close live**: `session.close` → remaining queued `session.output_audio.delta`
   continued to arrive (68% of deltas post-close in one run) → then `session.closed`.
-  Rule 5 (007) is exactly right: after sending close, the backend MUST keep draining
+  Rule 5 is exactly right: after sending close, the backend MUST keep draining
   until `session.closed`; closing the socket early drops translated audio.
 - **NEW (not in docs) - transport keepalive**: one idle probe (connected, configured,
   no audio, silent) was closed by the server with WS close reason `keepalive ping
   timeout`. Respond to server pings (RFC-6455 pong) AND send periodic client pings
-  (~4-15 s) in 009; also start streaming audio promptly after opening.
+  (~4-15 s) in the backend; also start streaming audio promptly after opening.
 - **NEW - key scopes**: this key gets `403 Missing scopes: api.model.read` on
   `GET /v1/models` while working fine on the translations endpoint. Consequence for
-  011: dynamic capability discovery via `/v1/models` is NOT available with this key -
-  the versioned capability manifest (AGENTS.md 9) is the path, not a fallback.
+  The registry: dynamic capability discovery via `/v1/models` is NOT available with this key -
+  the versioned capability manifest is the path, not a fallback.
 - **NEW - quality caveat for synthetic input**: on TTS voice the translation stuttered
-  and merged words ("сетидля"); this is why 012/018 human checks use real microphone
+  and merged words ("сетидля"); this is why живого аудио human checks use real microphone
   audio. Also visible: translated audio duration far exceeded source duration at times
-  (interpretation verbosity) - jitter buffer sizing (018) must budget for that.
+  (interpretation verbosity) - jitter buffer sizing must budget for that.
 
 Probes used a raw Node.js WebSocket client (built-ins only): handshake with the
 `Authorization: Bearer` header, base64 24 kHz PCM16 chunks appended at a 200 ms cadence,
 `session.update`/`session.close` as documented. No product source was involved.
 
-**Same-day implementation validation (task 009, the product backend against the live
+**Same-day implementation validation (the product backend against the live
 service):**
 
 - **`session.update` requires the `session` wrapper**: the first backend draft sent the
@@ -574,24 +574,24 @@ service):**
   3.8 s; **1,593,600 translated samples delivered at 48000 Hz** (exercising the
   backend's live 24→48 upsample), 187 characters of Russian transcript, 0 errors,
   state transitions exactly `connecting → connected → closed`. Translated duration again
-  far exceeded the source (sparse/slow interpretation) - the 012/018 burst-sizing
+  far exceeded the source (sparse/slow interpretation) - the живого аудио burst-sizing
   conclusions stand.
-- **Transcript accumulation does not reset between sentences (2026-10-03, task 013
+- **Transcript accumulation does not reset between sentences (2026-10-03 live check
   live re-run, `lingoflow_openai_probe` → ru)**: one 11.4 s English run delivered a
   single continuous `session.output_transcript.delta` stream of 164 characters that
   crossed two sentence boundaries without restarting or signalling anything - the
   provider offers no per-utterance text boundary at all, confirming sections 6/8
-  from the live side. Consequences decided in 013: the product owns subtitle lines
+  from the live side. Consequences decided for the text pipeline: the product owns subtitle lines
   (the backend's settle rule `OpenAIRealtimeOptions::transcriptSettleMs` plus the
   closeSession flush), the sink's `onPartialText` is a whole-line SNAPSHOT
-  (fragment-accumulating consumers double-write under snapshot partials - the 013
+  (fragment-accumulating consumers double-write under snapshot partials - the text pipeline
   probe fix shows exactly that before/after), and `elapsed_ms` keys nothing. Whether
   2500 ms of stream-pause is the right cut point for live speech is a rig
   observation (docs/rig-checklist.md step 9).
 
 Remaining open items from section 14: 14.5 (silence/ducking behavior needs real speech
-in the target language - 012), and the long-run semantics of `expires_at` (what the
-server sends at expiry - 010/024).
+in the target language (the live path), and the long-run semantics of `expires_at` (what the
+server sends at expiry - the supervisor and the long-run check).
 
 ## 16. References (R1-R9 fetched 2026-10-02, R10-R11 fetched 2026-10-05; official OpenAI properties)
 
@@ -647,7 +647,7 @@ server sends at expiry - 010/024).
 The live probe data of section 15 is this repository's own measurement record from
 2026-10-02, not an OpenAI publication.
 
-## 17. What task 009 may rely on, in one paragraph
+## 17. What an implementer may rely on, in one paragraph
 
 Open a WebSocket to `wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate`
 with the `Authorization: Bearer` header (and optionally `OpenAI-Safety-Identifier`),

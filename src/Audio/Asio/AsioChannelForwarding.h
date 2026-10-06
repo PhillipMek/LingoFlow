@@ -3,7 +3,7 @@
 // ASIO channel forwarding - the one portable decision about what the driver's
 // channel-pointer array means, free of JUCE types so it can be unit-tested.
 //
-// Why this decision exists at all (code review P0, 2026-10-05): the engine must
+// Why this decision exists at all: the engine must
 // receive exactly the operator's selected channels as logical views 0..n-1. A
 // driver callback hands over "an array plus its length" - and what the entries
 // are indexed BY is a per-device-type implementation detail. Vendored JUCE
@@ -51,7 +51,7 @@ enum class ChannelArrayShape
 /// one IS active, and then physical[k] == k and both rules select the same
 /// entry. Null entries pass through as null - and they are NOT silence to mix:
 /// AudioEngine::processAudio counts any null among the promised views as a
-/// malformed callback (code review P2, 2026-10-05), so a selected channel that
+/// malformed callback, so a selected channel that
 /// vanished mid-show is reported in the operator's counters, never quietly
 /// dropped from the mix.
 template <typename ChannelPtr>

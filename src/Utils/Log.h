@@ -4,13 +4,13 @@
 //
 // Rules that matter for this product:
 //   * NEVER call any function here from the audio callback: write() allocates a
-//     formatted string and takes a mutex (AGENTS.md section 5).
+//     formatted string and takes a mutex (the project rules).
 //   * NEVER log credentials, tokens or full configuration values
-//     (AGENTS.md section 10). Diagnostics export must stay secret-free.
+//     (the project rules). Diagnostics export must stay secret-free.
 //   * The core library deliberately has no JUCE dependency so it stays
 //     portable and unit-testable.
 //
-// Output goes to the console and/or a file; both are optional. Task 017
+// Output goes to the console and/or a file; both are optional. Diagnostics
 // (diagnostics) can attach additional sinks without changing call sites.
 
 #include <cstdint>
@@ -56,7 +56,7 @@ namespace log
     /// Every level a configuration can name, ascending, "off" last. The UI
     /// builds its selector from this list, so the names on the settings screen
     /// and the names validate() round-trips through nameOf/levelFromName can
-    /// never drift apart (task 015's single-source rule).
+    /// never drift apart (the single-source rule).
     const std::vector<LogLevel>& allLevels();
 
     /// True if messages of the given level would be emitted.
@@ -64,7 +64,7 @@ namespace log
 
     /// The product's one timestamp format: "YYYY-MM-DD HH:MM:SS.mmm" in local
     /// time, exactly the stamp the log lines carry. For event rings and export
-    /// files that must line up with the log (task 017) - not a second format
+    /// files that must line up with the log - not a second format
     /// invented nearby.
     std::string timestampNow();
 

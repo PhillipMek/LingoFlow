@@ -1,20 +1,20 @@
 #pragma once
 //
 // MockTranslationBackend - the behavioural offline translator for developer mode
-// (task 019: "mock backend", "allow operation without ... OpenAI").
+// ("mock backend", "allow operation without ... OpenAI").
 //
-// What it is: a full citizen of the task 007 contract. It honours the lifecycle
+// What it is: a full citizen of the translation contract. It honours the lifecycle
 // rules 1-6 exactly as the real backend must (the contract tests for it mirror
 // the supervisor's), takes a SessionRequest, streams audio in, and hands
 // translated audio and whole-line text snapshots back on a worker thread after
 // a configurable delay. The "translation" it performs is an echo with a label:
 // what goes in comes back, and every text event says "mock" in words, because
 // a mock that produces plausible-looking translations is the one thing this
-// product must never be able to confuse with the real service (AGENTS.md 19).
+// product must never be able to confuse with the real service.
 //
 // Why it is worth shipping inside the binary:
 //   * the whole pipeline - capture worker, ring buffers, jitter pre-roll,
-//     sink acceptance, counters, the task 018 in-flight backlog - becomes
+//     sink acceptance, counters, the supervisor's in-flight backlog - becomes
 //     runnable and checkable on a laptop with no ASIO device and no API key;
 //   * its configured delay is a KNOWN one, so the in-flight row of the latency
 //     accounting can be verified against an artificial ground truth - the only

@@ -191,7 +191,7 @@ TEST_CASE("Latency accounting: the panel, the diagnostics surface and the export
     const auto panel = buildOperatorPanel(controller, {});
     const auto diagPanel = buildDiagnosticsPanel(controller);
 
-    // UI-01 moved the full accounting to the diagnostics surface; the operator
+    // the UI redesign moved the full accounting to the diagnostics surface; the operator
     // panel keeps only the headline sentence. One function still feeds every
     // consumer that shows the breakdown (screen detail, diagnostics window,
     // export), so no two of them can tell two stories.

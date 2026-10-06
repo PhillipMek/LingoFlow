@@ -6,7 +6,7 @@
 // API and implements IAudioBackend; everything that decides *what is usable* lives
 // here, so it is unit-testable without a driver, without a device and without JUCE.
 //
-// Honesty rule (AGENTS.md 19): a field that the driver did not report stays empty
+// Honesty rule: a field that the driver did not report stays empty
 // or zero. Nothing here invents channel names, sample rates or latencies, and
 // formatted output always says where a value came from.
 

@@ -1,12 +1,12 @@
 #pragma once
 //
 // AudioRingBuffer - single-producer / single-consumer float ring, lock-free and
-// fully preallocated (SPEC "Audio Ring Buffer", AGENTS.md 5).
+// fully preallocated (spec "Audio Ring Buffer", the project rules).
 //
-// Shape of the product pipeline (SPEC "Audio Pipeline"):
+// Shape of the product pipeline (spec "Audio Pipeline"):
 //
-//   ASIO Input -> [gain, task 006] -> AudioRingBuffer -> translation worker/network
-//   translated audio -> AudioJitterBuffer -> [output gain, task 006] -> ASIO Output
+//   ASIO Input -> [input gain] -> AudioRingBuffer -> translation worker/network
+//   translated audio -> AudioJitterBuffer -> [output gain] -> ASIO Output
 //
 // The audio callback is always the producer of this buffer (input side) or the
 // consumer of the jitter buffer (output side). Both roles here are realtime-safe:

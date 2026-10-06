@@ -1,4 +1,4 @@
-// lingoflow_ndi_probe - NDI transport verification tool (task 016).
+// lingoflow_ndi_probe - NDI transport verification tool.
 //
 // It runs the SAME runtime-loading path and the SAME document builder as the
 // product, so what this tool shows on the network is what the app sends - the

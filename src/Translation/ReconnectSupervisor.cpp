@@ -52,8 +52,8 @@ ReconnectSupervisor::~ReconnectSupervisor()
 
 bool ReconnectSupervisor::isRetryable(TranslationErrorCategory category) noexcept
 {
-    // docs/openai-realtime-protocol.md section 9, decided by task 010 and
-    // refined by code review P2 (2026-10-05): a new session fixes transport
+    // docs/openai-realtime-protocol.md section 9, decided by the recovery design and
+    // refined by an earlier review: a new session fixes transport
     // deaths, a broken event stream, and everything the provider labelled
     // transient ("come back later" - 429 with its Retry-After, 503 overload).
     // It fixes nothing that was refused because of WHO the request comes from
@@ -137,7 +137,7 @@ bool ReconnectSupervisor::submitAudio(const float* samples, int frameCount, std:
         std::lock_guard lock(mutex_);
         if (attemptRunning_ || mode_ != Mode::live)
         {
-            // The gap policy (task 010, owner decision): audio arriving while
+            // The gap policy (owner decision): audio arriving while
             // there is no session is refused and counted, never buffered for a
             // replay that would push the translation behind the room. Contract
             // rule 4: refusal is an operating state, not a fault - the caller
@@ -199,7 +199,7 @@ bool ReconnectSupervisor::serverSessionExpiryRemainingMs(long long& remainingMsO
 {
     // The supervisor is the product's mounted ITranslationBackend; delegation
     // is what keeps the provider's own word visible one level up (tests, the
-    // task 017 export, and any future consumer see the truth, not a default).
+    // the diagnostics export, and any future consumer see the truth, not a default).
     return backend_ != nullptr && backend_->serverSessionExpiryRemainingMs(remainingMsOut);
 }
 

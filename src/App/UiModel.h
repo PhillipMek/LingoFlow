@@ -1,10 +1,10 @@
 #pragma once
 //
-// UiModel - the thin layer of task 014. It is everything the operator window
+// UiModel - the thin presentation layer. It is everything the operator window
 // knows, computed from the controller's public read API and nothing else: the
 // window paints these values and forwards commands through controller methods.
 // The UI never touches engine internals, devices, protocols or config text
-// (AGENTS.md 7, the task's FAIL criterion "UI owns backend/audio logic or
+// (the project rules, the task's FAIL criterion "UI owns backend/audio logic or
 // freezes"), and because this file is portable, every mapping the window
 // displays is testable without JUCE (tests/unit/TestUiModel.cpp).
 //
@@ -12,7 +12,7 @@
 // here on purpose: what a state word means, which options a selector offers
 // (the registry, the schema - never a UI-local list), and what "estimated
 // latency" honestly is: the pipeline's own buffer delay, computed from the
-// live geometry, with the translation part named as unmeasured until task 018.
+// live geometry, with the translation part named as unmeasured until the venue measurement.
 
 #include <cstdint>
 #include <string>
@@ -41,7 +41,7 @@ struct UiMeterView
     bool clipping = false;       ///< the engine's latched clip indicator, consumed by this build
 };
 
-/// One component row of the task 018 honest latency accounting (full contract at
+/// One component row of the honest latency accounting (full contract at
 /// `latencyAccounting` below the panel). The KIND is the point: a number's origin
 /// (what the driver answered, what the config says, what the arithmetic derives,
 /// what the live backlog computes, or nothing at all) is printed beside it and
@@ -65,8 +65,8 @@ struct OperatorPanel
     std::string ndiState;
     std::string audioBackendName;
     std::string detail;                ///< the freshest problem, or "ok"
-    std::string credentialLine;        ///< task 015: where the API key stands, in one sentence
-    std::string developerBadge;        ///< task 019: empty in production, unmistakable otherwise
+    std::string credentialLine;        ///< credential state: where the API key stands, in one sentence
+    std::string developerBadge;        ///< developer mode: empty in production, unmistakable otherwise
     bool faulted = false;              ///< the Start button must offer Retry (clearFault)
     bool canStart = false;
     bool canStop = false;
@@ -99,7 +99,7 @@ struct OperatorPanel
     int maxChannel = 128;              ///< same source as validate()'s bound
 
     // ------------------------------------------------- channel selections
-    // UI-01: channel is an INDEX - the main screen offers it as a discrete choice
+    // the UI redesign: channel is an INDEX - the main screen offers it as a discrete choice
     // list, never as a fader that could be parked between two channels. The
     // driver's own names drive the labels while a device is open; generic
     // "Channel N" numbering is used otherwise, and it says so (channelNote).
@@ -126,20 +126,20 @@ struct OperatorPanel
     UiMeterView outputMeter;
 
     // --------------------------------------------------------- live readouts
-    // UI-01 shrank this to the operator's four scannable facts; the full 018
+    // the UI redesign shrank this to the operator's four scannable facts; the full 018
     // accounting and every raw counter live on in DiagnosticsPanel below,
     // rendered by the Diagnostics window. Relocated, never deleted.
     std::string latencySummary;        ///< the honest one-sentence buffer estimate
     std::vector<std::pair<std::string, std::string>> health;
                                        ///< latency/jitter/underruns/reconnects, compact
 
-    std::string currentSubtitle;               ///< the open line from task 013
+    std::string currentSubtitle;               ///< the open line from the text pipeline
     std::vector<std::string> subtitleHistory;  ///< tail, oldest first
 
     std::string actionNote;                    ///< last updateSettings outcome, or empty
 };
 
-/// The engineering face of the same truth (UI-01 information architecture):
+/// The engineering face of the same truth (the UI redesign information architecture):
 /// everything the main screen stopped showing. Built from the same controller
 /// reads and the same formatting functions as the operator panel - the two
 /// surfaces cannot tell two stories, they only decide who has to look.
@@ -154,7 +154,7 @@ struct DiagnosticsPanel
     std::vector<LatencyRow> latency;
     std::vector<std::pair<std::string, std::string>> runtime;
 
-    /// UI-03 §15: the un-formatted truth for the expandable "raw details"
+    /// the UI redesign §15: the un-formatted truth for the expandable "raw details"
     /// area - the event ring (newest last, eviction counted) and the
     /// configuration as it stands. Lines, not pairs: this is the one place a
     /// diagnostics surface may be a log. Built from the same public reads,
@@ -168,11 +168,11 @@ inline constexpr std::size_t kSubtitleHistoryTail = 8;
 
 /// Log level names in the order Utils/Log defines them. The settings dialog's
 /// selector is built from here and from nowhere else, so the names on screen
-/// and the names validate() round-trips can never drift (task 015, same rule
+/// and the names validate() round-trips can never drift (same rule
 /// as every other list on this screen).
 std::vector<UiOption> logLevelChoices();
 
-/// The product's one buffer-delay arithmetic (task 017): live engine geometry
+/// The product's one buffer-delay arithmetic: live engine geometry
 /// first; before a device runs, the same arithmetic on the settings - what the
 /// operator is told is then explicitly about what Start *will* run, never a
 /// claim about sound that has not passed the pipeline. `source` names which
@@ -191,7 +191,7 @@ struct LatencyEstimate
 /// safe from the UI thread, pointless from anywhere else).
 LatencyEstimate estimateBufferDelay(const AudioEngine& engine, const AppConfig& settings);
 
-/// The whole accounting, in show order (input to audience), per task 018's
+/// The whole accounting, in show order (input to audience), per the established
 /// instruction: ASIO, network/server (one column honestly combined - this
 /// product cannot split them without a provider-side timestamp, which would be
 /// an invented field), output queue/jitter, and a total that adds up exactly the
@@ -223,12 +223,12 @@ std::vector<LatencyRow> latencyAccounting(const AudioEngine& engine,
 /// minutes ago as if it were now.
 OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::string& actionNote);
 
-/// The diagnostics surface's counterpart, from the same public reads (UI-01).
+/// The diagnostics surface's counterpart, from the same public reads.
 /// The windows never duplicate the row-building: this is where relocated
 /// engineering information lives now, and the Diagnostics window only paints it.
 DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller);
 
-/// The discrete channel series for the selector (UI-01): `driverNames` are the
+/// The discrete channel series for the selector: `driverNames` are the
 /// opened device's own labels - when present the list is exactly the channels
 /// this device exposes, "1 - name" per entry, no invented maximum. An empty
 /// `driverNames` means no device has been opened in this session, and the list

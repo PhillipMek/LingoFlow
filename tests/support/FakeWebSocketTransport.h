@@ -1,7 +1,7 @@
 #pragma once
 //
 // FakeWebSocketTransport - the scripted transport that lets the OpenAI backend
-// of task 009 be tested without a network (same role MockTranslationBackend
+// of the backend be tested without a network (same role MockTranslationBackend
 // plays for the contract: it lives in the test tree only).
 //
 // Model: a queue of scripted ReceiveEvents consumed in order by receive(); an

@@ -1,8 +1,8 @@
 #pragma once
 //
 // NdiDispatch - the NDI worker thread that keeps subtitle transport off the
-// threads that matter (AGENTS.md 6 lists "NDI thread"; AGENTS.md 12: "NDI
-// failure must not stop translation audio"; code review P1, 2026-10-05).
+// threads that matter (the project rules lists "NDI thread"; the project rules: "NDI
+// failure must not stop translation audio"; An earlier review, 2026-10-05).
 //
 // The chain that made it necessary: the OpenAI receiver thread is this
 // product's single consumer of BOTH translated audio and translated text.
@@ -15,7 +15,7 @@
 // down with it. INdiOutput always promised "non-blocking publish" and
 // "drop-on-pressure"; this adapter is the structure that makes those promises
 // true regardless of what the SDK decides to do. (TextPipeline later moved its
-// listener off the ingesting thread as well - code review P2, 2026-10-05, with
+// listener off the ingesting thread as well - An earlier review, 2026-10-05, with
 // its own dispatch worker - but the SDK-blocking argument never depended on
 // which caller thread arrives, only on this queue being in front of the SDK.)
 //

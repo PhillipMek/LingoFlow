@@ -43,7 +43,7 @@ std::vector<float> filled(int frames, float value)
     return std::vector<float>(static_cast<std::size_t>(frames), value);
 }
 
-/// Poll the observable until it is true. The point of task 012 is that capture
+/// Poll the observable until it is true. The point of the streaming design is that capture
 /// moves on its own worker thread, so "the frames arrived at the backend" is an
 /// event to wait for, not a step to perform. Timeouts fail the test loudly - a
 /// hang is exactly what these checks exist to catch.
@@ -61,7 +61,7 @@ bool waitsFor(Predicate&& ready, int timeoutMs = 4000)
 }
 
 /// One simulated device callback of constant audio. It does NOT touch the ring
-/// or the backend: from task 012 the streaming worker is the only thing that
+/// or the backend: since the pipeline mounted capture, the streaming worker is the only thing that
 /// drains the input ring, and the tests assert exactly that.
 struct Pump
 {
@@ -97,7 +97,7 @@ struct Pump
 };
 
 /// A controller running the Null audio device and a mock the test keeps a
-/// handle to, with playback latency removed. From task 012 the controller also
+/// handle to, with playback latency removed. Since the pipeline mounted capture the controller also
 /// runs the production streaming worker itself between session open and close.
 struct Rig
 {
@@ -116,12 +116,12 @@ struct Rig
         if (!controller.start())
             return false;
 
-        // The streaming worker is created by startSession(); this is task 012's
+        // The streaming worker is created by startSession(); this is the established
         // production shape, not a test scaffold: capture moves on its own thread.
         REQUIRE(controller.translationStreamer() != nullptr);
 
         controller.engine().setJitterBufferMs(0);   // the tests assert levels and routing,
-                                                    // not the pre-roll (proven in task 005)
+                                                    // not the pre-roll (proven earlier)
         return true;
     }
 };
@@ -170,7 +170,7 @@ TEST_CASE("End to end through the mock: what came in, translated, goes out",
 
     // The next callback plays what arrived: 0.4 in, -0.2 out. No other value
     // could come from this path - loopback is not attached, and the jitter
-    // buffer is the one source of output (task 005's safety rule).
+    // buffer is the one source of output (the safety rule).
     pump.play(engine);
 
     for (const float sample : pump.out)
@@ -218,7 +218,7 @@ TEST_CASE("End to end: a wrong-rate delivery is refused and counted, text goes o
     CHECK(std::all_of(pump.out.begin(), pump.out.end(), [](float s) { return s == 0.0f; }));
 
     // And the text channel reached the sink through the same broken delivery:
-    // SPEC "the audio callback and the text callback must be independent" means
+    // spec "the audio callback and the text callback must be independent" means
     // the failure of one must not silence the other.
     CHECK(snapshot.partialTextEvents == 1);
 
@@ -250,7 +250,7 @@ TEST_CASE("End to end: a fatal translation error leaves audio running and tells 
 
     CHECK(rig.controller.status().session == SessionState::faulted);
 
-    // The application is NOT faulted and the device is NOT closed: AGENTS.md 12
+    // The application is NOT faulted and the device is NOT closed: the project rules
     // says a translation failure must not take the audio path down.
     CHECK(rig.controller.state() == ApplicationState::running);
     CHECK(rig.controller.status().audio == audio::BackendState::running);
@@ -316,7 +316,7 @@ TEST_CASE("End to end: mock text reaches NDI and diagnostics through the control
     CHECK(snapshot.partialTextEvents == 2);
     CHECK(snapshot.finalTextEvents == 1);
 
-    // Task 013: those same three events crossed the typed pipeline - the two
+    // Design note: those same three events crossed the typed pipeline - the two
     // partials replaced each other as the open line, the final owned it and
     // put it in history exactly once. The UI-facing model and NDI agree because
     // they read the same emitted events, not the provider.
@@ -423,8 +423,8 @@ TEST_CASE("End to end: the session request carries settings, model hint and live
     CHECK(request.instructions == "translate the operator's words, keep names");
 
     // The hint travels as a string the operator or the manifest chose; the
-    // product itself does not invent identifiers (AGENTS.md 8 - which values are
-    // legal is task 008's documentation to establish).
+    // product itself does not invent identifiers (the project rules - which values are
+    // legal is the official documentation to establish).
     CHECK(request.model == "settings-provided-value");
 
     // The rates come from the live engine, not from a guess at settings.
@@ -515,7 +515,7 @@ TEST_CASE("End to end: restart brings a fresh session with the same wiring",
 TEST_CASE("End to end with the supervisor mounted: an outage costs a counted gap, not the show",
           "[translation][e2e][recovery][supervisor]")
 {
-    // Task 012's production shape: the controller talks to ReconnectSupervisor,
+    // the production shape: the controller talks to ReconnectSupervisor,
     // the supervisor owns the backend, and the streaming worker keeps draining
     // the capture through both. This is the wiring Main.cpp installs.
     QuietLog quiet;
@@ -547,7 +547,7 @@ TEST_CASE("End to end with the supervisor mounted: an outage costs a counted gap
 
     // Pull the line on the wrapped backend: the supervisor - not the
     // application - sees the outage first, and connection is the retryable
-    // category (task 010), so it closes, waits and replays the stored request.
+    // category, so it closes, waits and replays the stored request.
     backend.injectError(TranslationErrorCategory::connection, "outage injected by the test", true);
 
     REQUIRE(waitsFor([&] { return backend.sessionsOpened() >= 2; }));

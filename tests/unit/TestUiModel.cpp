@@ -40,7 +40,7 @@ std::string rowValue(const std::vector<std::pair<std::string, std::string>>& row
     return "<missing row>";
 }
 
-/// UI-01: the raw counters moved from the operator panel to the diagnostics
+/// the UI redesign: the raw counters moved from the operator panel to the diagnostics
 /// surface; tests address them through that section now.
 std::string counterValue(ApplicationController& controller, std::string_view label)
 {
@@ -137,7 +137,7 @@ TEST_CASE("UiModel: the stopped panel states facts, not promises", "[app][ui][mo
     CHECK(panel.selectedTarget >= 0);   // the default "ru" is in the list
     CHECK(panel.languagePairWarning.empty());
 
-    // P1 (2026-10-06): the main screen's source line states what the wire
+    // P1: the main screen's source line states what the wire
     // does - the provider auto-detects (docs section 5, R8) - and not what
     // the operator merely expects. The expectation stays in the Settings
     // lists above; the display line is the truth, pinned word for word so a
@@ -235,7 +235,7 @@ TEST_CASE("UiModel: live knobs are the engine's truth in both directions",
 
     // Out-of-window requests are clamped by the engine's own safety window
     // (GainStage, wider than the config validation window) and the panel shows
-    // the clamped fact, not the fantasy (AGENTS.md 19): no UI-side invention
+    // the clamped fact, not the fantasy: no UI-side invention
     // either. The UI slider bounds come from the config window; the floor the
     // engine may end up at is the GainStage one, and both are asserted here.
     controller.setGainsLive(500.0f, -500.0f);
@@ -275,7 +275,7 @@ TEST_CASE("UiModel: meters and counters read the running pipeline", "[app][ui][m
     CHECK(panel.inputMeter.peakDb > -20.0f);    // 0.5 peak = -6 dB post-gain
 
     // The output meter sees pure silence: nothing has been delivered to the
-    // jitter, and input audio has no route out (task 005's safety rule).
+    // jitter, and input audio has no route out (the safety rule).
     CHECK_FALSE(panel.outputMeter.signalPresent);
     CHECK(panel.outputMeter.peakDb <= -100.0f);
 
@@ -291,7 +291,7 @@ TEST_CASE("UiModel: meters and counters read the running pipeline", "[app][ui][m
     controller.stop();
 }
 
-TEST_CASE("UiModel: the subtitle fields are the task 013 model, not a copy of some API",
+TEST_CASE("UiModel: the subtitle fields are the text pipeline model, not a copy of some API",
           "[app][ui][model][text]")
 {
     QuietLog quiet;
@@ -379,9 +379,9 @@ TEST_CASE("UiModel: the credential line states the store, the absence and the re
 TEST_CASE("UiModel: the log-level list round-trips with its owner and the schema accepts every name",
           "[app][ui][model][logging]")
 {
-    // Single-source assertion (task 015): the dialog's combo and validate()
+    // Single-source assertion: the dialog's combo and validate()
     // read the same lists - a selector can never offer what the schema refuses,
-    // the same rule the language dropdowns have since task 011.
+    // the same rule the language dropdowns have since the registry landed.
     const auto choices = logLevelChoices();
     REQUIRE_FALSE(choices.empty());
 
@@ -432,7 +432,7 @@ TEST_CASE("UiModel: faulted is visible and the retry path is the operator's, not
     controller.stop();
 }
 
-TEST_CASE("UiModel UI-01: channel choices are discrete, named when the driver names them",
+TEST_CASE("UiModel: channel choices are discrete, named when the driver names them",
           "[app][ui][model][channels]")
 {
     // The pure builder first: names in -> exactly those channels, numbered
@@ -473,7 +473,7 @@ TEST_CASE("UiModel UI-01: channel choices are discrete, named when the driver na
           == "1");
 }
 
-TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to diagnostics",
+TEST_CASE("UiModel: the operator strip is four facts; the wall moved to diagnostics",
           "[app][ui][model][sections]")
 {
     QuietLog quiet;
@@ -505,14 +505,14 @@ TEST_CASE("UiModel UI-01: the operator strip is four facts; the wall moved to di
     CHECK(rowValue(diag.runtime, "application") == "running");
     CHECK_FALSE(rowValue(diag.runtime, "API key").empty());
 
-    // UI-02: the technical detail the operator screen gave up is here now -
+    // the UI redesign: the technical detail the operator screen gave up is here now -
     // the gain glide, and the full buffer-delay sentence.
     CHECK(rowValue(diag.audioHealth, "applied gain in / out").find("gliding") != std::string::npos);
     CHECK(rowValue(diag.runtime, "buffer delay detail").find("NOT included") != std::string::npos);
 
     controller.stop();
 }
-TEST_CASE("UiModel UI-03: raw details carry the truth and never a secret",
+TEST_CASE("UiModel: raw details carry the truth and never a secret",
           "[app][ui][model][diagnostics]")
 {
     QuietLog quiet;
@@ -563,7 +563,7 @@ TEST_CASE("UiModel UI-03: raw details carry the truth and never a secret",
 
     // Section 15's content: the event ring and the configuration, as lines.
     REQUIRE_FALSE(diag.rawDetails.empty());
-    // UI-03 ordering: configuration first, events last (the raw window shows
+    // the UI redesign ordering: configuration first, events last (the raw window shows
     // its tail, and the tail should be the newest events).
     CHECK(diag.rawDetails[0].find("configuration") != std::string::npos);
     const std::string lastLine = diag.rawDetails.back();

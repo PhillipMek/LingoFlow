@@ -27,7 +27,7 @@ constexpr int kWireChannels = 1;        ///< protocol section 7
 constexpr int kWirePort = 443;
 const char* kLogComponent = "network.openai";
 
-/// Stream clock for the subtitle settle policy (task 013): wall-clock
+/// Stream clock for the subtitle settle policy: wall-clock
 /// milliseconds off a monotonic source, never a calendar.
 long long steadyNowMs()
 {
@@ -55,7 +55,7 @@ long long wallNowMs()
 
 /// Protocol section 9 connection-level table: HTTP status before the upgrade
 /// maps to product categories; nothing provider-named crosses the sink seam.
-/// Finer than the first pass (code review P2, 2026-10-05): the status table
+/// Finer than the first pass: the status table
 /// already distinguished "come back later" (429/503) from "fix yourself"
 /// (401/403) - the categories now say so instead of flattening both into
 /// connection/refused, because the supervisor's policy IS that difference.
@@ -114,7 +114,7 @@ std::int16_t floatToInt16(float v)
 
 /// Type-guarded field access. nlohmann's typed getters throw on a type
 /// mismatch, and protocol parsing must never ride an exception path: a field
-/// of the wrong type is treated like the field being absent (AGENTS.md 12).
+/// of the wrong type is treated like the field being absent.
 std::string stringField(const json& j, const char* key)
 {
     if (j.contains(key) && j[key].is_string())
@@ -217,7 +217,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
         return false;
     }
 
-    // Capabilities (task 011): a pair outside the versioned manifest is refused
+    // Capabilities: a pair outside the versioned manifest is refused
     // offline, before a single byte goes to the network - the provider would
     // reject the target anyway (and the source is auto-detected, so a wrong
     // input declaration is a product error, not a retryable one). The manifest
@@ -250,7 +250,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
         return false;
     }
 
-    // Credentials come from the store only (contract + AGENTS.md 10). The value
+    // Credentials come from the store only (contract + the project rules). The value
     // is used to build the one auth header and never written anywhere else.
     const auto apiKey = secrets_.load(security::kOpenAiApiKey);
     if (!apiKey.has_value() || apiKey->empty())
@@ -270,7 +270,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
         queueCapacityFrames_ = static_cast<int>(cap < 1 ? 1 : (cap > 2'000'000'000LL ? 2'000'000'000LL : cap));
     }
 
-    // The cadence bounds (code review P2, 2026-10-06): the sender feeds the
+    // The cadence bounds: the sender feeds the
     // input resampler exactly chunkInputFrames_ at a time, and the receiver
     // never hands the output resampler more than one inbound audio delta -
     // kMaxAudioDeltaBytes of PCM16. configure() preallocates against these
@@ -324,7 +324,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     // composition root supplied a sendable value. A malformed configured
     // value drops the OPTIONAL header and its warning travels to the log -
     // an identifier the provider does not require never decides whether the
-    // show has a translation (AGENTS.md 12).
+    // show has a translation.
     std::vector<std::string> headers { "Authorization: Bearer " + *apiKey };
     if (!options_.safetyIdentifier.empty())
     {
@@ -435,11 +435,11 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     // Protocol section 12.1: this model has NO custom prompting. The field is
     // accepted (it stays in the contract for other backends) and IGNORED with a
-    // warning - faking instruction support is forbidden (AGENTS.md 19).
-    // Owner decision 2026-10-03 (task 012): this notice lives in the LOG only.
+    // warning - faking instruction support is forbidden.
+    // Owner decision 2026-10-03: this notice lives in the LOG only.
     // It is not a TranslationError: the session request was not refused, a
     // capability of the model simply does not include prompting - and
-    // rejectedRequest is the supervisor's TERMINAL category (task 010), so
+    // rejectedRequest is the supervisor's TERMINAL category, so
     // reporting an ordinary every-start fact as that error would mislabel the
     // operator's status line as a failure. The warning says the whole truth.
     if (!request_.instructions.empty())
@@ -476,7 +476,7 @@ bool OpenAIRealtimeBackend::submitAudio(const float* samples, int frameCount, st
     const std::lock_guard<std::mutex> lock (queueMutex_);
     if (queuedFrames_ + frameCount > queueCapacityFrames_)
     {
-        // Backpressure: refuse, never drop silently (AGENTS.md 19).
+        // Backpressure: refuse, never drop silently.
         error = "openai: input queue full (" + std::to_string(options_.maxQueuedInputMs)
               + " ms); block refused";
         return false;
@@ -556,7 +556,7 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     senderThread_ = std::thread {};
     receiverThread_ = std::thread {};
 
-    // Task 013: session close is the one text boundary the provider guarantees
+    // Design note: session close is the one text boundary the provider guarantees
     // (protocol section 6 - nothing else closes a line), so the open subtitle
     // line is flushed as a final while callbacks are still lawful: before this
     // function returns (rule 5) and before the session is announced closed,
@@ -914,7 +914,7 @@ void OpenAIRealtimeBackend::senderLoop()
                                                 + " chunks in one pass (scheduling stall)");
         }
 
-        // Subtitle settle policy (task 013): the sender owns the stream clock,
+        // Subtitle settle policy: the sender owns the stream clock,
         // so the line pause is judged here - once per wake-up, a cheap peek at
         // the assembled line under its own mutex. transcriptSettleMs documents
         // why the pause rule exists at all: the wire has no line boundary, so
@@ -1019,7 +1019,7 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
             return EventResult::keepGoing;
         }
 
-        // Payload budget (code review P1): a base64 string that cannot possibly
+        // Payload budget: a base64 string that cannot possibly
         // decode inside the audio budget is refused before decoding - the
         // decode itself must not be the allocation that hurts. The
         // authoritative size check runs on the decoded bytes.
@@ -1044,12 +1044,12 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
     if (type == "session.output_transcript.delta")
     {
         // Append-only fragments, verbatim (section 8: the fragments carry their
-        // own spacing; no unconditional space is ever inserted here). Task 013
+        // own spacing; no unconditional space is ever inserted here). The backend
         // put the assembly HERE on purpose: the sink's partial channel means
         // "the whole line as it currently reads" - the snapshot semantics the
         // TextPipeline and every downstream consumer rely on - and assembling
         // fragments into that snapshot is provider knowledge, which stops at
-        // this file (AGENTS.md 7).
+        // this file.
         if (!parsed.contains("delta") || !parsed["delta"].is_string())
         {
             reportError(TranslationErrorCategory::protocol,
@@ -1069,7 +1069,7 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
     if (type == "session.input_transcript.delta")
     {
         // Source-language transcript. The typed text pipeline exists now
-        // (task 013), but the sink's contract is one translated-text channel:
+        //, but the sink's contract is one translated-text channel:
         // a source lane would be a contract decision, not an accident of this
         // file. We never enable input transcription in session.update (section
         // 12.7: omit = not sent), so receiving one is unexpected: log it, do
@@ -1096,7 +1096,7 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
             errorCode = stringField(parsed["error"], "code");
         }
 
-        // Classification keeps its precedence (section 9 + code review P2):
+        // Classification keeps its precedence (section 9 + An earlier review):
         // a provider complaint about OUR audio is the audioFormat fact the
         // operator can act on; the documented transient codes rate-limiting
         // and overload classify before the coarse type, because "server_error"
@@ -1137,7 +1137,7 @@ void OpenAIRealtimeBackend::deliverAudioDelta(const std::vector<std::uint8_t>& p
     if (pcm16Bytes.empty())
         return;
 
-    // Authoritative payload bound (code review P1, Network/NetworkLimits.h):
+    // Authoritative payload bound (An earlier review, Network/NetworkLimits.h):
     // the decoded PCM16 must fit the audio budget no matter which path handed
     // it over. One oversized block is a section-7 shape anomaly - dropped,
     // reported non-fatal, session kept: ending the show because one event was
@@ -1163,7 +1163,7 @@ void OpenAIRealtimeBackend::deliverAudioDelta(const std::vector<std::uint8_t>& p
     std::vector<float> floats (static_cast<std::size_t>(wireFrames));
 
     // Explicit little-endian assembly (protocol docs section 7: raw PCM16,
-    // little-endian; code review P1, 2026-10-05). The byte vector is NOT
+    // little-endian; An earlier review, 2026-10-05). The byte vector is NOT
     // reinterpreted as int16_t*: a std::vector<std::uint8_t> makes no alignment
     // promise, and dereferencing a cast pointer whose alignment requirement is
     // unmet is undefined behavior no matter that an x64 host rarely notices.

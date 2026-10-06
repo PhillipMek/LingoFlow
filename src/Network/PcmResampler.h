@@ -1,7 +1,7 @@
 #pragma once
 //
 // PcmResampler - the fixed-ratio sample rate converter inside the translation
-// backend (task 009, docs/openai-realtime-protocol.md section 7: "a resampler is
+// backend (docs/openai-realtime-protocol.md section 7: "a resampler is
 // mandatory inside the backend, on the network/worker thread").
 //
 // Scope decided by the protocol and the device envelope, not by ambition: the
@@ -9,13 +9,13 @@
 // set 44.1/48/88.2/96 kHz (ConfigSchema's kSupportedSampleRates) plus 24. Two
 // converters live here, and everything else is refused loudly at configuration
 // time - an unsupported pair must become a rejected session, never a silent
-// guess (AGENTS.md 8, 19):
+// guess (the project rules, 19):
 //   * a halfband cascade for the power-of-two relations (ratios 1, 2, 4 in
 //     either direction, e.g. 48<->24, 96<->24, 88.2<->44.1), 15-tap, stop-band
 //     roughly -50 dB - far below anything audible in a speech monitoring path;
 //   * a rational polyphase stage for the pairs the wire actually meets:
 //     24000 <-> 44100 (147/80) and 24000 <-> 88200 (147/40), added by code
-//     review P1 (2026-10-05) because the config permitted those device rates
+//     review P1 because the config permitted those device rates
 //     while the backend refused them - the show would have died at Start
 //     Translation. The phase table is EXACT: the ratio reduces to integers
 //     (in/gcd, out/gcd), the coefficient pattern repeats with that period, so

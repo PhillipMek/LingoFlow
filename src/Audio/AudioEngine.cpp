@@ -19,7 +19,7 @@ constexpr int kInputRingSeconds = 2;
 /// overflows on the first scheduler hiccup.
 constexpr std::size_t kMinBlocksBuffered = 4;
 
-/// SPEC "Output Jitter Buffer" suggests 20-500 ms. Config validates 0-1000; the
+/// spec "Output Jitter Buffer" suggests 20-500 ms. Config validates 0-1000; the
 /// engine clamps to the SPEC window so a hand-edited file cannot ask for a second
 /// of stored delay without anyone noticing.
 constexpr int kJitterMinMs = 0;
@@ -34,7 +34,7 @@ std::size_t clampedJitterMs(int jitterBufferMs) noexcept
 /// treat output buffer content as undefined: touching only channel 0 leaves
 /// stale audio - or raw uninitialised memory - on the wire for every other
 /// channel, which is the opposite of what the defensive paths owe the audience
-/// (code review P0, 2026-10-05). `channels` is the geometry the backend
+///. `channels` is the geometry the backend
 /// advertised at configuration; 0 means nothing was ever configured - the only
 /// way to reach this from a real product flow is the teardown window between
 /// pipelineReady_ going false and the counts going 0, and the honest minimal
@@ -136,7 +136,7 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
 
         // Gain stages and their scratch are allocated here as well. They are the only
         // part of the pipeline that has to be allocated before the first callback and
-        // never inside it (AGENTS.md 5).
+        // never inside it.
         growGainStages(inputChannels, outputChannels);
     }
     catch (...)
@@ -531,7 +531,7 @@ void AudioEngine::processAudio(const float* const* input,
     // The contract (IAudioBackend.h): `input` holds inputChannels_ readable
     // pointers and `output` outputChannels_ writable ones, each to frameCount
     // frames. Any null among the promised channels - whole array or single
-    // entry - is the backend breaking it. Code review P2 (2026-10-05) made
+    // entry - is the backend breaking it. An earlier review made
     // the check per-channel on purpose: a driver that keeps calling back
     // while a selected channel's buffer vanishes used to look healthy,
     // because the old input loop quietly dropped the null from the mix and
@@ -582,7 +582,7 @@ void AudioEngine::processAudio(const float* const* input,
         {
             const float* source = input[channel]; // non-null: the pre-scan enforced it
 
-            // SPEC "Audio Ring Buffer" puts Input Gain between the callback and the ring,
+            // spec "Audio Ring Buffer" puts Input Gain between the callback and the ring,
             // so the translator is handed the level the operator chose rather than the
             // level the console produced. The device pointer is const, so the block goes
             // through the preallocated scratch; a block bigger than one chunk is done in
@@ -665,7 +665,7 @@ void AudioEngine::processAudio(const float* const* input,
                     diagnostics_->countUnderrun();
             }
 
-            // SPEC "Audio Pipeline" puts Output Gain after the jitter buffer and before
+            // spec "Audio Pipeline" puts Output Gain after the jitter buffer and before
             // the wire, so the operator can level-match translated audio against the
             // source without touching what the translator was fed. In place, because this
             // buffer belongs to the callback. Applied before the meter on purpose: the

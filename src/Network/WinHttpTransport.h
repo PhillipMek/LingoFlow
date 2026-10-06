@@ -1,8 +1,8 @@
 #pragma once
 //
 // WinHttpTransport - the production IWebSocketTransport on winhttp.dll
-// (task 009). Windows ships the WebSocket framing, TLS and HTTP upgrade, so
-// this product needs no third-party network dependency (AGENTS.md 15): the
+//. Windows ships the WebSocket framing, TLS and HTTP upgrade, so
+// this product needs no third-party network dependency: the
 // whole file is a thin, honest wrapper around the documented WinHTTP WebSocket
 // calls.
 //
@@ -62,7 +62,7 @@ private:
     // Receive-thread-only state (never touched by sendText).
     std::vector<char> recvBuffer_;
     std::string partialMessage_;
-    InboundMessageBudget inboundBudget_;   ///< bounds reassembly (code review P1)
+    InboundMessageBudget inboundBudget_;   ///< bounds reassembly
     std::atomic<bool> peerClosed_ { false };
 };
 

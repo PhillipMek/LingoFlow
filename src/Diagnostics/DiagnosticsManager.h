@@ -1,7 +1,7 @@
 #pragma once
 //
-// DiagnosticsManager - counters and state snapshots for the status UI (task 014)
-// and the diagnostics exporter (task 017).
+// DiagnosticsManager - counters and state snapshots for the status UI
+// and the diagnostics exporter.
 //
 // Design rules:
 //   * The audio thread may only call count*() and the noexcept note*() methods:
@@ -9,7 +9,7 @@
 //   * Anything that allocates (strings, snapshots with text) is documented as
 //     non-realtime and guarded by a mutex. It must never be called from the
 //     audio callback.
-//   * No secrets in here (AGENTS.md 10): an API key must never reach any field
+//   * No secrets in here: an API key must never reach any field
 //     of this class or the exported snapshot.
 
 #include <atomic>
@@ -44,7 +44,7 @@ public:
     void countReconnect() noexcept { reconnects_.fetch_add(1, std::memory_order_relaxed); }
     void countNdiError() noexcept { ndiErrors_.fetch_add(1, std::memory_order_relaxed); }
 
-    /// Translated audio (task 007). Three numbers because the operator
+    /// Translated audio. Three numbers because the operator
     /// distinguishes three questions: did translation deliver, did we refuse
     /// what it delivered (wrong rate, bad block), and did our own buffer drop
     /// what we accepted because playback could not keep up.
@@ -63,7 +63,7 @@ public:
         translatedAudioDroppedFrames_.fetch_add(frames, std::memory_order_relaxed);
     }
 
-    /// Capture throughput (task 012). Two numbers because they answer two
+    /// Capture throughput. Two numbers because they answer two
     /// different questions: did the translator get fed, and how much live speech
     /// did the gap policy drop while the session was reconnecting.
     void countTranslationSubmittedFrames(std::uint64_t frames) noexcept
@@ -76,7 +76,7 @@ public:
         translationGapFrames_.fetch_add(frames, std::memory_order_relaxed);
     }
 
-    /// Translation failures are counted, never swallowed (AGENTS.md 12); fatal
+    /// Translation failures are counted, never swallowed; fatal
     /// ones are counted separately because they end a session.
     void countTranslationError(bool fatal) noexcept
     {
@@ -101,7 +101,7 @@ public:
     void noteAudioBackendStopped();
 
     /// Non-realtime (allocates): last human-readable error per subsystem, and -
-    /// since task 017 - one entry in the event ring below. Errors are the events
+    /// since the reconnect design - one entry in the event ring below. Errors are the events
     /// an operator most needs replayed, so the two roles share one call site.
     void noteError(std::string_view subsystem, std::string_view message);
 

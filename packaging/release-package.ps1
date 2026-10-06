@@ -1,12 +1,12 @@
 param(
-    [string]$BuildDir = 'D:\work\LingoFlow\build',
-    [string]$OutDir   = 'D:\work\LingoFlow\out\release',
+    [string]$BuildDir = (Join-Path $PSScriptRoot '..\build-release'),
+    [string]$OutDir   = (Join-Path $PSScriptRoot '..\out\release'),
     [string]$Version  = '0.1.0',
     [string]$Dumpbin  = ''
 )
 $ErrorActionPreference = 'Stop'
 
-# Task 026 - build the shippable release folder, and verify the one thing that
+# Design note - build the shippable release folder, and verify the one thing that
 # makes it shippable: the executable imports SYSTEM dlls only. If a developer
 # dependency ever comes back (dynamic CRT, a linked import library, anything
 # that is not on a stock Windows), this script fails before the package exists.
@@ -42,7 +42,7 @@ if ($deps.Count -gt 0) {
     Write-Output ("verified imports (all system): " + ($deps -join ' '))
 }
 
-# the icon the shell uses must be inside the binary (task 021-era asset chain)
+# the icon the shell uses must be inside the binary (the app-icon asset chain)
 Set-Content -Path (Join-Path $package 'VERSION.txt') -Value $Version -Encoding Ascii
 
 Write-Output "PACKAGE: $package"

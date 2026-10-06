@@ -1,7 +1,7 @@
 #pragma once
 //
 // UiWidgets - the small shared vocabulary of the three LingoFlow windows
-// (UI-01 information architecture). Fonts, section captions and the one
+// (the UI redesign information architecture). Fonts, section captions and the one
 // metric-list renderer the Diagnostics surface uses. Widget helpers only:
 // nothing here knows the application, the engine or the config - every value
 // that reaches these helpers was built by App/UiModel, which is where the
@@ -43,7 +43,7 @@ inline juce::Label& caption(juce::Label& label, const juce::String& text,
 }
 
 /// A section header: brighter and larger than a field caption - the hierarchy
-/// marker UI-01 introduced (SYSTEM STATUS / AUDIO / TRANSLATION / LIVE HEALTH).
+/// marker the UI redesign introduced (SYSTEM STATUS / AUDIO / TRANSLATION / LIVE HEALTH).
 inline juce::Label& sectionHeader(juce::Label& label, const juce::String& text,
                                   juce::Component& parent)
 {

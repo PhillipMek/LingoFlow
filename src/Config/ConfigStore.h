@@ -2,7 +2,7 @@
 //
 // ConfigStore - reads and writes config.json safely.
 //
-// Guarantees (SPEC "Configuration", AGENTS.md 11):
+// Guarantees (spec "Configuration", the project rules):
 //   * loading never throws and never deletes user data: an unusable file is
 //     quarantined next to the original, the application continues with defaults or
 //     with the last known good backup;

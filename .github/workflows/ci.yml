@@ -1,6 +1,6 @@
 name: CI
 
-# LingoFlow CI (task: production-grade GitHub Actions CI, AGENTS.md 13).
+# LingoFlow CI (task: production-grade GitHub Actions CI, the project rules).
 #
 # What this pipeline is:
 #   Debug + Release builds, the FULL registered ctest suite (Catch2 unit and
@@ -141,7 +141,7 @@ jobs:
       # ------------------------------------------------------- smoke modes
       # Semantics (src/App/Main.cpp header - unchanged by this workflow):
       #   --dev --smoke  -> 0 on any machine: the tone+mock chain needs no
-      #                     device, no key, no network (AGENTS.md 13/15).
+      #                     device, no key, no network (the project rules).
       #   --smoke        -> 0 = subsystems started; 2 = a subsystem refused to
       #                     start (on CI runners: no ASIO device exists, so 2
       #                     is the DOCUMENTED expected refusal, not a hidden

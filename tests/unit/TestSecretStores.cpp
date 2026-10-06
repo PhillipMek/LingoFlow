@@ -138,7 +138,7 @@ TEST_CASE("ChainedSecretStore: writes the primary, reads primary-first, never re
         CHECK(id.find("fallback-value") == std::string::npos);   // names, never values
 }
 
-TEST_CASE("ChainedSecretStore: secretLocation tells secure from convenient (UI-03)",
+TEST_CASE("ChainedSecretStore: secretLocation tells secure from convenient",
           "[security][chain]")
 {
     MapStore primary("Windows Credential Manager");
@@ -235,7 +235,7 @@ TEST_CASE("WindowsCredentialStore: the app's credential names do not collide wit
 /// This case has two lives. Inside the normal suite it is a self-contained
 /// write+read+delete. The next case filters it by name into a SECOND process -
 /// which turns "the store is not this process's memory" from an OS promise
-/// into a measured fact, the strongest offline evidence for task 015's "survives
+/// into a measured fact, the strongest offline evidence for the established "survives
 /// restart". (The actual reboot on the venue machine stays the human
 /// checkpoint: that is the REQUIRED one of this task.)
 TEST_CASE("Windows credential store: child process writes the marker credential",
@@ -348,7 +348,7 @@ TEST_CASE("ApplicationController: the secret travels field -> store and appears 
     CHECK(note.find(canary) == std::string::npos);                           // the note is clean
 
     // Settings cannot see it: the config object and its serialized form are both
-    // untouched by anything credential-shaped (AGENTS.md 10, FAIL criterion).
+    // untouched by anything credential-shaped (the project rules, FAIL criterion).
     const auto cfg = controller.config().current();
     CHECK(config::toJsonText(cfg).find(canary) == std::string::npos);
     CHECK(cfg.translation.instructions.find(canary) == std::string::npos);

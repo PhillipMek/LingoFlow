@@ -58,7 +58,7 @@ add_executable(lingoflow_tests
     integration/TestFaultInjection.cpp
     integration/TestTranslationEndToEnd.cpp)
 
-# Task 009: the OpenAI backend exists only where its transport (winhttp) exists.
+# Design note: the OpenAI backend exists only where its transport (winhttp) exists.
 # Its tests also need the nlohmann-free public surface of the Network target and
 # the scripted transport fake.
 if(WIN32)
@@ -73,7 +73,7 @@ if(WIN32)
 endif()
 
 # The test tree is its own include root: tests include "support/..." by path,
-# and the mock deliberately lives here, not in the product core (task 007).
+# and the mock deliberately lives here, not in the product core.
 target_include_directories(lingoflow_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 target_link_libraries(lingoflow_tests
@@ -85,7 +85,7 @@ if(WIN32)
     target_link_libraries(lingoflow_tests PRIVATE lingoflow_network)
 endif()
 
-# Task 016: the real NDI output is tested against whatever runtime the build
+# Design note: the real NDI output is tested against whatever runtime the build
 # machine provides - the same dynamic-load path the product takes. With no NDI
 # runtime installed the test asserts the clear "unavailable" answer instead of
 # quietly skipping: a missing check is a known state, not a hidden one.
@@ -105,7 +105,7 @@ include(CTest)
 include(Catch)
 catch_discover_tests(lingoflow_tests)
 
-# --- realtime allocation gate (task 005) ---------------------------------------
+# --- realtime allocation gate ---------------------------------------
 # A separate executable, because it replaces global operator new to count heap
 # allocations. Isolated so no other suite's behaviour changes.
 add_executable(lingoflow_realtime_tests
@@ -142,7 +142,7 @@ add_test(NAME architecture_boundary_audit_selftest
 set_property(TEST architecture_boundary_audit architecture_boundary_audit_selftest
              PROPERTY LABELS architecture)
 
-# --- realtime safety gates (task 005) -------------------------------------------
+# --- realtime safety gates -------------------------------------------
 # 1) scan the realtime functions of the real source tree for forbidden operations;
 # 2) prove that gate can still fail by injecting each forbidden class into a copy.
 add_test(NAME realtime_safety_audit
@@ -160,7 +160,7 @@ add_test(NAME realtime_safety_audit_selftest
 set_property(TEST realtime_safety_audit realtime_safety_audit_selftest
              PROPERTY LABELS realtime)
 
-# --- ASIO discovery (task 004) -------------------------------------------------
+# --- ASIO discovery -------------------------------------------------
 # The probe tool exercises the real JUCE ASIO path. --verify compares the devices JUCE
 # enumerates with the HKLM\SOFTWARE\ASIO registrations, without loading any driver, so
 # it is safe in an automated run. Opening a device is NOT part of it: on a machine with

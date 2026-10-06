@@ -312,7 +312,7 @@ TEST_CASE("ReconnectSupervisor: the service Retry-After hint is honoured",
     CHECK(supervisor->stats().attempts == 1); // and one wait was enough
 }
 
-TEST_CASE("ReconnectSupervisor: protocol-fatal is retryable (task 010 decision)",
+TEST_CASE("ReconnectSupervisor: protocol-fatal is retryable (an earlier contract decision)",
           "[translation][reconnect][faults]")
 {
     RecordingSink sink;
@@ -469,7 +469,7 @@ TEST_CASE("ReconnectSupervisor: sessions reopen proactively before the provider 
 TEST_CASE("ReconnectSupervisor: a server-announced expiry reopens even with the policy age off",
           "[translation][reconnect][expiry]")
 {
-    // Code review P1 (2026-10-05): sessionMaxAgeMs is the operator's prediction;
+    // An earlier review: sessionMaxAgeMs is the operator's prediction;
     // expires_at is the provider's own word. With the prediction switched off
     // entirely (maxAge 0), the announcement alone must still drive the
     // controlled reopen.
@@ -617,8 +617,8 @@ TEST_CASE("ReconnectSupervisor: audio keeps flowing after a recovery", "[transla
 TEST_CASE("ReconnectSupervisor: isRetryable matches the documented policy",
           "[translation][reconnect]")
 {
-    // The task 010 decision (docs section 9), refined by code review P2
-    // (2026-10-05): transport deaths, broken event streams and everything the
+    // The an earlier contract decision (docs section 9), refined by an earlier review
+    //: transport deaths, broken event streams and everything the
     // provider itself labels transient ("come back later": rate limits,
     // overload) are fixed - or at least retried honestly - by a new session.
     // Refusals of WHO asks (authentication), of WHAT the request IS

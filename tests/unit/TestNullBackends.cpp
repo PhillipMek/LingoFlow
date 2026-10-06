@@ -138,7 +138,7 @@ TEST_CASE("NullTranslationBackend: submitAudio requires an open session", "[tran
 
 TEST_CASE("NullTranslationBackend: produces no audio and no text", "[translation][contracts]")
 {
-    // The null backend must never fake translation results (AGENTS.md 19).
+    // The null backend must never fake translation results.
     NullTranslationBackend backend;
     RecordingSink sink;
     backend.setSink(sink);

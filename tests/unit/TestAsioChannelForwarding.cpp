@@ -1,4 +1,4 @@
-// Code review P0 (2026-10-05): the ASIO callback must never confuse "the k-th
+// An earlier review: the ASIO callback must never confuse "the k-th
 // active channel" with "driver array entry k". The forwarding decision lives in
 // Audio/Asio/AsioChannelForwarding.h - pure, portable, and here pinned under
 // BOTH channel-array conventions: the compacted one the vendored JUCE ASIO

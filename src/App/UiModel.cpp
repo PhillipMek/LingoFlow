@@ -38,9 +38,9 @@ std::string formatCount(std::uint64_t value)
 }
 
 /// The one sentence about the pipeline's own delay, from the product's single
-/// arithmetic (task 017) - and explicitly only that: translation latency is a
-/// measured property of the rig (task 018), and inventing a number for it here
-/// would be the AGENTS.md 19 kind of lie. UI-02 moved this full sentence off
+/// arithmetic - and explicitly only that: translation latency is a
+/// measured property of the rig, and inventing a number for it here
+/// would be the project rules kind of lie. the UI redesign moved this full sentence off
 /// the operator screen (which shows the short health line) onto the Diagnostics
 /// surface; both builders call this one function, so the wording cannot drift.
 std::string latencySummaryText(const AudioEngine& engine, const AppConfig& cfg)
@@ -52,15 +52,15 @@ std::string latencySummaryText(const AudioEngine& engine, const AppConfig& cfg)
 
     return std::format(
         "Pipeline buffer ~{} ms ({} in + {} out + {} pre-roll, {}); translation latency "
-        "is NOT included (measured in task 018)",
+        "is NOT included (measured earlier)",
         latency.totalMs, latency.blockMs, latency.blockMs,
         latency.totalMs - latency.blockMs * 2, latency.source);
 }
 
-/// The one credential sentence every surface shows (UI-03 section 5): "stored
+/// The one credential sentence every surface shows (the UI redesign, section 5): "stored
 /// securely" belongs only to the writable store; a key the environment variable
 /// alone provides is named as the development state it is, with the remedy; and
-/// absence keeps its remedy sentence (task 015's PASS criterion). Names of
+/// absence keeps its remedy sentence (acceptance criterion). Names of
 /// stores, never values of secrets.
 std::string credentialStatusLine(ApplicationController& controller)
 {
@@ -118,7 +118,7 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
                     || status.application == ApplicationState::faulted;
 
 
-    // Task 019. The badge is the mounted plan, extended with the worker's real
+    // Developer mode. The badge is the mounted plan, extended with the worker's real
     // state: a banner that promised "loopback on" while the worker failed to
     // start would sell a developer fiction - the opposite of what this banner
     // exists to prevent. Production: the plan's badge is empty, so is this.
@@ -207,7 +207,7 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     (void)channelMin;   // one-based is structural; the UI clamps at the bounds validate uses
 
     // --------------------------------------------------------- channel choices
-    // Discrete by nature (UI-01): the opened device's own names if there are
+    // Discrete by nature: the opened device's own names if there are
     // any, generic numbering until a device has been opened once. The ghost
     // rule repeats the device list's honesty: a configured index the current
     // series does not cover stays visible and labelled, never silently
@@ -253,20 +253,20 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     // ------------------------------------------------------------- readouts
     panel.latencySummary = latencySummaryText(engine, cfg);
 
-    // UI-03 В§5: the same three-state sentence the Settings status line gives -
+    // the UI redesign, section 5: the same three-state sentence the Settings status line gives -
     // one function, so the main screen and the dialog can never disagree about
     // where the key stands.
     panel.credentialLine = credentialStatusLine(controller);
 
     const auto diag = controller.diagnostics().snapshot();
 
-    // UI-01: the operator's live strip carries four scannable facts. The full
+    // the UI redesign: the operator's live strip carries four scannable facts. The full
     // 018 accounting and the raw counters did not disappear - they moved to
     // buildDiagnosticsPanel(), and both surfaces read the same functions, so
     // the screen and the Diagnostics window cannot tell two stories. Every
     // value keeps the unit and the origin its builder documented; "estimated"
     // is spelled out because an unlabeled number invites being read as a
-    // measurement (AGENTS.md 19).
+    // measurement.
     {
         const LatencyEstimate buffers = estimateBufferDelay(engine, cfg);
         panel.health = {
@@ -295,7 +295,7 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
 
 // --------------------------------------------------------------- diagnostics face
 //
-// UI-01: the same reads the operator panel uses, sectioned for the engineering
+// the UI redesign: the same reads the operator panel uses, sectioned for the engineering
 // surface. Row text is kept byte-for-byte where an older surface had a row (the
 // export and the tests recognize them); the sections only decide where a human
 // sees them. Nothing here computes a new number - every value already existed
@@ -335,7 +335,7 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
                                          ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
                                                / static_cast<double>(engine.sampleRate())
                                          : 0.0) },
-        // UI-02 Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В§6: the gain-glide detail left the operator screen for here -
+        // the UI redesign Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В§6: the gain-glide detail left the operator screen for here -
         // it is real telemetry (the engine's applied values), just not a thing
         // a live room needs in its face.
         { "applied gain in / out", std::format("{:+.1f} / {:+.1f} dB (gliding)",
@@ -361,7 +361,7 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
     panel.subtitles = {
         { "NDI state", std::string(ndi::nameOf(status.ndi)) },
         { "stream name", cfg.ndi.streamName.empty() ? "(not set)" : cfg.ndi.streamName },
-        // UI-03 section 12: when NDI fails the operator must see at a glance that
+        // the UI redesign, section 12: when NDI fails the operator must see at a glance that
         // audio was not dragged down with it - the audio state therefore lives
         // inside this card, from the same status struct.
         { "audio (independent path)", std::string(audio::nameOf(status.audio)) },
@@ -389,10 +389,10 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
         { "secret store", controller.secretStoreName() },
         { "developer plan", plan.badge.empty() ? std::string("production") : plan.badge },
         { "status detail", status.detail.empty() ? "ok" : status.detail },
-        // UI-02: the full buffer-delay sentence lives here now; the operator
+        // the UI redesign: the full buffer-delay sentence lives here now; the operator
         // screen shows only its short health line. Same function, same words.
         { "buffer delay detail", latencySummaryText(engine, cfg) },
-        // UI-03 section 14: named, not invented. This application measures
+        // the UI redesign, section 14: named, not invented. This application measures
         // none of these; saying "not measured" is the honest row, and the
         // task's rule against cosmetic polling metrics is honoured by the
         // absence of any new sampler.
@@ -401,7 +401,7 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
     };
 
     // ------------------------------------------------------------- raw details
-    // UI-03 section 15: the event ring (task 017's, verbatim) and the
+    // the UI redesign, section 15: the event ring (the established, verbatim) and the
     // configuration as it stands - the material a support reading needs when
     // the structured rows say "something happened" but not what. Newest last;
     // eviction said out loud; identifiers only, never secret values (the
@@ -627,7 +627,7 @@ std::vector<LatencyRow> latencyAccounting(const AudioEngine& engine,
     // separately, not here); everything that came back - accepted, rejected or
     // dropped - has left the path. This is a computed backlog, not a split of
     // wire time from server time: that split would need a provider-side
-    // timestamp this API does not offer, and inventing one is AGENTS.md 19.
+    // timestamp this API does not offer, and inventing one is the project rules.
     const std::uint64_t returned = diag.translatedAudioFrames + diag.rejectedAudioFrames
                                    + diag.translatedAudioDroppedFrames;
 

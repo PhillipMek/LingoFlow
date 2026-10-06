@@ -1,20 +1,20 @@
 #pragma once
 //
 // AudioLoopback - a worker thread that feeds the output jitter buffer straight from
-// the input rings (SPEC "Audio Ring Buffer" + "Output Jitter Buffer", task 005).
+// the input rings (spec "Audio Ring Buffer" + "Output Jitter Buffer").
 //
 // It exists for two reasons:
 //
-//   1. It exercises exactly the lock-free path that task 012 will use with OpenAI
+//   1. It exercises exactly the lock-free path that production will use with OpenAI
 //      audio in place of microphone audio: producer = ASIO callback, consumer = this
 //      thread, producer again = this thread, consumer again = ASIO callback. If the
 //      pipeline works through loopback, the transport is the only thing left to add.
 //   2. It gives a SoundGrid machine a way to prove the physical path
 //      (console -> ASIO in -> engine -> ASIO out -> monitor) before any translation
-//      exists. That is the task 005 human check.
+//      exists. That is the venue human check.
 //
 // Loopback is never on by default and never implicit: routing microphone audio to the
-// audience is a deliberate operator action (developer mode, task 019, will expose it
+// audience is a deliberate operator action (developer mode will expose it
 // in the UI). An underrun in loopback still plays silence - this thread only writes
 // what it actually read from the rings.
 //

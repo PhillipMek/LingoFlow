@@ -1,7 +1,7 @@
 #pragma once
 //
-// DiagnosticsWindow - the dedicated engineering surface UI-01 carved out of the
-// main screen, structured by UI-03: five cards (Audio health, Translation
+// DiagnosticsWindow - the dedicated engineering surface the UI redesign carved out of the
+// main screen, structured by the UI redesign: five cards (Audio health, Translation
 // health, Subtitles/NDI, Latency, Runtime) plus an expandable Raw details area,
 // drawn as aligned label/value tables - not a wall of monospace text. Monospace
 // survives in exactly one place: the raw event list, which IS a log.

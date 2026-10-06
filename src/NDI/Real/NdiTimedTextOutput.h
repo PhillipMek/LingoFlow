@@ -1,6 +1,6 @@
 #pragma once
 //
-// NdiTimedTextOutput - the production INdiOutput (task 016, SPEC 38 Mode A):
+// NdiTimedTextOutput - the production INdiOutput (SPEC 38 Mode A):
 // subtitle snapshots ride NDI metadata frames as well-formed TTML1 documents
 // (the shape and the format choice are researched, not invented - see
 // docs/ndi-protocol.md and Ndi/NdiTimedText.h).
@@ -13,7 +13,7 @@
    //   * a consumer connected    -> send_get_no_connections polled at each send,
 //   * how many frames went out -> publishedFrames().
 // There is no "the receiver displayed it" callback in this API, and pretending
-// otherwise would be the AGENTS.md 19 kind of lie. The venue checkpoint is the
+// otherwise would be the project rules kind of lie. The venue checkpoint is the
 // place that claim actually gets checked, by eye, on a real receiver.
 //
 // Error handling within the honest surface: metadata delivery cannot fail

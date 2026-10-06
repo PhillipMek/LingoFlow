@@ -1,7 +1,7 @@
 #pragma once
 //
-// SettingsWindow - the configuration dialog, sectioned by UI-01 and given its
-// final shape by UI-03: six tabs (Audio, Translation, Subtitles / NDI,
+// SettingsWindow - the configuration dialog, sectioned by the UI redesign and given its
+// final shape by the UI redesign: six tabs (Audio, Translation, Subtitles / NDI,
 // Credentials, Diagnostics, Advanced), one Apply button, one note line. The
 // tab bar is a plain juce::TabbedComponent - the natural navigation the task
 // asks for, not a framework.
@@ -16,21 +16,21 @@
 // "Apply settings" - one atomic commit per click, so a half-typed instruction
 // cannot land in the file, and a refused commit keeps the operator's draft on
 // screen with the schema's reason in the note (nothing was applied -
-// ConfigManager guarantees that, task 003). The Audio tab's device, channel
+// ConfigManager guarantees that). The Audio tab's device, channel
 // and gain fields are the same configuration the operator screen edits live;
 // both routes go through the one funnel and the one config object, so there
 // is no second state to drift - the last Apply simply wins, as it must.
 //
-// Credential rules visible right here (AGENTS.md 10, task 015 PASS criteria,
-// UI-03 §5 wording): the key field masks its echo, a successful store clears
+// Credential rules visible right here (the project rules, the credential PASS criteria,
+// the UI redesign §5 wording): the key field masks its echo, a successful store clears
 // the field (the value must not sit on screen), and the status line names
 // where the key actually lives - "stored securely in <writable store>" only
 // when the writable store holds it, the development-environment sentence
 // otherwise. No label ever shows the value.
 //
-// Advanced (UI-03 §7) carries what an operator never needs: developer/test
+// Advanced (the UI redesign §7) carries what an operator never needs: developer/test
 // mode with its simulated-source controls, and the instructions field the
-// current provider ignores (labelled as such, read-only - the code review P1
+// current provider ignores (labelled as such, read-only - the An earlier review
 // decision stands). The loopback toggle's danger is spelled out in red the
 // moment it is checked.
 
@@ -130,13 +130,13 @@ private:
     juce::TextButton exportDiagnosticsButton_ { "Export diagnostics" };
 
     // ---------------------------------------------------------------- advanced
-    // Instructions: read-only (code review P1) and parked here, not in
-    // Translation (UI-03 §3): the current model ignores it; the label and the
+    // Instructions: read-only and parked here, not in
+    // Translation (the UI redesign §3): the current model ignores it; the label and the
     // hint say exactly that, and the value stays visible for a future model.
     juce::Label instructionsCaption_, instructionsHintLabel_;
     juce::TextEditor instructionsEditor_;
 
-    // Developer / test mode (task 019): inert unless enabled - the plan's job,
+    // Developer / test mode: inert unless enabled - the plan's job,
     // not the widgets'. The draft carries what is on screen; the hint states
     // when edits count.
     juce::Label devSourceCaption_, devWavInCaption_, devWavOutCaption_,

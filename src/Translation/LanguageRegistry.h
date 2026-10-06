@@ -1,8 +1,8 @@
 #pragma once
 //
-// LanguageRegistry - the capability-driven language configuration (task 011).
+// LanguageRegistry - the capability-driven language configuration.
 //
-// AGENTS.md 9 requires these three types and forbids hardcoded language lists
+// the project rules requires these three types and forbids hardcoded language lists
 // scattered through the product. This file is that list's only home: the
 // controller's start, the backend's open and (from 014) the UI dropdowns all
 // read the SAME registry. When the provider cannot tell us its capabilities
@@ -26,7 +26,7 @@
 //     expects to hear; nothing here depends on the service accepting them as
 //     input parameters.
 //
-// Boundaries (AGENTS.md 7): this is protocol-free data - no event names, no
+// Boundaries: this is protocol-free data - no event names, no
 // session fields. Config may not include it (module boundary: shape validation
 // of a stored tag string vs. supportability of a pair are different questions;
 // the pair gate lives where sessions are opened: App and Network).
@@ -40,9 +40,9 @@ namespace translation {
 
 /// One language as the product knows it. `code` is the identifier that flows
 /// into SessionRequest and (for targets only) the provider session; names are
-/// for humans - the UI (task 014) renders these, never its own list. Display
+/// for humans - the UI renders these, never its own list. Display
 /// metadata can grow here when 014 needs it (native names); it is not invented
-/// ahead of a need (AGENTS.md 16).
+/// ahead of a need.
 struct LanguageDefinition
 {
     std::string code;       ///< ISO 639-1 (or -2 where -1 has none), lowercase
@@ -50,7 +50,7 @@ struct LanguageDefinition
 };
 
 /// The capability envelope itself: which languages may come in, which may go
-/// out, and which edition of the truth this is. Versioned (AGENTS.md 9/11):
+/// out, and which edition of the truth this is. Versioned (the project rules):
 /// a manifest without provenance is a rumor.
 struct TranslationCapabilities
 {
@@ -61,7 +61,7 @@ struct TranslationCapabilities
 };
 
 /// Outcome of checking one (input -> output) pair. `detail` is a complete
-/// operator-readable sentence explaining a refusal (AGENTS.md 19: no swallowed
+/// operator-readable sentence explaining a refusal (the project rules: no swallowed
 /// reasons); it contains no provider vocabulary, only product terms.
 struct PairCheck
 {

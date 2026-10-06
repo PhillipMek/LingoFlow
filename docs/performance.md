@@ -1,4 +1,4 @@
-# Performance and Profiling (task 025)
+# Performance and Profiling
 
 Date: 2026-10-06. Machine: Intel Core i7-8700 @ 3.20 GHz, 16 GB RAM, Windows 11,
 Release build of the app and of the test binary unless stated otherwise (Debug
@@ -71,7 +71,7 @@ run); the audio callback's own share is the microseconds in section 1.
 
 **Boundary, stated instead of faked:** this is the developer chain on this machine.
 Real SoundGrid driver behaviour under a real 8 h show, real-provider network cost,
-and the venue's own background load are exactly what task 024's REQUIRED venue
+and the venue's own background load are exactly what the long-run venue
 checkpoint exists to measure - the protocol there is: run the real chain, export
 diagnostics at show start and end, compare these same seven rows (blocks/late,
 submitted/gap, underruns, reconnects, RAM). No number here is claimed for hardware
@@ -90,5 +90,5 @@ that was not present.
   "unsafe callback budget or regression" becomes a build failure, not a venue
   surprise.
 
-Commands: see AGENT_STATE entry 025 (`ctest -C Debug/-C Release`, `[perf] -s`,
+Commands: see docs/CI.md (`ctest -C Debug/-C Release`, `[perf] -s`,
 perf sampler script retained in the temp tree).

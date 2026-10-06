@@ -9,7 +9,7 @@
 namespace liveai {
 namespace {
 
-// The dialog palette matches the operator window (UI-02 Р’В§12): state carries
+// The dialog palette matches the operator window (the UI redesign Р’В§12): state carries
 // colour, everything else stays neutral.
 namespace sink {
 
@@ -106,7 +106,7 @@ void syncBox(juce::ComboBox& box, std::vector<UiOption>& cache,
                       juce::NotificationType::dontSendNotification);
 }
 
-/// The store sentence for the Credentials status line (UI-03 Р’В§5): built from
+/// The store sentence for the Credentials status line (the UI redesign Р’В§5): built from
 /// the same controller reads as the main screen's credential line - names of
 /// stores, never values of secrets.
 std::string presenceLine(ApplicationController& controller)
@@ -270,7 +270,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
             *advancedPage_);
     instructionsEditor_.setMultiLine(true);
     instructionsEditor_.setScrollbarsShown(true);
-    instructionsEditor_.setReadOnly(true);   // code review P1: no authoring of a dead setting
+    instructionsEditor_.setReadOnly(true);   // An earlier review: no authoring of a dead setting
     advancedPage_->addAndMakeVisible(instructionsEditor_);
     hint(instructionsHintLabel_,
          "The provider accepts no custom prompting (protocol docs section 12.1). This "
@@ -366,8 +366,8 @@ void SettingsContent::removeKeyPressed()
 
 void SettingsContent::exportPressed()
 {
-    // Task 017's funnel, offered here as well as in the Diagnostics window
-    // (UI-03 Р’В§6): one call, and the note is the receipt either way.
+    // the export funnel, offered here as well as in the Diagnostics window
+    // (the UI redesign Р’В§6): one call, and the note is the receipt either way.
     std::filesystem::path written;
     std::string note;
     controller_.exportDiagnostics({}, written, note);
@@ -476,7 +476,7 @@ void SettingsContent::showNote()
 
 void SettingsContent::loopbackVisuals()
 {
-    // UI-03 Р’В§7: the safety sentence is red and explicit while loopback is
+    // the UI redesign Р’В§7: the safety sentence is red and explicit while loopback is
     // checked; otherwise the ordinary muted hint returns.
     if (loopbackToggle_.getToggleState())
     {
@@ -867,14 +867,14 @@ SettingsWindow::SettingsWindow(ApplicationController& controller)
 {
     setUsingNativeTitleBar(true);
     // No delete-on-close: close hides, the owner window owns the lifetime
-    // (the rule established in task 015).
+    //.
 
     auto* content = new SettingsContent(controller);
     content_ = content;
     setContentOwned(content, true);
 
     setResizable(true, true);
-    // UI-03: tabs made the old column-stacking height unnecessary; the widest
+    // the UI redesign: tabs made the old column-stacking height unnecessary; the widest
     // page (Audio) and the tallest (Advanced) fit comfortably here.
     setResizeLimits(640, 560, 4000, 4000);
     setSize(820, 640);

@@ -93,7 +93,7 @@ NdiRuntime::NdiRuntime()
 
 NdiRuntime::NdiRuntime()
 {
-    error_ = "this build's NDI support targets Windows (AGENTS.md 4: the product is a Windows app)";
+    error_ = "this build's NDI support targets Windows (the project rules: the product is a Windows app)";
 }
 
 #endif // _WIN32

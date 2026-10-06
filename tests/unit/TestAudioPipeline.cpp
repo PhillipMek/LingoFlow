@@ -680,7 +680,7 @@ TEST_CASE("AudioEngine: output gain sits after the jitter buffer, on the way to 
 
     for (int block = 0; block < 3; ++block)
     {
-        // The translated stream arrives from the network side (loopback today, task 012
+        // The translated stream arrives from the network side (loopback today, production later
         // later): the engine never lets the microphone take this path.
         engine.outputJitter(0)->write(translated.data(), translated.size());
         drive.run(engine, 0.0f, kFrames);
@@ -841,7 +841,7 @@ TEST_CASE("AudioEngine: a block bigger than one gain chunk is chunked, not overr
 
     // Deliberately larger than the preallocated chunk: the engine has to do it in pieces
     // and say that it happened, instead of writing past the scratch (the defect that a
-    // badly sized buffer exposed in task 005).
+    // badly sized buffer exposed earlier).
     const int frames = 5000;
 
     MonoDrive drive(frames);
@@ -903,7 +903,7 @@ TEST_CASE("AudioEngine: both trims compose along the pipeline in SPEC order",
           "[audio][engine][gain][pipeline]")
 {
     // The transport is driven by hand here (ring -> jitter, exactly what AudioLoopback and
-    // the task 012 streaming worker do) so the assertion is about where the gain stages
+    // the production streaming worker do) so the assertion is about where the gain stages
     // sit in the signal chain, not about thread scheduling.
     AudioEngine engine;
     NullAudioBackend backend;

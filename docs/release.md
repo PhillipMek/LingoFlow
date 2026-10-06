@@ -1,4 +1,4 @@
-# Release Build and Installer (task 026)
+# Release Build and Installer
 
 Date: 2026-10-06. Version: 0.1.0 (the CMake project version, stamped into the
 binary's JUCE version string and shown in the app, the log line and the
@@ -36,7 +36,7 @@ which FAILS the package if a non-system import ever appears:
   system DLLs used by JUCE).
 - Nothing from the build tree is loaded at run time: the NDI SDK is compile-time
   headers only (the runtime DLL, if present on the machine, is located by name -
-  task 016's design; no NDI installed is a supported, honest state), and the
+  the runtime-loading design; no NDI installed is a supported, honest state), and the
   ASIO SDK is compiled in (the host loads driver DLLs via the registry at run
   time, which is the ASIO contract).
 
@@ -57,7 +57,7 @@ Per-user, no administrator, no MSI engine (the venue machines are offline and
 locked down - fewer moving parts, no reboots):
 
 ```
-powershell -ExecutionPolicy Bypass -File packaging\release-package.ps1
+powershell -ExecutionPolicy Bypass -File packaging\release-package.ps1   # defaults to ..\build-release; pass -BuildDir for another tree
 powershell -ExecutionPolicy Bypass -File packaging\install.ps1
 #   -> %LOCALAPPDATA%\Programs\LingoFlow\LingoFlow.exe
 #   -> Start Menu shortcut "LingoFlow"
@@ -81,7 +81,7 @@ untouched).
 
 ## Clean-machine protocol (the REQUIRED human checkpoint)
 
-The task declares `HUMAN_CHECKPOINT: REQUIRED: clean Windows test`. Everything
+The clean Windows test is a REQUIRED human checkpoint. Everything
 above is verified on the build machine; a genuinely clean machine (no Visual
 Studio, no NDI SDK, no Waves driver, untouched %APPDATA%) is the one thing a
 developer machine cannot simulate - its credentials are the venue visit, and the
@@ -98,7 +98,7 @@ protocol is short:
 5. with the driver present: select the device, Start a mock or live session.
 
 Rows 2-4 close the checkpoint; the venue steps (real device + live provider +
-NDI receiver) are already the open checkpoints of tasks 012/015/016.
+NDI receiver) are already among the open venue checkpoints (live translation, key entry on the target machine, real NDI receiver).
 
 ## Status
 

@@ -146,7 +146,7 @@ rt_expect("rt-selftest/juce-callback" FAIL "RT_AUDIT_FORBIDDEN"
     "${callback}" "${callback_marker}" "${callback_anchor}"
     "std::string name = deviceId_;")
 
-# 9. The gain stage added by task 006 is on the realtime path too: growth there fails.
+# 9. The gain stage added by the gain stage is on the realtime path too: growth there fails.
 rt_expect("rt-selftest/gain-stage" FAIL "RT_AUDIT_FORBIDDEN"
     "${gain}" "${gain_marker}" "${gain_anchor}"
     "auto scratch = std::make_unique<float[]>(frames);")
@@ -156,7 +156,7 @@ rt_expect("rt-selftest/gain-db-to-linear" FAIL "RT_AUDIT_FORBIDDEN"
     "Audio/GainStage.cpp" "float GainStage::dbToLinear" "    return std::exp2(gainDb * kLog2TenOverTwenty);"
     "std::this_thread::sleep_for(std::chrono::milliseconds(1));")
 
-# 11. Task 022: the table now covers the helpers that grew onto the callback path
+# 11. Design note: the table now covers the helpers that grew onto the callback path
 # later - including inline functions in HEADERS. A lock injected into the counter
 # processAudio calls every block must stop the gate.
 rt_expect("rt-selftest/diag-counter" FAIL "RT_AUDIT_FORBIDDEN"

@@ -222,7 +222,7 @@ TEST_CASE("Offline core: loopback plays the capture and keeps the translator unf
 
     // The loopback worker owns the rings: it moves audio, and the streaming
     // worker deliberately does not exist (two consumers, one ring, no silent
-    // arbitration - task 019 made the choice visible).
+    // arbitration - the badge made the choice visible).
     const bool moving = waitFor([&]
                                 {
                                     return controller.loopbackActive()

@@ -1,13 +1,13 @@
 #pragma once
 //
-// OperatorWindow - the JUCE shell of task 014, laid out for UI-02's operator
+// OperatorWindow - the JUCE shell of the operator screen, laid out for the UI redesign's operator
 // screen. It owns WIDGETS and nothing else: every value it paints comes from
 // buildOperatorPanel() (App/UiModel), and every action it takes is exactly one
 // call into ApplicationController. No device is opened, no audio computed, no
 // socket touched from this file - the FAIL criterion "UI owns backend/audio
 // logic" is kept out by construction.
 //
-// The visual contract (UI-02, on top of UI-01's information architecture):
+// The visual contract (it, on top of the earlier information architecture):
 //   header -> SYSTEM STATUS card -> AUDIO card (paired INPUT/OUTPUT columns)
 //   -> TRANSLATION card -> HEALTH card (with the door to Diagnostics)
 //   -> command bar (START/STOP). Colour is state only; the spacing scale is
@@ -41,8 +41,8 @@
 
 namespace liveai {
 
-class SettingsWindow;      // the task 015 dialog, owned while hidden and shown
-class DiagnosticsWindow;   // the UI-01 engineering surface, same ownership rule
+class SettingsWindow;      // the Settings dialog, owned while hidden and shown
+class DiagnosticsWindow;   // the UI redesign engineering surface, same ownership rule
 
 /// A horizontal peak/RMS meter with a clipping lamp. Pure paint: it receives a
 /// UiMeterView and draws it; it owns no audio state. The numeric readout lives
@@ -64,8 +64,8 @@ private:
     UiMeterView view_;
 };
 
-/// The operator screen itself: the UI-01 information architecture wearing the
-/// UI-02 visual hierarchy. Raw counters, the full latency accounting and the
+/// The operator screen itself: the UI redesign information architecture wearing the
+/// the UI redesign visual hierarchy. Raw counters, the full latency accounting and the
 /// technical gain-glide detail are the Diagnostics window's business; this
 /// screen answers "ready? routed? levels? translating? act?" in one glance.
 class OperatorContent final : public juce::Component, private juce::Timer
@@ -139,7 +139,7 @@ private:
     juce::Label deviceCaption_, deviceNoteLabel_;
     juce::ComboBox deviceChoice_;
     juce::TextButton refreshDevicesButton_ { "Refresh" };
-    /// Discrete by nature (UI-01 Р’В§4): channel is an index, so it gets a list,
+    /// Discrete by nature (the UI redesign Р’В§4): channel is an index, so it gets a list,
     /// not a fader - and a visibly different control from the gain slider.
     juce::Label inputChannelCaption_, outputChannelCaption_, channelNoteLabel_;
     juce::ComboBox inputChannelChoice_, outputChannelChoice_;
@@ -182,11 +182,11 @@ private:
     std::vector<UiOption> deviceCache_, targetCache_;
     std::vector<UiOption> inputChannelCache_, outputChannelCache_;
 
-    /// The task 015 dialog: created on first open, hidden on close, always
+    /// The Settings dialog: created on first open, hidden on close, always
     /// re-read before it is shown again - the settings funnel stays singular.
     std::unique_ptr<SettingsWindow> settingsWindow_;
 
-    /// The UI-01 diagnostics surface, same lifetime rule.
+    /// The UI redesign's diagnostics surface, same lifetime rule.
     std::unique_ptr<DiagnosticsWindow> diagnosticsWindow_;
 
     bool updatingWidgets_ = false;

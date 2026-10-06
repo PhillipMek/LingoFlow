@@ -149,7 +149,7 @@ bool PcmResampler::configure(int inputRate, int outputRate, int maxInFrames)
         configureRational(inputRate, outputRate);
 
     // Preallocate the whole working set here, while allocation is allowed,
-    // so process() can keep its noexcept honestly (code review P2,
+    // so process() can keep its noexcept honestly (An earlier review,
     // 2026-10-06): the scratch only ever serves the two-stage cascades and
     // only ever needs maxOutputFor(maxInFrames); the rational window holds
     // at most the filter's retained history plus one chunk - the history is
@@ -178,7 +178,7 @@ void PcmResampler::reset() noexcept
         s = UpState {};
     // Only the rational object owns xin_ - and after a successful configure()
     // its capacity already covers the zero-padding, so the assign inside
-    // cannot allocate and this noexcept stays honest (code review P2).
+    // cannot allocate and this noexcept stays honest.
     if (rational_)
         resetRationalStream();   // a reopened session must not inherit the old stream's tail
 }
@@ -307,7 +307,7 @@ int PcmResampler::process(const float* in, int inFrames, float* out, int outCapa
 
     if (downStages_ == 2)
     {
-        // Belt and braces (code review P2): configure() sized the scratch to
+        // Belt and braces: configure() sized the scratch to
         // maxOutputFor(maxInFrames) and the inFrames guard above already holds,
         // so this refusal is unreachable for configured objects - but it keeps
         // the no-allocation promise local and greppable: no resize, ever.

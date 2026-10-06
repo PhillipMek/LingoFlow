@@ -2,12 +2,12 @@
 //
 // ISecretStore - where credentials live instead of config.json.
 //
-// This is the boundary required by AGENTS.md 10 and SPEC "Secrets separate":
+// This is the boundary required by the project rules and spec "Secrets separate":
 // configuration (ConfigManager) and credentials (this interface) are separate
 // concerns, and the application must compile, run and test without ever holding
 // an API key in a settings struct or in a log line.
 //
-// The Windows implementation (task 015) uses secure credential storage. During
+// The Windows implementation uses secure credential storage. During
 // development an environment-variable store is allowed. No implementation here
 // may write a secret to disk in plain text or return it through AppConfig.
 
@@ -60,7 +60,7 @@ public:
     /// True when a value exists, without copying it out.
     bool contains(std::string_view identifier);
 
-    /// Where the readable value for an identifier actually lives (UI-03 §5).
+    /// Where the readable value for an identifier actually lives (the UI redesign §5).
     /// The operator-facing status line needs this distinction to stay honest:
     /// an environment-variable-only key must never be described as "stored
     /// securely", because the storage that survives a show is the writable

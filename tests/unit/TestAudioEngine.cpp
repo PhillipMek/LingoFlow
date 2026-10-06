@@ -31,7 +31,7 @@ DeviceCapabilities mono48k()
     return caps;
 }
 
-/// The request used by these tests: 48 kHz, 10 ms, mono in/out (SPEC "Audio").
+/// The request used by these tests: 48 kHz, 10 ms, mono in/out (spec "Audio").
 DeviceRequest request()
 {
     DeviceRequest request;
@@ -87,7 +87,7 @@ TEST_CASE("AudioEngine: a second activate without deactivating is refused", "[au
 
 TEST_CASE("AudioEngine: callback produces silence, never the input signal", "[audio][engine][realtime]")
 {
-    // Until translated audio exists (task 012) the engine must not pass the
+    // Until translated audio exists the engine must not pass the
     // microphone through to the audience.
     AudioEngine engine;
     NullAudioBackend backend(mono48k());
@@ -149,7 +149,7 @@ TEST_CASE("AudioEngine: malformed and empty callbacks are not counted as blocks"
 TEST_CASE("AudioEngine: a malformed callback silences EVERY output channel",
           "[audio][engine][realtime]")
 {
-    // Code review P0 (2026-10-05): device output buffers start undefined, and
+    // An earlier review: device output buffers start undefined, and
     // JUCE requires the callback to fill every channel. The old defensive paths
     // cleared only channel 0 - on a multi-output geometry the audience would
     // have kept hearing stale bytes (or uninitialised memory) on channel 1,
@@ -224,7 +224,7 @@ TEST_CASE("AudioEngine: null entries among outputs are skipped, the rest go sile
 TEST_CASE("AudioEngine: a null among promised inputs is a malformed callback, not a skipped channel",
           "[audio][engine][realtime]")
 {
-    // Code review P2 (2026-10-05): the old input loop did `if (source ==
+    // An earlier review: the old input loop did `if (source ==
     // nullptr) continue;` - a selected channel that vanished mid-show kept
     // the block counters looking healthy while the mix quietly lost it, and
     // partial audio is indistinguishable from quiet audio at the audience
@@ -309,7 +309,7 @@ TEST_CASE("AudioEngine: a null among promised outputs refuses the whole block",
 TEST_CASE("AudioEngine: channel-sample counters are channel-summed, frameCount is not",
           "[audio][engine]")
 {
-    // Code review P2 (2026-10-05): two units live in the engine and they must
+    // An earlier review: two units live in the engine and they must
     // not be confusable. One block of C channels and N frames adds C x N to
     // the *Samples counters and exactly N to frameCount(). On the shipping
     // single-channel capture they coincide numerically - which is why the old

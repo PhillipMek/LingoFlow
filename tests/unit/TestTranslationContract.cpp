@@ -346,7 +346,7 @@ TEST_CASE("MockTranslationBackend: a fatal error ends the session, everything el
     CHECK(sink.trace[sink.trace.size() - 2] == "error fatal connection 'link dropped'");
 
     // The audio already delivered is not revoked by the error - the sink keeps
-    // what it got (rule of task 005: playback degrades to silence, not to data loss
+    // what it got (established rule: playback degrades to silence, not to data loss
     // of a different kind).
     CHECK(backend.deliveredBlocks() == 2);
 
@@ -396,7 +396,7 @@ TEST_CASE("MockTranslationBackend: the delivered rate is the requested one, or t
     backend.deliverFrames = 480;
 
     std::string error;
-    auto request = enRu(24000);          // some rate; task 008 decides which rates are real
+    auto request = enRu(24000);          // some rate; the protocol documentation decides which rates are real
     REQUIRE(backend.openSession(request, error));
     REQUIRE(backend.submitAudio(block(480, 0.5f).data(), 480, error));
 
@@ -437,8 +437,8 @@ TEST_CASE("NullTranslationBackend stays a silent shell under the extended contra
           "[translation][contract][null]")
 {
     // The Null backend exists so that the product can run without a provider.
-    // Under task 007 it must still produce no audio, no text and no error
-    // events - silence is its whole feature (AGENTS.md 19).
+    // Under the contract it must still produce no audio, no text and no error
+    // events - silence is its whole feature.
     TraceSink sink;
     NullTranslationBackend backend;
     backend.setSink(sink);

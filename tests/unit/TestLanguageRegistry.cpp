@@ -1,11 +1,11 @@
 //
-// Task 011: the language registry and the versioned capability manifest.
+// Design note: the language registry and the versioned capability manifest.
 //
 // These tests pin the manifest against its normative source -
 // docs/openai-realtime-protocol.md section 13 (the [R8] enumeration) and
 // section 15 item 14.4 (the live-verified target codes) - because a capability
 // manifest nobody checks against its source is exactly the "invented API"
-// failure mode AGENTS.md 19 forbids. The PASS criteria of the task map to
+// failure mode the project rules forbids. The PASS criteria of the task map to
 // sections below: EN<->RU works (both directions), unsupported pairs are
 // rejected, and the checks prove the lists are consistent and complete without
 // copying them anywhere else in the product.
@@ -80,7 +80,7 @@ TEST_CASE("LanguageRegistry: targets are the thirteen live-verified codes",
         CHECK(translation::openAiManifest().isSource(targets[i].code));
     }
 
-    // MVP pair from AGENTS.md 9 present on both sides.
+    // MVP pair from the project rules present on both sides.
     CHECK(translation::openAiManifest().isTarget("en"));
     CHECK(translation::openAiManifest().isTarget("ru"));
 }
@@ -126,7 +126,7 @@ TEST_CASE("LanguageRegistry: pair checks cover the MVP and reject what cannot wo
     CHECK(static_cast<bool>(reg.checkPair("ru", "en")));
 
     // Non-MVP pairs inside the envelope are the manifest's business too: the
-    // controller test (task 007 suite) runs de->ja, [R8] lists both roles.
+    // controller test (the controller suite) runs de->ja, [R8] lists both roles.
     CHECK(static_cast<bool>(reg.checkPair("de", "ja")));
     CHECK(static_cast<bool>(reg.checkPair("nl", "ru"))); // a source in, a target out
 
@@ -135,7 +135,7 @@ TEST_CASE("LanguageRegistry: pair checks cover the MVP and reject what cannot wo
     CHECK(static_cast<bool>(reg.checkPair("ru", "EN")));
 
     // Unsupported combinations each fail with a complete operator-readable
-    // sentence (AGENTS.md 19: no swallowed reasons).
+    // sentence (the project rules: no swallowed reasons).
     const PairCheck badTarget = reg.checkPair("en", "nl");
     CHECK_FALSE(static_cast<bool>(badTarget));
     CHECK(badTarget.detail.find("output language") != std::string::npos);
@@ -188,7 +188,7 @@ TEST_CASE("LanguageRegistry: a custom capability set behaves like the manifest",
 {
     // The registry type is generic capability data, not a hardcoded list in
     // disguise: a hand-built envelope drives the same checks. This is the seam
-    // a dynamic provider manifest would flow through later (AGENTS.md 9).
+    // a dynamic provider manifest would flow through later.
     TranslationCapabilities tiny;
     tiny.manifestVersion = 42;
     tiny.manifestSource = "unit fixture";

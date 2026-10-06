@@ -86,7 +86,7 @@ TEST_CASE("TextPipeline: partials replace the open line, finals own history",
 
     // Every emitted event is typed and numbered; the sequence is monotonic
     // across both kinds and arrival stamps never run backwards. Delivery is
-    // async since code review P2 - the barrier makes the recorder's view
+    // async since an earlier review - the barrier makes the recorder's view
     // complete before the first assertion reads it.
     pipeline.waitForDispatch();
     const auto events = rec.events();
@@ -158,7 +158,7 @@ TEST_CASE("TextPipeline: two honest layers closing the same line produce one ent
     REQUIRE(snap.history.size() == 1);
     CHECK(snap.history[0].text == "the interrupted line");
     CHECK(pipeline.ignoredDuplicates() == 1);
-    pipeline.waitForDispatch();   // async delivery (code review P2)
+    pipeline.waitForDispatch();   // async delivery
     CHECK(rec.count() == 2);   // partial + first final; the duplicate emitted nothing
 
     // And the reverse arrival order works identically.
@@ -300,7 +300,7 @@ TEST_CASE("TextPipeline: snapshots are copies; reads and writes race safely",
     CHECK(snap.currentLine.empty());
     CHECK(pipeline.evictedLines() + snap.history.size() <= 601);   // sane ceiling
 
-    // Event identity under concurrency. Since code review P2 the listener
+    // Event identity under concurrency. Since An earlier review the listener
     // fires on the pipeline's dispatch worker: the queue is FIFO and drained
     // by that single consumer, so events arrive strictly increasing in their
     // sequence numbers, none shared, none overtaken - the same guarantee the
@@ -332,7 +332,7 @@ TEST_CASE("TextPipeline: nameOf covers both kinds", "[translation][text][pipelin
 TEST_CASE("TextPipeline: the listener is not under the pipeline lock",
           "[translation][text][dispatch]")
 {
-    // Code review P2 (2026-10-05), the regression proof: the old design fired
+    // An earlier review, the regression proof: the old design fired
     // the listener with mutex_ held, so ANY reentrant call was a self-deadlock
     // on a non-recursive std::mutex. The barrier returning at all IS the
     // test - every call below would hang forever on the old shape. The

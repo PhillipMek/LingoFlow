@@ -1,19 +1,19 @@
 #pragma once
 //
-// TextPipeline - the typed text model of task 013: what the contract calls
+// TextPipeline - the typed text model: what the contract calls
 // "partial/final text" strings become events with a sequence number and an
 // arrival timestamp, owned by a bounded pipeline that also keeps the history
-// the UI (task 014) and the subtitle transport (task 016) read.
+// the UI and the subtitle transport read.
 //
-// Boundary rules (AGENTS.md 7, SPEC "Text"):
+// Boundary rules (the project rules, spec "Text"):
 //   * Protocol-neutral vocabulary. A backend decides what a "line" is and
 //     hands the pipeline whole-line snapshots (the contract's partial/final
 //     pair says exactly that: partial = the in-progress line as it currently
 //     reads, final = the authoritative text). Nothing here concatenates
 //     provider fragments or knows an event name - the OpenAI backend assembles
-//     its append-only deltas into snapshots inside itself (task 009's file),
+//     its append-only deltas into snapshots inside itself (the backend's file),
 //     which is where protocol knowledge belongs.
-//   * Text never blocks audio (SPEC "Text", the task's FAIL criterion): the
+//   * Text never blocks audio (spec "Text", the task's FAIL criterion): the
 //     pipeline is touched only by backend worker threads and readers (UI),
 //     never by the audio callback. Its mutex is never held across anything
 //     that can block on I/O, and the listener contract below is what keeps it
@@ -31,7 +31,7 @@
 // Threading: ingest*() may be called concurrently from any number of backend
 // threads (the contract does not serialize sink callbacks). snapshot() and the
 // counters are safe from any thread. The listener is NOT run here any more
-// (code review P2, 2026-10-05): firing user callbacks under mutex_ is one
+//: firing user callbacks under mutex_ is one
 // future listener away from the classic deadlock (pipeline lock -> listener ->
 // anything -> pipeline lock), and the P1 lesson stood beside it - the OpenAI
 // receiver thread consumes both translated audio and translated text, so even
@@ -101,14 +101,14 @@ class TextPipeline final
 {
 public:
     /// Default final lines kept for the UI. A product choice, not a measurement
-    /// (AGENTS.md 19): ~20 minutes of continuous interpreting at a few seconds
+    ///: ~20 minutes of continuous interpreting at a few seconds
     /// per line; the eviction counter tells the operator when it was not enough.
     inline static constexpr std::size_t kDefaultHistoryCapacity = 128;
 
     /// Bound of the outgoing dispatch queue. Subtitles arrive a few per second;
     /// 256 pending events means the listener has been wedged for minutes, at
     /// which point the queue is doing its drop-oldest job, not its transport
-    /// one. Product choice, mirrors NdiDispatch's queue (AGENTS.md 12: a text
+    /// one. Product choice, mirrors NdiDispatch's queue (the project rules: a text
     /// outage must never become a stall on the threads that ingest).
     inline static constexpr std::size_t kDefaultDispatchQueueCapacity = 256;
 
@@ -117,7 +117,7 @@ public:
     /// The dispatch worker starts here, so a pipeline that exists can deliver
     /// as soon as a listener does. Throws only if the OS refuses the one
     /// thread (an application that cannot start any worker cannot run the
-    /// network chain either; there is no honest way to swallow it - AGENTS.md
+    /// network chain either; there is no honest way to swallow it - the project rules
     /// 19).
     explicit TextPipeline(std::size_t historyCapacity = kDefaultHistoryCapacity,
                           std::size_t dispatchQueueCapacity = kDefaultDispatchQueueCapacity);

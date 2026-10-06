@@ -1,11 +1,11 @@
 #pragma once
 //
-// ConfigManager - the single Settings area in memory (SPEC "Configuration").
+// ConfigManager - the single Settings area in memory (spec "Configuration").
 //
 // Owns the current AppConfig, refuses invalid updates, notifies listeners and
 // delegates persistence to ConfigStore. Secrets are not part of AppConfig; they
 // belong to the credential store interface (src/Security), so nothing here can
-// write a credential into config.json (AGENTS.md 10).
+// write a credential into config.json.
 
 #include <functional>
 #include <optional>

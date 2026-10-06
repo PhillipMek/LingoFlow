@@ -3,22 +3,22 @@
 // ApplicationController - composition root. It owns the subsystem shells and is
 // the only place that wires them together (docs/architecture.md).
 //
-// Dependency direction (AGENTS.md 7):
+// Dependency direction:
 //   UI -> ApplicationController -> { AudioEngine, ITranslationBackend, INdiOutput,
 //                                    ConfigManager, DiagnosticsManager }
 //   AudioEngine -> IAudioBackend
 // Nothing above the controller knows a wire protocol, and nothing below it knows
 // the UI.
 //
-// The audio path is real since task 005 (device + engine + gain), the translation
-// path is a contract since task 007, implemented against the real service in
-// task 009 and wrapped by the recovery supervisor in task 010. Task 012 mounted
+// The audio path is real (device + engine + gain); the translation
+// path is a contract, implemented against the real service in
+// the earlier stages and wrapped by the recovery supervisor earlier. developer mode mounts
 // the production chain here: the composition root (Main.cpp) injects
 // ReconnectSupervisor(OpenAIRealtimeBackend), and between a session opening and
 // closing this controller runs the TranslationStreamer worker that feeds the
 // backend from the engine's input ring. Which backend object arrives is the
 // composition root's choice: the controller only ever sees the contract, so
-// tests and developer mode (task 019) swap it without touching this file.
+// tests and developer mode swap it without touching this file.
 
 #include <atomic>
 #include <cstdint>
@@ -56,7 +56,7 @@ std::string_view nameOf(ApplicationState state) noexcept;
 
 /// Everything the UI may display about the system, as opaque state values.
 /// Adding a field here is the only way subsystem state reaches the UI - the UI
-/// never includes backend headers (PASS criteria of task 002).
+/// never includes backend headers (a boundary rule enforced by the architecture gate).
 struct AppStatus
 {
     ApplicationState application = ApplicationState::stopped;
@@ -84,21 +84,21 @@ public:
     ~ApplicationController();
 
     // ------------------------------------------------------------- dependencies
-    /// Injected for tests and Developer/Mock mode (task 019). Ownership moves to
+    /// Injected for tests and Developer/Mock mode. Ownership moves to
     /// the controller; must be called while stopped.
     void setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend);
     void setTranslationBackend(std::unique_ptr<translation::ITranslationBackend> backend);
     void setNdiOutput(std::unique_ptr<ndi::INdiOutput> output);
 
     // ------------------------------------------------------- developer mode (019)
-    /// Installs the mounted meaning of the task 019 developer settings. The
+    /// Installs the mounted meaning of the developer settings. The
     /// composition root calls this once (it owns the --dev question), and it is
     /// the controller's ONLY authority on developer behaviour: the factory
     /// device path, the streaming worker and the loopback gate all consult the
     /// stored plan instead of re-reading the settings through different eyes.
     /// The default-constructed plan means "production": every field off, no
     /// badge, nothing mounted - so a controller that was never told about
-    /// developer mode behaves exactly like before task 019 (isolation by
+    /// developer mode behaves exactly like production (isolation by
     /// default, tested, not trusted). Must be called while stopped.
     void setDeveloperPlan(DeveloperPlan plan);
     const DeveloperPlan& developerPlan() const noexcept { return devPlan_; }
@@ -118,7 +118,7 @@ public:
 
     void setAudioBackendFactory(AudioBackendFactory factory);
 
-    /// Device enumeration seam (task 014). The list of selectable devices is
+    /// Device enumeration seam. The list of selectable devices is
     /// platform knowledge, exactly like opening one, so it arrives as a function
     /// installed by the composition root; the controller only caches its result
     /// for the UI to read. A UI refresh calls refreshDevices(); nothing in here
@@ -134,7 +134,7 @@ public:
     /// enumeration is said out loud, never presented as "no devices exist".
     int refreshDevices();
 
-    /// Retry path for the operator (task 014): a fault that has been corrected in
+    /// Retry path for the operator: a fault that has been corrected in
     /// settings can be started again. Moves faulted back to stopped - the log
     /// records the clear, the counters keep the history, and starting is the
     /// operator's decision, not this method's. A no-op (logged) in any other
@@ -144,7 +144,7 @@ public:
     // ------------------------------------------------------------- UI commands (014)
     /// Thin live controls: slider-drag values into the engine, no config write
     /// (the release event persists through updateSettings). Mutes are runtime
-    /// state per task 006's SPEC and never persisted; gains converge with the
+    /// state per the product spec and never persisted; gains converge with the
     /// settings file at the next updateSettings.
     void setGainsLive(float inputDb, float outputDb) noexcept;
     void setMutesLive(bool inputMuted, bool outputMuted) noexcept;
@@ -161,12 +161,12 @@ public:
     bool updateSettings(const AppConfig& candidate, std::string& note);
 
     // ---------------------------------------------------------- credentials (015)
-    /// The credential store seam (task 015), same pattern as the device lister:
+    /// The credential store seam, same pattern as the device lister:
     /// the composition root installs the production store (Windows secure
     /// storage with the development-environment fallback), and this controller
     /// exposes the operator's actions on it. The secret value travels only
     /// UI-field -> store: it never enters settings, notes, statuses or logs
-    /// (AGENTS.md 10, the task's FAIL criterion). Without an installed store the
+    /// (the project rules, the task's FAIL criterion). Without an installed store the
     /// Null store answers honestly: nothing is ever "stored" here.
     void setSecretStore(security::ISecretStore& store) noexcept;
 
@@ -177,7 +177,7 @@ public:
     /// Store label for the UI ("Windows Credential Manager / fallback: ...").
     std::string secretStoreName() const;
 
-    /// Where the readable API key actually lives (UI-03 §5): the status line
+    /// Where the readable API key actually lives (the UI redesign §5): the status line
     /// may only claim secure storage when the writable store holds it - an
     /// environment-only key is a development state and must read like one.
     security::ISecretStore::Location apiSecretLocation() const;
@@ -193,7 +193,7 @@ public:
     // ------------------------------------------------------------------ lifecycle
     /// Brings audio, translation session and NDI up. Returns false and enters the
     /// faulted state when a subsystem refuses. A translation/NDI failure does not
-    /// abort the audio path (AGENTS.md 12) - the call still succeeds with the
+    /// abort the audio path - the call still succeeds with the
     /// failure recorded.
     bool start();
 
@@ -210,14 +210,14 @@ public:
     AudioEngine& engine() noexcept { return engine_; }
     const AudioEngine& engine() const noexcept { return engine_; }
 
-    /// The device side as the read-only contract, for task 018's accounting only
+    /// The device side as the read-only contract, for the latency accounting only
     /// (driver-reported latencies live in capabilities()). Null before any
     /// backend exists - the accounting handles the null honestly. This is a
     /// display read, never an operation: the UI may not open, start or stop
     /// anything through it.
     const audio::IAudioBackend* audioBackend() const noexcept { return audioBackend_.get(); }
 
-    /// The subtitle transport as the read-only boundary, for UI-01's diagnostics
+    /// The subtitle transport as the read-only boundary, for the UI redesign's diagnostics
     /// surface (published/dropped/error counters live on the interface).
     /// Null before any backend exists. A display read, never an operation:
     /// the UI may not start, stop or publish through it.
@@ -230,7 +230,7 @@ public:
     translation::SessionState sessionState() const noexcept;
 
     /// The capture-side streaming worker, non-null while a translation session
-    /// is open (task 012). nullptr before the session opens and after it closes.
+    /// is open. nullptr before the session opens and after it closes.
     const TranslationStreamer* translationStreamer() const noexcept { return streamer_.get(); }
 
     // ------------------------------------------------------------------- settings
@@ -253,7 +253,7 @@ public:
 
     /// The version string printed into the diagnostics export header. Main.cpp
     /// (the JUCE shell that owns the build metadata) sets it; the honest default
-    /// is "unknown" - the core does not invent build numbers (AGENTS.md 19).
+    /// is "unknown" - the core does not invent build numbers.
     void setApplicationVersion(std::string version);
 
     /// Default export location: <settings folder>/diagnostics.
@@ -283,9 +283,9 @@ public:
     // -------------------------------------------------- translation::ITranslationSink
     // Called on network/worker threads, never on the audio thread.
     //
-    // onTranslatedAudio is the delivery point of the task 007 contract: blocks
+    // onTranslatedAudio is the delivery point of the translation contract: blocks
     // that pass the checks are written straight into the engine's output jitter
-    // buffer - the one and only source of played audio (task 005's safety rule).
+    // buffer - the one and only source of played audio (the safety rule).
     // Everything refused is counted and warned about once, never swallowed
     // silently, and never retried at the wrong speed: there is no resampler in
     // this product yet, and playing 16 kHz audio at 48 kHz would be a lie with
@@ -302,11 +302,11 @@ public:
     void onSessionStateChanged(translation::SessionState state) override;
 
     /// Records the failure and keeps everything else running: a translation
-    /// error must never stop the audio path (AGENTS.md 12), and deciding to
-    /// reconnect or reopen is task 010's, not this callback's.
+    /// error must never stop the audio path, and deciding to
+    /// reconnect or reopen is the established, not this callback's.
     void onTranslationError(const translation::TranslationError& error) override;
 
-    /// The UI-facing text model (task 013): bounded history, the open line, and
+    /// The UI-facing text model: bounded history, the open line, and
     /// the counters that say what the pipeline ignored and why. Read from any
     /// thread.
     const translation::TextPipeline& textPipeline() const noexcept { return textPipeline_; }
@@ -321,7 +321,7 @@ private:
     /// fed, and everything else keeps running.
     void startStreaming();
     void stopStreaming() noexcept;
-    /// Developer loopback (task 019): started after the engine activates only
+    /// Developer loopback: started after the engine activates only
     /// when the mounted plan asks for it; a refusal to start is recorded and
     /// everything else keeps running (loopback is not an audio-path must).
     void startLoopbackIfNeeded();
@@ -339,7 +339,7 @@ private:
 
     std::unique_ptr<audio::IAudioBackend> audioBackend_;
 
-    /// The typed text model of task 013: fed by the sink, read by the UI,
+    /// The typed text model: fed by the sink, read by the UI,
     /// listened to by the NDI publisher. Application-level like the counters -
     /// a session restart does not erase the operator's history.
     ///
@@ -357,7 +357,7 @@ private:
     /// the engine deactivates - stop() runs session teardown before audio teardown.
     std::unique_ptr<TranslationStreamer> streamer_;
 
-    /// Developer mode (task 019): the mounted plan, and the loopback worker it
+    /// Developer mode: the mounted plan, and the loopback worker it
     /// may have asked for. The worker lives exactly as long as a running
     /// pipeline: it claims the input rings' consumer slot, so its presence is
     /// what startStreaming() checks before deciding whether the translator
@@ -372,7 +372,7 @@ private:
     DeviceLister deviceLister_;
     std::vector<asio::DeviceEntry> devices_;
 
-    /// Credentials seam (task 015): the default Null store makes "no
+    /// Credentials seam: the default Null store makes "no
     /// credentials" an explicit, testable state instead of a missing feature;
     /// the composition root installs the production chain. The store outlives
     /// the controller by declaration order in Main.cpp.
@@ -388,7 +388,7 @@ private:
     std::string lastAudioError_;
     /// Build metadata for the export header; only the composition root knows it.
     std::string appVersion_ = "unknown";
-    // (ndiSequence_ retired by task 013: subtitle frames carry the typed event's
+    // (ndiSequence_ retired by the text pipeline: subtitle frames carry the typed event's
     // own pipeline sequence now - one monotonic identity for text, not a
     // per-publisher counter.)
 
@@ -398,7 +398,7 @@ private:
     std::atomic<bool> warnedNoBuffer_{ false };
     std::atomic<bool> warnedBadBlock_{ false };
 
-    /// The session's last reported state, for the reconnect count (task 023):
+    /// The session's last reported state, for the reconnect count:
     /// a `connected` that follows a `reconnecting` is the recovery, and nothing
     /// else is. Relaxed is exact - only the callback thread that reports the
     /// transition exchanges it.

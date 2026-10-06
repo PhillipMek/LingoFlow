@@ -15,7 +15,7 @@
 //                              [--gain-in DB] [--gain-out DB]
 //                              run the real device through the engine with input->output
 //                              loopback, the given digital trims and the levels measured
-//                              (the task 005 and task 006 hardware checks)
+//                              (the engine and the venue hardware checks)
 //   --help
 //
 // Exit codes:
@@ -319,7 +319,7 @@ int runProbe(const std::string& deviceId, bool startAndStop)
 
     std::cout << asio::describeCapabilities(attempt.capabilities) << "\n";
 
-    // Channel names decide the task 015 UI: a driver that reports names can offer a
+    // Channel names decide the settings UI: a driver that reports names can offer a
     // picker, one that reports none forces numbered channels. Printed here instead of
     // in the log formatter so the routine log line stays short.
     const auto& caps = attempt.capabilities;
@@ -344,7 +344,7 @@ int runProbe(const std::string& deviceId, bool startAndStop)
     return 0;
 }
 
-/// Repeated open/start/stop/close cycles through the engine, the same path task 005
+/// Repeated open/start/stop/close cycles through the engine, the same path production
 /// will use. Callback delivery and the closed state after deactivate() are asserted;
 /// nothing here fabricates a working device - if the driver does not run, the tool
 /// says so and fails.
@@ -399,7 +399,7 @@ int runLifecycle(const std::string& deviceId, int cycles)
 
 } // namespace
 
-/// The task 005 hardware check, as one command. Runs the real device through the
+/// The venue hardware check, as one command. Runs the real device through the
 /// engine with the input->output loopback worker and prints, once per second, the
 /// levels the engine actually measured: what arrived on the ASIO input and what is
 /// leaving on the ASIO output.
@@ -411,7 +411,7 @@ int runLifecycle(const std::string& deviceId, int cycles)
 /// the machinery runs: both levels stay at silence, which is the honest reading, and the
 /// tool says so instead of calling it a pass.
 ///
-/// --gain-in and --gain-out exist so the same run also proves task 006: the level that
+/// --gain-in and --gain-out exist so the same run also proves the gain stage: the level that
 /// leaves the output has to follow the requested trim, and a signal that reaches full
 /// scale raises the clipping counters instead of disappearing into a limiter.
 int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int outputChannel, int jitterMs,
@@ -549,7 +549,7 @@ int runLoopback(const std::string& deviceId, int seconds, int inputChannel, int 
                      "  The pipeline ran, but no audio was present to loop. On this PC\n"
                      "  (Waves driver, no SoundGrid server) that is the expected result.\n"
                      "  Patch a real source into input channel " << inputChannel
-                  << " on a machine with a server, or use developer mode routing (task 019).\n";
+                  << " on a machine with a server, or use developer mode routing.\n";
         return 1;
     }
 

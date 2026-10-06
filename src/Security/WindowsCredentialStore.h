@@ -1,8 +1,8 @@
 #pragma once
 //
-// WindowsCredentialStore - the production credential store (task 015).
+// WindowsCredentialStore - the production credential store.
 //
-// AGENTS.md 10: "production - store via Windows secure storage". That is the
+// the project rules: "production - store via Windows secure storage". That is the
 // Windows Credential Manager: per-user generic credentials, encrypted at rest
 // by the operating system, surviving process exit and restart, and inspectable
 // by the operator in the Control Panel (a fact they can verify with their own
@@ -23,7 +23,7 @@
 //
 // Non-Windows builds keep the class compiling (the core stays portable) but
 // every operation says "unavailable" - that is a fact about the platform, not
-// a fake success (AGENTS.md 19).
+// a fake success.
 
 #include <optional>
 #include <string>

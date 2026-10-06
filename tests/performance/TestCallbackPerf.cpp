@@ -18,12 +18,12 @@
 #include "Utils/Log.h"
 #include "support/FakeWebSocketTransport.h"
 
-// Task 025 - measured callback budget and worker-path cost.
+// Purpose - measured callback budget and worker-path cost.
 //
 // The question this file answers with numbers, not adjectives: how much of the
 // device period does the audio callback actually consume, on every path it can
 // take, on every geometry the product supports - and how much does the capture
-// path (resample + queue) cost the streaming worker per submit. AGENTS.md 19
+// path (resample + queue) cost the streaming worker per submit. the project rules
 // forbids invented budgets, so the bounds below are derived: each case measures
 // thousands of real calls, prints what it saw, and asserts a multiple of the
 // measurement. The multiple IS the headroom claim: a regression that makes the
@@ -267,7 +267,7 @@ TEST_CASE("Perf: the audio callback consumes a bounded slice of every period, on
         engine.deactivate();
     }
 
-    // --- geometry: 88.2 kHz / 882 frames (task 012's live-verified ceiling pair)
+    // --- geometry: 88.2 kHz / 882 frames (the live-verified ceiling pair)
     {
         DiagnosticsManager diagnostics;
         AudioEngine engine(&diagnostics);

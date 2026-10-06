@@ -1,13 +1,13 @@
 #pragma once
 //
-// DeveloperMode - the single place that decides WHAT the task 019 settings
+// DeveloperMode - the single place that decides WHAT the developer settings
 // mean. Pure functions over AppConfig: the composition root (Main.cpp) mounts
 // backends according to the answer, the controller gates loopback through it,
 // the UI badge and the diagnostics export render its summary - and none of
 // those actors can disagree, because there is exactly one interpretation of
 // the settings in the product.
 //
-// The isolation rule this file exists to enforce (task 019's FAIL criterion:
+// The isolation rule this file exists to enforce (isolation FAIL criterion:
 // "mock behavior leaks into production"):
 //
 //   * A default configuration plans NOTHING: every field is false, the badge
@@ -52,7 +52,7 @@ struct DeveloperPlan
 
     /// true = the capture goes to the audience, so the translation session is
     /// NOT fed (the two consumers of the input ring are mutually exclusive by
-    /// design since task 005/012 - the plan makes the choice visible).
+    /// design since the pipeline's first design - the plan makes the choice visible).
     bool captureStreamOff = false;
 
     /// Human-readable notes on degradations and conflicts. Printed into the

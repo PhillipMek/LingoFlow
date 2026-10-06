@@ -34,7 +34,7 @@ CMakeLists.txt.user
 *.sbr
 compile_commands.json
 
-# Secrets and local state (AGENTS.md 10: never commit a credential)
+# Secrets and local state (the project rules: never commit a credential)
 .env
 .env.*
 !.env.example

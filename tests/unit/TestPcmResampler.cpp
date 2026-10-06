@@ -1,5 +1,5 @@
 //
-// Task 009: the fixed-ratio resampler inside the backend.
+// Design note: the fixed-ratio resampler inside the backend.
 //
 // The protocol pins the wire at 24 kHz mono (docs/openai-realtime-protocol.md
 // section 7) and the engines run 48 kHz (dev defaults), so these conversions
@@ -26,7 +26,7 @@ namespace {
 // The largest chunk any test feeds a resampler is 88200 frames (the
 // 88.2 kHz stop-band probe); this shared bound is what configure()
 // preallocates against, exactly as the backend preallocates against
-// its cadence and the inbound delta ceiling (code review P2).
+// its cadence and the inbound delta ceiling.
 constexpr int kTestMaxInFrames = 100000;
 
 std::vector<float> makeSine(int frames, double rate, double freq, double amplitude = 1.0)
@@ -90,10 +90,10 @@ TEST_CASE("PcmResampler: only the documented rate pairs are supported", "[audio]
     CHECK(PcmResampler::isSupportedPair(96000, 48000));
 
     // 44.1k/88.2k device rates against the wire ARE supported - the rational
-    // stage exists for them since code review P1 (2026-10-05), because the
+    // stage exists for them since an earlier review, because the
     // config always allowed those device rates while the backend refused them.
     // The REFUSAL examples moved outside the device envelope: guessing what
-    // 32000 Hz or 22050<->24000 should mean is still forbidden (AGENTS.md 8).
+    // 32000 Hz or 22050<->24000 should mean is still forbidden.
     CHECK(PcmResampler::isSupportedPair(44100, 24000));
     CHECK(PcmResampler::isSupportedPair(24000, 44100));
     CHECK(PcmResampler::isSupportedPair(88200, 24000));
@@ -122,7 +122,7 @@ TEST_CASE("PcmResampler: only the documented rate pairs are supported", "[audio]
 TEST_CASE("PcmResampler: the cadence bound is a contract, not a suggestion",
           "[audio][resampler]")
 {
-    // Code review P2 (2026-10-06): process() is noexcept, so it must never
+    // An earlier review: process() is noexcept, so it must never
     // allocate. The mechanism is configure()'s preallocation against a
     // caller-declared maxInFrames; these are the refusals that make the
     // promise hold at the edges.

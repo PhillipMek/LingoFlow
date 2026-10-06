@@ -84,9 +84,9 @@ ApplicationController::ApplicationController()
     , ndiOutput_(std::make_unique<ndi::NullNdiOutput>())
     , translationBackend_(std::make_unique<translation::NullTranslationBackend>())
 {
-    // The one route text takes (task 013): sink -> typed pipeline -> dispatch
+    // The one route text takes: sink -> typed pipeline -> dispatch
     // worker -> listener. The listener does NOT run on the ingesting (backend
-    // worker/receiver) thread any more (code review P2, 2026-10-05): the
+    // worker/receiver) thread any more: the
     // pipeline queues events and its own worker delivers them, so this lambda
     // can no longer stall the thread that also feeds the jitter buffer. It
     // still only does bounded work - a counter and an NDI enqueue (NdiDispatch
@@ -228,7 +228,7 @@ void ApplicationController::setGainsLive(float inputDb, float outputDb) noexcept
 
 void ApplicationController::setMutesLive(bool inputMuted, bool outputMuted) noexcept
 {
-    // Runtime-only by task 006's design: mute is a live hand on the fader, not a
+    // Runtime-only by the pipeline's design: mute is a live hand on the fader, not a
     // setting the show starts with. Nothing is persisted here on purpose.
     engine_.setInputMuted(inputMuted);
     engine_.setOutputMuted(outputMuted);
@@ -261,7 +261,7 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
 
-    // Task 015: the log level is a mid-show control - the venue run-sheet asks
+    // Design note: the log level is a mid-show control - the venue run-sheet asks
     // for debug lines while everything is already running - and reconfiguring
     // sinks is a documented non-realtime act (Utils/Log). Only the level is
     // taken from settings here; which sinks exist at all is the composition
@@ -282,7 +282,7 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
     else
         note = "settings are active for this run but were NOT saved: " + saveError;
 
-    // Task 019: developer mode is a MOUNTING decision - backends are chosen
+    // Design note: developer mode is a MOUNTING decision - backends are chosen
     // when the composition root builds the world, and the plan snapshot the
     // running app holds does not change under its feet. Say it, do not hint.
     if (candidate.developer != previous.developer)
@@ -424,7 +424,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     audioRows.emplace_back("audio_frames", std::to_string(diag.audioFrames));
     audioRows.emplace_back("underruns", std::to_string(diag.underruns));
     audioRows.emplace_back("overruns", std::to_string(diag.overruns));
-    // Units stated where the numbers are read (code review P2, 2026-10-05):
+    // Units stated where the numbers are read:
     // *_samples are channel-summed, *_frames are device frames. On the
     // single-channel capture the values coincide; a multi-channel venue
     // receipt must not require knowing the geometry to be read correctly.
@@ -454,7 +454,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     audioRows.emplace_back("pipeline_buffer_delay_source", latency.source);
     audioRows.emplace_back("pipeline_buffer_delay_note",
                            "buffer arithmetic only; translation and mouth-to-ear latency are "
-                           "measured in task 018 - this number is not a measurement");
+                           "measured earlier - this number is not a measurement");
     sections.push_back({ "audio", std::move(audioRows) });
 
     // [latency]: the 018 accounting, row by row, with its kinds and limitations -
@@ -475,7 +475,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
 
     // [developer]: whether this run is a developer run, in the file itself -
     // a venue report that cannot answer "was that a mock?" is a report that
-    // invites exactly the confusion task 019 exists to prevent.
+    // invites exactly the confusion this split exists to prevent.
     std::vector<std::pair<std::string, std::string>> developerRows;
     developerRows.emplace_back("mode", devPlan_.enabled ? "DEVELOPER" : "production");
     developerRows.emplace_back("audio_source",
@@ -544,7 +544,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                                                            ? "(backend default)"
                                                            : cfg.translation.modelHint);
     translationRows.emplace_back("instructions", cfg.translation.instructions);
-    // The paired truth (code review P1, 2026-10-05): a venue reading the file
+    // The paired truth: a venue reading the file
     // must know the text was never sent, not reconstruct it from a log line.
     translationRows.emplace_back("instructions_effect",
                                  cfg.translation.instructions.empty()
@@ -583,7 +583,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     translationRows.emplace_back("text_line_evictions", std::to_string(textPipeline_.evictedLines()));
     translationRows.emplace_back("text_duplicate_finals_ignored",
                                  std::to_string(textPipeline_.ignoredDuplicates()));
-    // Text delivery health (code review P2, 2026-10-05): events the dispatch
+    // Text delivery health: events the dispatch
     // worker delivered since start, and events its bounded queue dropped
     // because the listener (NDI enqueue path) was stalled. Delivered+dropped
     // equals emitted while dispatch runs; a growing drop column is a text
@@ -601,7 +601,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
         { "stream_name", cfg.ndi.streamName },
         { "published_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishedFrames())
                                                      : std::string("0") },
-        // Task 016 contract, review P1 counters: "errors" is what the PRODUCER
+        // the NDI contract; the delivery counters: "errors" is what the PRODUCER
         // was told (not started / shutting down); dropped_frames and
         // transport_errors are what happened after acceptance, on the dispatch
         // side - a post-mortem must be able to tell "we chose to drop stale
@@ -618,7 +618,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     // guards values by key shape and does not know semantics; a present-but-
     // redacted fact would be worse than a renamed one, and this choice was
     // caught live, by this task's own test. There is no value under any key:
-    // credential values never enter settings, logs or exports (AGENTS.md 10).
+    // credential values never enter settings, logs or exports.
     sections.push_back({ "security", {
         { "store_backend", secretStoreName() },
         { "key_present", hasApiSecret() ? "yes" : "no" },
@@ -645,7 +645,7 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
                                               diagnostics_.evictedEvents(),
                                               &config::isSecretFieldName);
 
-    // Task 021's value-side last net: a key an operator pasted into a free-form
+    // the export's value-side last net: a key an operator pasted into a free-form
     // field ("instructions", "model_hint", an NDI name) ships under a harmless
     // key name, so the key-shaped pass above cannot see it. Erase every
     // occurrence of a value the store actually holds before the receipt can
@@ -740,7 +740,7 @@ bool ApplicationController::start()
     }
 
     // Translation and NDI are best-effort at this level: a failure is recorded
-    // and stays recoverable, it must not take the audio path down (AGENTS.md 12).
+    // and stays recoverable, it must not take the audio path down.
     if (!startSession(error))
     {
         log::warning(kComponent, "translation session not started: " + error);
@@ -777,13 +777,13 @@ void ApplicationController::stop()
     log::info(kComponent, "stopping");
 
     // Session first, NDI after: closeSession() may flush the trailing translated
-    // line through the sink (task 013), and that text still has an audience only
+    // line through the sink, and that text still has an audience only
     // while the subtitle transport is up. Audio goes last, as before - the
     // session teardown joins the streaming worker before the device dies.
     stopSession();
     stopLoopback();
 
-    // Code review P2 (2026-10-05): delivery to the listener became async when
+    // An earlier review: delivery to the listener became async when
     // the pipeline grew its dispatch worker, so the guarantee above is no
     // longer automatic - it is made true again here. Everything ingested so
     // far (including the closing flush) is handed to the listener BEFORE the
@@ -811,7 +811,7 @@ bool ApplicationController::startAudio(std::string& error)
 
     const auto& cfg = config_.current();
 
-    // SPEC "ASIO Device Selection": one ASIO device serves input and output, and a
+    // spec "ASIO Device Selection": one ASIO device serves input and output, and a
     // configured device must never be silently replaced by another one.
     if (!cfg.audio.inputDeviceId.empty() && !cfg.audio.outputDeviceId.empty()
         && cfg.audio.inputDeviceId != cfg.audio.outputDeviceId)
@@ -821,7 +821,7 @@ bool ApplicationController::startAudio(std::string& error)
         return false;
     }
 
-    // SPEC "ASIO Device Selection": a configured device is opened or the application
+    // spec "ASIO Device Selection": a configured device is opened or the application
     // reports that it is unavailable - it is never quietly swapped for another one.
     const std::string deviceId = cfg.audio.inputDeviceId.empty() ? cfg.audio.outputDeviceId
                                                                  : cfg.audio.inputDeviceId;
@@ -833,15 +833,15 @@ bool ApplicationController::startAudio(std::string& error)
     request.inputChannel = cfg.audio.inputChannel;
     request.outputChannel = cfg.audio.outputChannel;
 
-    // SPEC "Output Jitter Buffer": the operator's pre-roll, applied before the device
+    // spec "Output Jitter Buffer": the operator's pre-roll, applied before the device
     // starts so the buffers are allocated at the right size.
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
 
-    // SPEC "Input Gain" / "Output Gain": applied before the device starts, so the first
+    // spec "Input Gain" / "Output Gain": applied before the device starts, so the first
     // block already plays the configured level instead of gliding into it.
     // Mute is not restored from anything on purpose. It is live stage state, and a room
     // that comes back muted after a restart is a fault nobody asked for; both sides start
-    // unmuted and the operator decides (SPEC "Start Sequence").
+    // unmuted and the operator decides (spec "Start Sequence").
     engine_.setInputGainDb(cfg.audio.inputGainDb);
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
 
@@ -915,7 +915,7 @@ bool ApplicationController::startAudio(std::string& error)
             + " dB, output " + std::format("{:+.1f}", engine_.outputGainDb())
             + " dB, glide " + std::to_string(engine_.gainRampMs()) + " ms");
 
-    // Developer loopback (task 019) claims the input rings before any streaming
+    // Developer loopback claims the input rings before any streaming
     // worker is even considered; startSession() -> startStreaming() checks for
     // it and keeps the translator unfed while the room's own audio plays.
     if (devPlan_.loopback)
@@ -947,16 +947,16 @@ bool ApplicationController::startSession(std::string& error)
     request.pair.output = cfg.translation.outputLanguage;
     request.instructions = cfg.translation.instructions;
 
-    // Task 007: the rates and the model travel with the request, so the backend
+    // Design note: the rates and the model travel with the request, so the backend
     // knows at what rate audio is coming and at what rate the answer must
     // arrive. An empty model means "backend default" - the set of legal values
-    // is what task 008 establishes from the official documentation, not
+    // is what the official documentation establishes, not
     // something the application invents here.
     request.model = cfg.translation.modelHint;
     request.inputSampleRate = engine_.sampleRate();
     request.outputSampleRate = engine_.sampleRate();
 
-    // Capability-driven start (task 011, AGENTS.md 9): the configured pair must
+    // Capability-driven start (the project rules): the configured pair must
     // be one the product can actually deliver, checked against the versioned
     // manifest - the controller holds no list of its own. The backend re-checks
     // the same registry on its side; this gate is what stops a Null or mock
@@ -997,7 +997,7 @@ void ApplicationController::startStreaming()
     // Two consumers cannot own one ring: while the developer loopback plays
     // the capture to the room, the translator is deliberately NOT fed, and
     // that fact goes to the log, the event ring and the badge - it is never
-    // a silent half-state (task 005's exclusivity, made visible by 019).
+    // a silent half-state (the loopback's exclusivity, made visible by developer mode).
     if (loopbackActive())
     {
         log::info(kComponent,
@@ -1036,7 +1036,7 @@ void ApplicationController::stopStreaming() noexcept
 
     // The run's throughput, printed while it is still true: what the translator
     // got and what the gap policy dropped. The operator's "did we miss anything"
-    // question is answered by these numbers (task 017 exports them).
+    // question is answered by these numbers (diagnostics export them).
     log::info(kComponent,
               "translation streaming stopped: " + std::to_string(streamer_->submittedFrames())
                   + " frames submitted, " + std::to_string(streamer_->gapRefusedFrames())
@@ -1227,8 +1227,8 @@ bool ApplicationController::saveSettings(std::string& error)
 
 void ApplicationController::onTranslatedAudio(const float* samples, int frameCount, int sampleRate)
 {
-    // Worker/network thread. This is the delivery side of the task 007 contract
-    // and the reason the engine's jitter buffer exists (task 005): translated
+    // Worker/network thread. This is the delivery side of the translation contract
+    // and the reason the engine's jitter buffer exists: translated
     // audio becomes audible exactly here, through the one buffer the callback
     // reads, never anywhere else.
     if (samples == nullptr || frameCount <= 0)
@@ -1244,7 +1244,7 @@ void ApplicationController::onTranslatedAudio(const float* samples, int frameCou
     const std::uint64_t frames = static_cast<std::uint64_t>(frameCount);
 
     // The device must be running to play anything, and channel 0 is the
-    // translation output channel (SPEC "Output Channel"). No buffer means the
+    // translation output channel (spec "Output Channel"). No buffer means the
     // audio path is down - a fact for the counters, not a reason to crash or
     // to queue unbounded memory waiting for a device that may never return.
     audio::AudioJitterBuffer* jitter = engine_.outputJitter(0);
@@ -1301,7 +1301,7 @@ void ApplicationController::onFinalText(std::string_view text)
 
 void ApplicationController::onSessionStateChanged(translation::SessionState state)
 {
-    // Task 023 (2026-10-06): the "reconnects" row displayed in the HEALTH card,
+    // Design note: the "reconnects" row displayed in the HEALTH card,
     // the diagnostics surface and the export was never fed - a recovery that
     // worked was told by the transitions in the ring, while the count said
     // zero. Count the reconnect where the application can observe it honestly:
@@ -1355,9 +1355,9 @@ void ApplicationController::onTranslationError(const translation::TranslationErr
 {
     noteTranslationError(error);
 
-    // AGENTS.md 12: a translation failure never touches the audio path. Nothing
+    // the project rules: a translation failure never touches the audio path. Nothing
     // here stops the engine, closes the device or waits for the network - the
-    // decision to retry or reopen belongs to task 010, not to this callback.
+    // decision to retry or reopen belongs to the supervisor, not to this callback.
     if (error.fatal)
     {
         diagnostics_.noteError("translation",

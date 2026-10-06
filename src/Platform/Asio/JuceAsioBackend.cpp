@@ -56,7 +56,7 @@ public:
         {
             // A driver that breaks its own input promise must still not hear the
             // previous block played back as if audio were flowing - and it must
-            // not vanish from the record either. Code review P2 (2026-10-05):
+            // not vanish from the record either. An earlier review:
             // the engine is still reached, with the violation instead of audio;
             // processAudio(nullptr, ...) owns the malformed count and the
             // every-output fill (IAudioProcessor contract), so this shows up on
@@ -270,7 +270,7 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
     capabilities_.maxBufferFrames = buffers.empty() ? capabilities_.preferredBufferFrames : buffers.back();
     capabilities_.inputChannels = std::max(1, device_->getActiveInputChannels().countNumberOfSetBits());
     capabilities_.outputChannels = std::max(1, device_->getActiveOutputChannels().countNumberOfSetBits());
-    // UI-01: the names this open already read to validate the selection are kept
+    // the UI redesign: the names this open already read to validate the selection are kept
     // for the discrete channel selector as well - existing state, published
     // cleanly, not a second query. Control thread writes, GUI thread reads
     // between open and close (capabilities() is polled, never realtime).
@@ -281,7 +281,7 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
     inputLatency_ = device_->getInputLatencyInSamples();
     outputLatency_ = device_->getOutputLatencyInSamples();
 
-    // Task 018: the driver's own latency figures travel through the contract, not
+    // Design note: the driver's own latency figures travel through the contract, not
     // only through the log line. Note what 0 cannot mean: ASIO's query answers
     // 0 both for "this driver has no latency" and "I do not report latency", and
     // no API here distinguishes them - so the accounting labels a zero "not
@@ -340,7 +340,7 @@ bool JuceAsioBackend::stop(std::string& error)
                                         ? device_->getLastError().toStdString()
                                         : std::string();
 
-    // Code review P0 evidence: which channel-array layout the driver actually
+    // An earlier review evidence: which channel-array layout the driver actually
     // used. "compacted" is what vendored JUCE's ASIO wrapper promises today;
     // anything else means the stack hands out physically indexed (or short)
     // arrays - the forwarding handled it by the tested rule either way, but a

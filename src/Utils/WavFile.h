@@ -1,6 +1,6 @@
 #pragma once
 //
-// WavFile - the minimal WAV I/O the developer mode (task 019) needs, and nothing
+// WavFile - the minimal WAV I/O the developer mode needs, and nothing
 // more. The product plays audio through ASIO, not through files; this module
 // exists so the pipeline can be run, recorded and rehearsed WITHOUT a sound
 // device and without the OpenAI account - "where practical", as the task says,
@@ -10,13 +10,13 @@
 //     (stereo is averaged down to mono, the product's channel model), at any
 //     sample rate - the caller decides what rate is acceptable and says so with
 //     its own words (the simulated device refuses a file that disagrees with the
-//     settings rather than resampling silently: the rule task 007 set for
+//     settings rather than resampling silently: the rule the rate discipline set for
 //     delivered audio applies to read audio too).
 //   * Mono16Writer: float -> PCM16, header reserved at open and patched at
 //     close, so an interrupted recording is salvageable and no whole-show
 //     buffer is ever held in memory.
 //
-// The probe tools (task 009) carry their own tiny mono16 reader/writer next to
+// The probe tools carry their own tiny mono16 reader/writer next to
 // their main(); this module is the portable home for the product's side.
 // Everything here runs on worker threads - file I/O is never realtime-safe,
 // which is precisely why only backends that simulate a device call it.

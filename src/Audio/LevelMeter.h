@@ -1,7 +1,7 @@
 #pragma once
 //
-// LevelMeter - block peak/RMS metering for the realtime path (SPEC "Meters",
-// task 005). The gain that acts on these numbers is GainStage (task 006): the engine
+// LevelMeter - block peak/RMS metering for the realtime path (spec "Meters",
+// the meter design). The gain that acts on these numbers is GainStage: the engine
 // measures the post-gain block, so the knob visibly moves the meter, while what arrived
 // at full scale before our trim is counted by the stage - attenuation cannot hide it.
 //
@@ -10,7 +10,7 @@
 //     math (abs, compare, accumulate, one sqrt) and publishes plain atomics. No
 //     allocation, no lock, no logging.
 //   * every getter is safe from any thread and returns the state of the most recent
-//     measured block. The UI polls it (task 014); it must not expect a callback.
+//     measured block. The UI polls it; it must not expect a callback.
 //   * clipFrames() counts samples at or above full scale. That is a fact about the
 //     signal, not a threshold guess: |value| >= 1.0 is clipping by definition.
 //

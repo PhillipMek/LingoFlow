@@ -1,10 +1,10 @@
 #pragma once
 //
-// AppConfig - the complete set of non-secret settings (SPEC "Configuration").
+// AppConfig - the complete set of non-secret settings (spec "Configuration").
 //
-// Hard rule (AGENTS.md 10, SPEC "Secrets separate"): an API key, token, password
+// Hard rule (the project rules, spec "Secrets separate"): an API key, token, password
 // or any other credential must never be a member of this struct and never reach
-// config.json. Credentials belong to the credential store (task 015); the tests
+// config.json. Credentials belong to the credential store; the tests
 // additionally assert that nothing in the serialized config looks like a secret.
 //
 // Backend implementation details (socket options, driver internals) are not
@@ -23,10 +23,10 @@ inline constexpr std::uint32_t kConfigSchemaVersion = 1;
 struct AudioSettings
 {
     /// Empty means "no device selected yet"; device identifiers come from the
-    /// backend enumeration (task 004) and are opaque here.
+    /// backend enumeration and are opaque here.
     std::string inputDeviceId;
     std::string outputDeviceId;
-    int sampleRate = 48000;      ///< SPEC "Audio": preferred 48 kHz
+    int sampleRate = 48000;      ///< spec "Audio": preferred 48 kHz
     int bufferFrames = 480;      ///< SPEC MVP buffer
     int inputChannel = 1;        ///< one-based channel index, mono translation input
     int outputChannel = 1;
@@ -40,13 +40,13 @@ struct TranslationSettings
 {
     /// Language tags. Config validates their SHAPE only (module boundary: it
     /// may not include the registry); supportability of the pair is checked at
-    /// session start against the versioned capability manifest - task 011,
-    /// Translation/LanguageRegistry.h. MVP en<->ru (AGENTS.md 9).
+    /// session start against the versioned capability manifest,
+    /// Translation/LanguageRegistry.h. MVP en<->ru.
     std::string inputLanguage = "en";
     std::string outputLanguage = "ru";
 
-    /// Interpreter instructions (SPEC "Translation instructions"). OPTIONAL with
-    /// an empty default since code review P1 (2026-10-05): the translation
+    /// Interpreter instructions (spec "Translation instructions"). OPTIONAL with
+    /// an empty default since an earlier review: the translation
     /// model accepts no custom prompting (protocol docs section 12.1), so a
     /// REQUIRED field here only made the operator type a setting that does
     /// nothing - a fake contract. The text still round-trips (storage is
@@ -58,10 +58,10 @@ struct TranslationSettings
 
     /// Empty = "use the backend default". Free-form model identifiers are not
     /// invented here: allowed values come from the capability manifest
-    /// (AGENTS.md 9, task 008/011).
+    /// (the project rules, the language registry).
     std::string modelHint;
 
-    /// Output pre-roll (SPEC "Output Jitter Buffer"). 250 ms is a provisional
+    /// Output pre-roll (spec "Output Jitter Buffer"). 250 ms is a provisional
     /// engineering value derived from the live wire facts of
     /// docs/openai-realtime-protocol.md section 15: deltas arrive in bursts of up
     /// to 2x realtime and the post-close drain runs at ~4.7x, and the engine's
@@ -73,7 +73,7 @@ struct TranslationSettings
     /// it live.
     int jitterBufferMs = 250;
 
-    // Session recovery policy (task 010). The supervisor retries a dropped
+    // Session recovery policy. The supervisor retries a dropped
     // session forever while the application runs - a venue network blip must
     // not end the event - and stops only on errors retrying cannot fix (bad
     // key, billing), reported as the faulted state for the operator.
@@ -83,7 +83,7 @@ struct TranslationSettings
     /// Proactively reopen the session before the one-hour ceiling measured
     /// live (protocol doc section 15); 0 disables the timer. The provider
     /// session restarts fresh either way - the gap is counted, audio during it
-    /// is refused and dropped (task 010's gap policy). Where the server
+    /// is refused and dropped (the established gap policy). Where the server
     /// announces a concrete expiry (session.expires_at, protocol docs section
     /// 4bis), that announcement minus expirySafetyMarginSeconds is the deadline
     /// whenever it is EARLIER - this field then acts as the cap and the
@@ -91,7 +91,7 @@ struct TranslationSettings
     /// outranks.
     int sessionMaxAgeSeconds = 3300;
     /// How far ahead of a server-announced session expiry the controlled
-    /// reopen starts (protocol docs section 4bis; code review P1, 2026-10-05).
+    /// reopen starts (protocol docs section 4bis; An earlier review, 2026-10-05).
     /// 0 means "reopen exactly at the announced instant" - allowed, not
     /// recommended: the reopen itself takes time and the provider does not wait.
     int expirySafetyMarginSeconds = 300;
@@ -116,10 +116,10 @@ struct DiagnosticsSettings
     friend constexpr bool operator==(const DiagnosticsSettings&, const DiagnosticsSettings&) = default;
 };
 
-/// Developer & mock mode (task 019). Every field is inert while `enabled` is
+/// Developer & mock mode. Every field is inert while `enabled` is
 /// false, which is the default - and a config file from before this section
 /// existed parses to exactly that, so an existing installation keeps running
-/// the real chain (AGENTS.md 16's extension point, AGENTS.md 19's no fake
+/// the real chain (a reserved extension point with the no-fake rule
 /// success, and this task's FAIL criterion all point the same way).
 ///
 /// What this section does NOT contain: any credential. The mock runs with no
@@ -138,7 +138,7 @@ struct DeveloperSettings
 
     /// WAV file used when audioSource == "wav". Its sample rate must match the
     /// audio settings - the simulated device refuses a mismatch instead of
-    /// resampling silently (task 007's delivered-audio rule, input side).
+    /// resampling silently (the delivered-audio rule, input side).
     std::string wavInputPath;
 
     /// When non-empty (and developer mode is on), everything the pipeline
@@ -156,7 +156,7 @@ struct DeveloperSettings
     bool mockTranslation = false;
     int mockLatencyMs = 300;
 
-    /// Route capture straight to the output (the task 005 loopback worker):
+    /// Route capture straight to the output (the developer loopback worker):
     /// the operator hears the room, not a translation. Loudly bad on a real
     /// show, so this is honored only while `enabled` is true, the controller
     /// refuses it otherwise, and the --dev command-line preset never turns it

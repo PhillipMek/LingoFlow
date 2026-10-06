@@ -13,7 +13,7 @@ namespace liveai {
 namespace {
 
 // ---------------------------------------------------------------- the palette
-// Colour communicates state and nothing else (UI-02 Р В РІР‚в„ўР вЂ™Р’В§12): surfaces stay
+// Colour communicates state and nothing else (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§12): surfaces stay
 // neutral, the four state colours appear only on dots, words and the buttons
 // that mean them.
 
@@ -34,7 +34,7 @@ const juce::Colour control       { 0xff30363du };
 } // namespace ink
 
 // ------------------------------------------------------------- the spacing grid
-// 4 / 8 / 12 / 16 / 24 / 32 (UI-02 Р В РІР‚в„ўР вЂ™Р’В§11). Component heights are constants, not
+// 4 / 8 / 12 / 16 / 24 / 32 (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§11). Component heights are constants, not
 // per-widget negotiations.
 
 constexpr int kMargin    = 16;   // window edge -> card
@@ -207,7 +207,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
                         juce::NotificationType::dontSendNotification);
     addAndMakeVisible(titleLabel_);
 
-    // UI-02 Р В РІР‚в„ўР вЂ™Р’В§4: developer mode is a compact, unmistakable chip - not the red
+    // the UI redesign Р В РІР‚в„ўР вЂ™Р’В§4: developer mode is a compact, unmistakable chip - not the red
     // banner that used to make a rehearsal look like an incident. The plan's
     // full sentence stays readable below the status rows (devDetailLabel_).
     devBadge_.setFont(uiFont(11.0f, true));
@@ -379,7 +379,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(noteLabel_);
 
     // ------------------------------------------------------------ command bar
-    // The two tallest, widest controls on the screen (UI-02 Р В РІР‚в„ўР вЂ™Р’В§10). Start is
+    // The two tallest, widest controls on the screen (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§10). Start is
     // green when it means "go", Stop stays blue-strong: ending a show is an
     // action, not an error. Retry (faulted) borrows amber - it asks attention.
     startButton_.onClick = [this] { startPressed(); };
@@ -433,7 +433,7 @@ void OperatorContent::settingsPressed()
 
 void OperatorContent::diagnosticsPressed()
 {
-    // UI-01: the engineering surface opens on request, owns the Export button,
+    // the UI redesign: the engineering surface opens on request, owns the Export button,
     // and follows the same hide/reopen lifetime rule as the settings dialog.
     if (diagnosticsWindow_ == nullptr)
         diagnosticsWindow_ = std::make_unique<DiagnosticsWindow>(controller_);
@@ -501,7 +501,7 @@ void OperatorContent::channelChanged()
     if (updatingWidgets_)
         return;
 
-    // The discrete choices (UI-01): the value list is the panel's, mirrored
+    // The discrete choices: the value list is the panel's, mirrored
     // into the caches; a combo can only land on a real channel index.
     const int inIndex = inputChannelChoice_.getSelectedItemIndex();
     const int outIndex = outputChannelChoice_.getSelectedItemIndex();
@@ -549,7 +549,7 @@ void OperatorContent::muteToggled()
 {
     controller_.setMutesLive(inputMuteButton_.getToggleState(),
                              outputMuteButton_.getToggleState());
-    actionNote_ = "Mutes are live only and were not saved (task 006: a show never starts muted).";
+    actionNote_ = "Mutes are live only and were not saved (a show never starts muted).";
     rebuild();
 }
 
@@ -631,13 +631,13 @@ void OperatorContent::rebuild()
     sessionValue_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
     ndiValue_.setColour(juce::Label::textColourId, stateColour(panel.ndiState));
 
-    // Warnings only when they ask something (UI-02 Р В РІР‚в„ўР вЂ™Р’В§9): "ok" paints nothing.
+    // Warnings only when they ask something (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§9): "ok" paints nothing.
     detailLabel_.setText(panel.detail == "ok" ? juce::String() : juce::String(panel.detail),
                          juce::NotificationType::dontSendNotification);
     detailLabel_.setColour(juce::Label::textColourId,
                            panel.faulted ? ink::red : ink::amber);
 
-    // Task 015: the credential state belongs to the main screen too - an
+    // Design note: the credential state belongs to the main screen too - an
     // operator must be able to see "no key" before pressing Start, not only
     // inside a dialog they have not opened.
     credentialLabel_.setText(juce::String(panel.credentialLine),
@@ -647,7 +647,7 @@ void OperatorContent::rebuild()
                                    ? ink::textMuted
                                    : ink::amber);
 
-    // Task 019 + UI-02 Р В РІР‚в„ўР вЂ™Р’В§4: the chip is the compact, unmistakable flag; the
+    // Design note: the UI redesign Р В РІР‚в„ўР вЂ™Р’В§4: the chip is the compact, unmistakable flag; the
     // plan's full sentence rides below the rows, muted. Production: empty,
     // both invisible.
     const bool dev = !panel.developerBadge.empty();
@@ -695,7 +695,7 @@ void OperatorContent::rebuild()
     }
 
     // The caption carries the requested number (the slider's own value); the
-    // technical "applying ... (gliding)" line moved to Diagnostics (UI-02 Р В РІР‚в„ўР вЂ™Р’В§6).
+    // technical "applying ... (gliding)" line moved to Diagnostics (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§6).
     inputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.inputGainDb)),
                               juce::NotificationType::dontSendNotification);
     outputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.outputGainDb)),
@@ -713,7 +713,7 @@ void OperatorContent::rebuild()
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);
 
-    // Numeric readout beside the bar (UI-02 Р В РІР‚в„ўР вЂ™Р’В§6): level and peak from the same
+    // Numeric readout beside the bar (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§6): level and peak from the same
     // view the bar draws - existing telemetry, no new processing.
     inputLevelLabel_.setText(juce::String(std::format("{:.1f} dB   peak {:.1f} dB",
                                                       panel.inputMeter.rmsDb,
@@ -798,7 +798,7 @@ void OperatorContent::paint(juce::Graphics& g)
 
 namespace {
 
-/// One AUDIO column laid out inside its rectangle (UI-02 Р В РІР‚в„ўР вЂ™Р’В§5: the same block on
+/// One AUDIO column laid out inside its rectangle (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§5: the same block on
 /// both sides - device is shared above them, channel/meter/gain/mute are not).
 void layoutAudioColumn(juce::Rectangle<int>& col,
                        juce::Label& channelCaption, juce::ComboBox& channelBox,
@@ -1018,7 +1018,7 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
 {
     setUsingNativeTitleBar(true);
 
-    // UI-03 follow-up: the card column is taller than some venue laptops are
+    // the UI redesign follow-up: the card column is taller than some venue laptops are
     // wide-tall, so the content lives in a vertical viewport - the window
     // itself fits any screen and the operator scrolls between sections.
     // Nothing about the layout changed: the same cards, the same sizes.
@@ -1028,7 +1028,7 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
     setContentOwned(viewport, true);
 
     setResizable(true, true);
-    // UI-04: the minimum stays a sane operator width; the height may now be
+    // the UI redesign: the minimum stays a sane operator width; the height may now be
     // smaller than the content because the viewport scrolls. The default
     // 980x700 (outer ~731) fits the 1366x768 work area, the 620 floor fits
     // 1280x720.

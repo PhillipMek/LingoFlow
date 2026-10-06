@@ -1,5 +1,5 @@
-# Realtime safety audit (task 005 PASS criteria: "no allocations/locks/network/UI in
-# callback", AGENTS.md 5).
+# Realtime safety audit (the established PASS criteria: "no allocations/locks/network/UI in
+# callback", the project rules).
 #
 # Invoked by CTest as:
 #   cmake -DRT_AUDIT_SRC_DIR=<repo>/src -P tests/RealtimeSafetyAudit.cmake
@@ -35,7 +35,7 @@ endif()
 # Rows are "file|marker". The marker is a regex matched against one line of the file:
 # the line that opens (or wholly contains) the function body. It never contains a '|'.
 #
-# Task 022's hostile pass: the callback's reachable set had grown past this table -
+# A hostile review pass: the callback's reachable set had grown past this table -
 # the in-place GainStage wrapper, its targetLinear(), the DiagnosticsManager counters
 # processAudio calls every block, and the readable() the jitter policy decides on.
 # All of them are rows now, so the gate - not only this file's comment - vouches for

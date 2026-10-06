@@ -124,7 +124,7 @@ ConnectResult WinHttpTransport::connect(const std::string& host,
 
     WinHttpSetTimeouts(session, 5000 /*resolve*/, 10000 /*connect*/, 10000 /*send*/, 5000 /*receive*/);
 
-    // TLS 1.2 minimum (1.3 included when the OS provides it) - AGENTS.md 21
+    // TLS 1.2 minimum (1.3 included when the OS provides it) - the project rules
     // requires modern transport for the credential-bearing connection.
     DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 #ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3

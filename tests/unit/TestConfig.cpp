@@ -131,8 +131,8 @@ TEST_CASE("ConfigSchema: developer fields round-trip", "[config][schema][develop
     AppConfig cfg = config::defaults();
     cfg.developer.enabled = true;
     cfg.developer.audioSource = "wav";
-    cfg.developer.wavInputPath = "D:\\rehearsal\\input.wav";
-    cfg.developer.wavOutputPath = "D:\\rehearsal\\record.wav";
+    cfg.developer.wavInputPath = "rehearsal\\\\input.wav";
+    cfg.developer.wavOutputPath = "rehearsal\\\\record.wav";
     cfg.developer.toneFrequencyHz = 440.0;
     cfg.developer.toneLevelDb = -18.0;
     cfg.developer.mockTranslation = true;
@@ -156,7 +156,7 @@ TEST_CASE("ConfigSchema: developer fields round-trip", "[config][schema][develop
 TEST_CASE("ConfigSchema: a config file predating the developer section loads as developer-off",
           "[config][schema][developer][isolation]")
 {
-    // Task 019's isolation runs down into the storage layer: an installation
+    // isolation runs down into the storage layer: an installation
     // that never touched developer mode keeps running the real chain after the
     // update - the absent section means "off", there is no absent-means-on path.
     const std::string text =
@@ -260,14 +260,14 @@ TEST_CASE("ConfigSchema: recovery policy fields validate and repair per field",
     CHECK(config::validate(restored).empty()); // the repaired result is usable
 
     // Out-of-range numbers are problems too (the ceiling is two measured
-    // provider hours, task 010).
+    // provider hours).
     AppConfig broken = config::defaults();
     broken.translation.sessionMaxAgeSeconds = 7201;
     CHECK_FALSE(config::validate(broken).empty());
     broken.translation.sessionMaxAgeSeconds = 0; // 0 = the age reopen disabled, valid
     CHECK(config::validate(broken).empty());
 
-    // Review P1 (2026-10-05): the safety margin for a server-announced expiry
+    // Review P1: the safety margin for a server-announced expiry
     // (protocol docs section 4bis). Default five minutes; a value beyond the
     // half-ceiling boundary is a problem; 0 is valid-but-not-recommended; and
     // a config file written before this field existed must load on the
@@ -517,7 +517,7 @@ TEST_CASE("ConfigSchema: validation covers the documented bounds", "[config][sch
     cfg.audio.outputGainDb = -80.0f;
     CHECK(countProblems(cfg) == 1);
 
-    // SPEC "Input Gain" suggests -24..+24 dB: both ends must be accepted.
+    // spec "Input Gain" suggests -24..+24 dB: both ends must be accepted.
     cfg = config::defaults();
     cfg.audio.inputGainDb = 24.0f;
     cfg.audio.outputGainDb = -24.0f;

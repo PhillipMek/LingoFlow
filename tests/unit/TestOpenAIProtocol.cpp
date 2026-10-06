@@ -1,5 +1,5 @@
 //
-// Task 009: the OpenAI realtime translation backend against a scripted
+// Design note: the OpenAI realtime translation backend against a scripted
 // transport. These tests pin the behaviors the product depends on and that
 // tasks 010/012 build on:
 //
@@ -414,7 +414,7 @@ TEST_CASE("OpenAI backend: refused upgrade maps HTTP status per section 9", "[op
         int status;
         TranslationErrorCategory expected;
     };
-    // The table since code review P2 (2026-10-05): the categories now carry the
+    // The table since an earlier review: the categories now carry the
     // same distinctions section 9 always documented - the supervisor's policy
     // reads them, so the sink must not arrive flattened.
     const Case cases[] = {
@@ -454,7 +454,7 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
           "[openai][protocol][faults]")
 {
     // 429 with Retry-After: a rate-limited refusal whose hint must cross the
-    // seam so the task 010 policy can honour "wait at least this long"
+    // seam so the supervisor policy can honour "wait at least this long"
     // (protocol section 9).
     {
         Scenario s;
@@ -496,7 +496,7 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
 
     // A 429 whose body we cannot classify keeps the plain table default
     // (retryable) - never silently upgraded to terminal, never silently
-    // dropped (AGENTS.md 19).
+    // dropped.
     {
         Scenario s;
         network::ConnectResult cr { false, 429, {} };
@@ -516,7 +516,7 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
 TEST_CASE("OpenAI backend: the optional safety identifier rides the upgrade request",
           "[openai][protocol]")
 {
-    // Docs section 3 (code review P2, 2026-10-05): the three states of one
+    // Docs section 3: the three states of one
     // optional header. A sendable value is attached verbatim; an unset value
     // sends nothing; a malformed value is dropped while THE SESSION STILL
     // OPENS - an identifier the provider does not require never decides
@@ -570,7 +570,7 @@ TEST_CASE("OpenAI backend: the optional safety identifier rides the upgrade requ
 TEST_CASE("OpenAI backend: unsupported language pairs are refused offline before any network",
           "[openai][contract][faults]")
 {
-    // Task 011: the versioned capability manifest gates SessionRequest pairs
+    // Design note: the versioned capability manifest gates SessionRequest pairs
     // like the model and rate gates do - a refusal that changes nothing reports
     // nothing (contract rule 3), and no transport object is even created.
     //
@@ -604,7 +604,7 @@ TEST_CASE("OpenAI backend: unsupported language pairs are refused offline before
     // injected capabilities, not by the shipped manifest - "en" is a source in
     // the product manifest but not in this tiny one, and the refusal proves
     // whose list was consulted. (A future dynamic manifest plugs in exactly
-    // here - AGENTS.md 9.)
+    // here - the project rules.)
     {
         translation::TranslationCapabilities tiny;
         tiny.manifestVersion = 99;
@@ -687,7 +687,7 @@ TEST_CASE("OpenAI backend: local validation rejects, reporting nothing (rule 3)"
     CHECK(error.find("language") != std::string::npos);
 
     // 4. Rates outside the documented conversion envelope: refused, not guessed.
-    //    (44.1/88.2 used to live here as refusals - code review P1, 2026-10-05
+    //    (44.1/88.2 used to live here as refusals - An earlier review, 2026-10-05
     //    turned them into supported device rates; 32000 Hz is outside the
     //    config's own device set, and it still must not be invented.)
     req = s.Request();
@@ -898,7 +898,7 @@ TEST_CASE("OpenAI backend: 48 kHz input is decimated to the 24 kHz wire", "[open
 TEST_CASE("OpenAI backend: 44.1 kHz input is decimated to the 24 kHz wire",
           "[openai][audio][resampler][rational]")
 {
-    // Code review P1 (2026-10-05): the config has always offered 44.1 kHz; the
+    // An earlier review: the config has always offered 44.1 kHz; the
     // session must now OPEN and stream, not die at Start Translation.
     Scenario s;
     auto req = s.Request();
@@ -1047,7 +1047,7 @@ TEST_CASE("OpenAI backend: delta metadata mismatch drops the block, keeps the se
 }
 
 TEST_CASE("OpenAI backend: transcript fragments arrive as whole-line snapshots, "
-          "bounded by settle and close (task 013)",
+          "bounded by settle and close",
           "[openai][protocol][text]")
 {
     Scenario s;
@@ -1167,7 +1167,7 @@ TEST_CASE("OpenAI backend: in-session error events map to categories and stay re
         R"({"type":"error","error":{"type":"invalid_request_error","message":"Invalid language code"}})");
     s.fake->queueMessage(R"({"type":"error","error":{"type":"server_error","message":"Temporary failure"}})");
     // The section 9 transient codes, classification before the coarse type
-    // (code review P2): a bare "server_error" stays internal (unclassified),
+    //: a bare "server_error" stays internal (unclassified),
     // a coded refusal says which recovery applies.
     s.fake->queueMessage(
         R"({"type":"error","error":{"type":"server_error","code":"slow_down","message":"Please reduce your request rate."}})");

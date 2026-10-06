@@ -1,12 +1,12 @@
 #pragma once
 //
 // IWebSocketTransport - the tiny seam between the OpenAI backend and whatever
-// actually moves WebSocket frames (task 009).
+// actually moves WebSocket frames.
 //
 // Why a seam at all: the backend's job is the protocol and the contract mapping;
 // the OS transport is not testable offline. Everything here is synchronous and
 // blocking-by-contract: this interface is only ever used from worker/network
-// threads, never the audio callback (AGENTS.md 5, docs/threading.md). Live
+// threads, never the audio callback (the project rules, docs/threading.md). Live
 // behavior (protocol doc section 15) fixed the semantics: receive() blocks
 // until a frame arrives - it may block INDEFINITELY on an idle socket and is
 // not released by timeouts - so the backend dedicates one thread to receiving
@@ -58,7 +58,7 @@ struct ConnectResult
     /// Protocol section 9: a service that refuses the upgrade may answer with
     /// `Retry-After` (integer seconds form; the HTTP-date form is not used here
     /// and maps to 0 = "no hint, use the policy's own backoff"). Transport only
-    /// captures it - deciding what to do with it is the backend and task 010.
+    /// captures it - deciding what to do with it is the backend and the supervisor.
     int retryAfterSec = 0;
 
     /// Body captured on a refused upgrade, truncated (protocol section 9: 429/503
@@ -75,7 +75,7 @@ public:
 
     /// Performs the client handshake. extraHeaders carries the request headers,
     /// each as "Name: value" (the Authorization value is a credential: it is
-    /// never logged by anything that receives it, AGENTS.md 10).
+    /// never logged by anything that receives it, the project rules).
     virtual ConnectResult connect(const std::string& host,
                                   int port,
                                   const std::string& pathAndQuery,

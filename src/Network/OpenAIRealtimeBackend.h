@@ -1,15 +1,15 @@
 #pragma once
 //
-// OpenAIRealtimeBackend - the production translation backend (task 009).
+// OpenAIRealtimeBackend - the production translation backend.
 //
-// It implements the task 007 contract against the protocol documented in
+// It implements the translation contract against the protocol documented in
 // docs/openai-realtime-protocol.md - that file is the single normative source;
 // nothing here may assume a protocol fact the file does not record, and every
 // protocol shape below cites its section. All OpenAI knowledge stops at this
 // translation boundary: the sink sees only SessionState, TranslationError
 // categories and float audio, exactly as the contract header requires.
 //
-// Threading (AGENTS.md 5/6, docs/threading.md). The shape is dictated by the
+// Threading (the project rules, docs/threading.md). The shape is dictated by the
 // live full-duplex diagnostic of 2026-10-02, not by taste: the synchronous
 // WinHTTP WinHttpWebSocketReceive BLOCKS INDEFINITELY while the socket is idle
 // (it ignores receive timeouts) and returns ERROR_WINHTTP_OPERATION_CANCELLED
@@ -28,7 +28,7 @@
 //   * Sizes: every inbound byte is budgeted before it is allocated - 16 MiB
 //     reassembled WebSocket message (transport severs the connection beyond it),
 //     256 KiB decoded audio delta (block dropped, session kept). The bounds and
-//     their margins live in Network/NetworkLimits.h (code review P1, 2026-10-05).
+//     their margins live in Network/NetworkLimits.h.
 //   * openSession() connects, handshakes and returns only when the session is
 //     usable or over - bounded by handshakeTimeoutMs;
 //   * closeSession() asks the sender to stop, sends session.close, waits the
@@ -38,7 +38,7 @@
 //     comes, and joins both threads - which is what guarantees rule 5's "no
 //     sink callback after closeSession() returns";
 //   * submitAudio() touches only a mutex-guarded queue: nothing in this file
-//     is reachable from the audio callback (AGENTS.md 5).
+//     is reachable from the audio callback.
 //   * openSession()/closeSession()/submitAudio() are called from one serialized
 //     worker (the application controller); they are not designed for
 //     concurrent open+close.
@@ -48,7 +48,7 @@
 // conversion done HERE on the worker threads by PcmResampler. The backend
 // accepts 24/44.1/48/88.2/96 kHz on either side - exactly the config's device
 // set plus the wire rate itself, so no device choice the operator may legally
-// save can die at Start Translation (code review P1, 2026-10-05). A pair
+// save can die at Start Translation. A pair
 // outside that set is refused at openSession(), never guessed at.
 
 #include <atomic>
@@ -101,10 +101,10 @@ struct OpenAIRealtimeOptions
     /// frames" and recommends one such chunk per append.
     int cadenceMs = 200;
     /// Backpressure bound for submitAudio(): beyond this the backend refuses,
-    /// it never drops silently (task 012 decides caller behavior). 10 s absorbs
+    /// it never drops silently (the streamer decides caller behavior). 10 s absorbs
     /// transient network stalls measured live.
     int maxQueuedInputMs = 10000;
-    /// Subtitle line policy (task 013), a PRODUCT decision, not a protocol
+    /// Subtitle line policy, a PRODUCT decision, not a protocol
     /// fact: the wire gives no line boundary (protocol sections 6 and 8 - no
     /// `*.done` exists and transcript deltas are append-only fragments), so
     /// the backend assembles fragments into one translated line and calls it
@@ -116,9 +116,9 @@ struct OpenAIRealtimeOptions
     /// way. Tests use small values; 2500 ms is a readable-subtitle guess, to
     /// be confirmed against the operator's eyes at a rig checkpoint.
     int transcriptSettleMs = 2500;
-    /// Capability source for pair validation (task 011): nullptr = the shipped
+    /// Capability source for pair validation: nullptr = the shipped
     /// frozen manifest (`translation::openAiManifest()`). The seam exists
-    /// because AGENTS.md 9 prefers dynamic capabilities when a provider offers
+    /// because the project rules prefers dynamic capabilities when a provider offers
     /// them - this key does not (protocol section 15), so the manifest is the
     /// default, not a fallback; a future dynamic manifest plugs in here.
     const translation::LanguageRegistry* capabilities = nullptr;
@@ -249,7 +249,7 @@ private:
     std::deque<QueuedChunk> queue_;
     int queuedFrames_ = 0;
 
-    // ---- translated subtitle line assembly (task 013) ----
+    // ---- translated subtitle line assembly ----
     // Protocol section 8: transcript deltas are append-only fragments carrying
     // their own spacing; the sink contract wants whole-line snapshots. The
     // assembly lives HERE - protocol semantics stop at this file, and the

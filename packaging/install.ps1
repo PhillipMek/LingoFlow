@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Task 026 - per-user installer, no administrator, no MSI engine, no new
+# Design note - per-user installer, no administrator, no MSI engine, no new
 # dependencies: a scripted copy + Start Menu shortcut. The venue machine is
 # offline and locked down; the fewer moving parts and reboots, the better.
 #

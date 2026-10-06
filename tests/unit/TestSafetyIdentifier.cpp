@@ -1,4 +1,4 @@
-// Tests for Network/SafetyIdentifier.h (code review P2, 2026-10-05).
+// Tests for Network/SafetyIdentifier.h.
 //
 // Three layers, each proven separately: the OS digest against the published
 // FIPS 180-4 test vectors (we do not test our hex loop, we test that the

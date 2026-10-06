@@ -106,7 +106,7 @@ SecretStatus WindowsCredentialStore::store(std::string_view identifier, std::str
     credential.CredentialBlobSize = static_cast<DWORD>(blob.size());
     credential.CredentialBlob = blob.data();
     // The credential belongs to the user's profile, not to a network realm: it
-    // survives process exit and restart on this account. Task 015's PASS rule
+    // survives process exit and restart on this account. persistence rule
     // ("survives restart securely") lives right here - in the OS store, not in
     // our files. ENTERPRISE over LOCAL_MACHINE so a domain account keeps its
     // own credentials; on a single venue machine both simply persist.

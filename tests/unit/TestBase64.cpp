@@ -1,5 +1,5 @@
 //
-// Task 009: base64 codec for the protocol's audio framing
+// Design note: base64 codec for the protocol's audio framing
 // (docs/openai-realtime-protocol.md section 7: every append and every delta
 // carries base64 PCM16). RFC 4648 vectors plus round-trips are the contract.
 

@@ -203,7 +203,7 @@ void MockTranslationBackend::workerLoop()
             deliveredFrames_.fetch_add(chunk.samples.size(), std::memory_order_relaxed);
             utteranceFrames_ += chunk.samples.size();
 
-            // Whole-line snapshots per task 013's meaning of partial text: every
+            // Whole-line snapshots per the established meaning of partial text: every
             // call carries the entire current line, never a fragment of it.
             sink->onPartialText(std::format("{} line: {:.1f} s of audio echoed (no model ran)",
                                             options_.marker,

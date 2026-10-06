@@ -1,14 +1,14 @@
 #pragma once
 //
-// GainStage - the digital gain block of SPEC "Input Gain" / "Output Gain" (task 006).
+// GainStage - the digital gain block of spec "Input Gain" / "Output Gain".
 //
-// One class serves both positions of SPEC "Audio Pipeline", because the requirement is
+// One class serves both positions of spec "Audio Pipeline", because the requirement is
 // the same in each: a level the operator sets, that must never click.
 //
 //   ASIO Input -> [GainStage: input]  -> Ring Buffer  -> translation
 //   Jitter Buffer -> [GainStage: output] -> ASIO Output
 //
-// Contract (SPEC "Input Gain DSP Requirements", AGENTS.md 5):
+// Contract (spec "Input Gain DSP Requirements", the project rules):
 //   * process() runs on the audio callback. It touches no allocation, no lock, no log,
 //     no filesystem, no network, no UI. Work per sample: one finite check, one multiply,
 //     two magnitude compares.
@@ -46,7 +46,7 @@ namespace audio {
 class GainStage final
 {
 public:
-    /// SPEC "Input Gain" suggests -24..+24 dB and keeps the range configurable. The
+    /// spec "Input Gain" suggests -24..+24 dB and keeps the range configurable. The
     /// stage accepts the SPEC ceiling exactly and goes to -96 dB below the SPEC floor, so
     /// a setting the configuration layer validated is never quietly contradicted here.
     static constexpr float kMinGainDb = -96.0f;
@@ -86,7 +86,7 @@ public:
     void setMuted(bool muted) noexcept;
 
     /// Realtime. Applies the ramped coefficient to `frames` samples.
-    /// @{ The in-place form matches the SPEC "Input Gain DSP Requirements" signature;
+    /// @{ The in-place form matches the spec "Input Gain DSP Requirements" signature;
     /// the two-buffer form is for a read-only device pointer, and passing the same
     /// pointer twice is allowed.
     void process(float* data, std::size_t frames) noexcept;
@@ -128,7 +128,7 @@ public:
     std::uint64_t samplesProcessed() const noexcept { return samples_.load(std::memory_order_relaxed); }
 
     /// True once any full-scale sample was seen at either side since the last call.
-    /// The UI uses this for the clipping indicator (SPEC "clipping indication") and does
+    /// The UI uses this for the clipping indicator (spec "clipping indication") and does
     /// not have to remember counters to render it. Consumes the latch.
     bool takeClipIndicator() noexcept { return clipIndicator_.exchange(false, std::memory_order_relaxed); }
 

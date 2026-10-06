@@ -1,14 +1,14 @@
 #pragma once
 //
-// INdiOutput - subtitle transport boundary (task 016 implements it).
+// INdiOutput - subtitle transport boundary (the real output implements it).
 //
 // Boundary rules:
 //   * Publishing is called from a worker/network thread, never from the audio
-//     callback (SPEC "NDI failure must not stop audio").
+//     callback (spec "NDI failure must not stop audio").
 //   * Publishing must ALSO never block its caller: the OpenAI receiver thread
 //     is the single consumer of both translated audio and translated text, so
 //     a publish() that waits on the transport can stall audio delivery one
-//     level up (code review P1, 2026-10-05). Implementations that touch the
+//     level up. Implementations that touch the
 //     network defer that work to their own thread - the product mounts the
 //     real output behind NdiDispatch, and the drop-on-pressure rule
 //     (a stalled consumer costs the oldest queued caption, never the
@@ -61,7 +61,7 @@ public:
     /// the transport's timing.
     virtual bool publish(const SubtitleFrame& frame, std::string& error) = 0;
 
-    /// Captions handed over since the current start (task 017: the diagnostics
+    /// Captions handed over since the current start (the diagnostics
     /// export and the SPEC 55 "Caption events" row need it through the contract,
     /// not through a cast to a concrete output). The default zero is honest for
     /// implementations that count nothing; the Null output overrides it with its

@@ -1,12 +1,12 @@
 # ---------------------------------------------------------------------------
 # lingoflow_core: portable core (no JUCE, no network protocol, no UI)
 #
-# Dependency direction enforced here (AGENTS.md 7):
+# Dependency direction enforced here:
 #   Utils, Config, Diagnostics  <- leaves
 #   Audio                       <- Audio + Diagnostics + Utils
 #   Translation                 <- Translation + Utils
 #   NDI                         <- NDI + Utils
-#   Network                     <- Network + Translation + Security + Utils (task 009;
+#   Network                     <- Network + Translation + Security + Utils;
 #                                  a separate target: nlohmann/json and winhttp stay
 #                                  private to it, and no portable-core module can see
 #                                  the OpenAI protocol)
@@ -102,7 +102,7 @@ target_compile_features(lingoflow_core PUBLIC cxx_std_20)
 # module (and no UI code) can start parsing JSON.
 target_link_libraries(lingoflow_core PRIVATE nlohmann_json::nlohmann_json)
 
-# Task 015: the production credential store speaks to the Windows Credential
+# Design note: the production credential store speaks to the Windows Credential
 # Manager, whose Cred* APIs live in advapi32. A PRIVATE link on a static library
 # still reaches the final executables through CMake's link interface, and the
 # class compiles everywhere (it just reports "unavailable" off Windows).
@@ -117,7 +117,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# lingoflow_platform_asio - the JUCE-backed ASIO adapter (task 004/005).
+# lingoflow_platform_asio - the JUCE-backed ASIO adapter.
 #
 # A separate target because it is the only code that links juce_audio_devices:
 # the portable core stays JUCE-free, and both consumers (the operator app and the
@@ -147,7 +147,7 @@ endif()
 set_target_properties(lingoflow_platform_asio PROPERTIES FOLDER "Core")
 
 # ---------------------------------------------------------------------------
-# lingoflow_network - the OpenAI realtime translation backend (task 009).
+# lingoflow_network - the OpenAI realtime translation backend.
 #
 # A separate target because it owns the protocol: nlohmann/json is PRIVATE
 # here (only Network/*.cpp may parse JSON - same rule the Config module has),
@@ -190,7 +190,7 @@ if(WIN32)
     set_target_properties(lingoflow_network PROPERTIES FOLDER "Core")
 
     # ---------------------------------------------------------------------------
-    # lingoflow_openai_probe - live validation tool (task 009 HUMAN CHECKPOINT).
+    # lingoflow_openai_probe - live validation tool (a venue HUMAN CHECKPOINT).
     # Links the exact backend the operator app will use, so what the probe shows
     # on real traffic is what the product does.
     # ---------------------------------------------------------------------------
@@ -210,7 +210,7 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
-# lingoflow_ndi_real - the production NDI output (task 016) and its probe tool.
+# lingoflow_ndi_real - the production NDI output and its probe tool.
 #
 # License rule (docs/licensing.md, owner decision): the SDK import library
 # Processing.NDI.Lib.x64.lib is NEVER linked. We compile against the SDK's
@@ -314,7 +314,7 @@ if(MSVC)
     target_compile_options(LingoFlow PRIVATE /utf-8 /MP8)
 endif()
 
-# Task 012: the operator application mounts the production translation chain -
+# Design note: the operator application mounts the production translation chain -
 # OpenAIRealtimeBackend inside the ReconnectSupervisor. The Network target is
 # Windows-only (winhttp), and Main.cpp only references it under this define, so
 # a build without it keeps running on the Null backend instead of failing.
@@ -323,7 +323,7 @@ if(WIN32)
     target_compile_definitions(LingoFlow PRIVATE LINGOFLOW_WITH_OPENAI_BACKEND=1)
 endif()
 
-# Task 016: mount the real NDI output when (and only when) it was built above.
+# Design note: mount the real NDI output when (and only when) it was built above.
 if(LINGOFLOW_WITH_NDI)
     target_link_libraries(LingoFlow PRIVATE lingoflow_ndi_real)
     target_compile_definitions(LingoFlow PRIVATE LINGOFLOW_WITH_NDI=1)

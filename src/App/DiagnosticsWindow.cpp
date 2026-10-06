@@ -9,7 +9,7 @@
 namespace liveai {
 namespace {
 
-// The card palette mirrors the operator window (UI-02): the surfaces match,
+// The card palette mirrors the operator window: the surfaces match,
 // the density is allowed to be higher here.
 namespace dink {
 
@@ -47,7 +47,7 @@ juce::Colour valueColour(const std::string& label, const std::string& value)
         // Non-state rows still speak loudly when they moved: underruns,
         // overruns, drops and malformed counts are amber at non-zero, red at
         // the actionable ones. Zero stays neutral - a healthy row needs no
-        // colour (UI-02 В§12).
+        // colour (the UI redesign, section 12).
         const bool counting = label == "underruns" || label == "overruns"
                               || label == "ring dropped (samples)"
                               || label == "output silence (samples)"
@@ -125,9 +125,9 @@ DiagnosticsContent::DiagnosticsContent(ApplicationController& controller)
 
 void DiagnosticsContent::exportPressed()
 {
-    // Task 017's funnel; the note is the receipt either way - success names
+    // the export funnel; the note is the receipt either way - success names
     // the file, failure is as talkable as the success. The export itself is
-    // secret-free by construction (identifiers only, task 015's rule, pinned
+    // secret-free by construction (identifiers only, the established rule, pinned
     // by the export tests).
     std::filesystem::path written;
     std::string note;
@@ -216,7 +216,7 @@ void DiagnosticsContent::paint(juce::Graphics& g)
     }
 
     // The latency table: component | value | kind. The kind column is the
-    // whole point of task 018's design and it stays visible on every row -
+    // whole point of the pipeline's design and it stays visible on every row -
     // nobody may read an estimate as a measurement here.
     {
         auto inner = latencyCard_.reduced(kCardPad, kHeaderH + 2);
@@ -311,7 +311,7 @@ DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller)
 {
     setUsingNativeTitleBar(true);
     // No delete-on-close: close hides, the operator window owns the lifetime
-    // (the same rule the settings dialog established in task 015).
+    // (the same rule the settings dialog established earlier).
 
     auto* content = new DiagnosticsContent(controller);
     content_ = content;

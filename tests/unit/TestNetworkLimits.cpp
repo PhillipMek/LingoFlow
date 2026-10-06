@@ -1,4 +1,4 @@
-// Code review P1 (2026-10-05): an unbounded inbound stream in front of the
+// An earlier review: an unbounded inbound stream in front of the
 // audio path is a production robustness hole regardless of who the sender is.
 // NetworkLimits.h is pure std precisely so these numbers and this arithmetic
 // are testable without a socket, a server or a network: the transport wires

@@ -37,7 +37,7 @@ void DiagnosticsManager::noteError(std::string_view subsystem, std::string_view 
     lastErrorSubsystem_.assign(subsystem);
     lastErrorMessage_.assign(message);
 
-    // Task 017: an error is also an event. One call site keeps the ring and the
+    // Design note: an error is also an event. One call site keeps the ring and the
     // "last error" field telling the same story - two writers could drift.
     appendEventLocked(subsystem, message);
 }

@@ -259,7 +259,7 @@ TEST_CASE("ApplicationController: two different ASIO devices in settings are ref
     controller.setAudioBackendFactory([](const audio::DeviceRequest&, std::string&)
                                       { return std::make_unique<audio::NullAudioBackend>(); });
 
-    // SPEC "ASIO Device Selection": one ASIO device carries both directions, and a
+    // spec "ASIO Device Selection": one ASIO device carries both directions, and a
     // configured device must never be silently replaced.
     std::string error;
     auto cfg = controller.config().current();
@@ -326,7 +326,7 @@ TEST_CASE("ApplicationController: the gains in settings are the gains in effect"
 
     REQUIRE(controller.start());
 
-    // SPEC "Configuration": the Settings area holds the gain, and what the operator reads
+    // spec "Configuration": the Settings area holds the gain, and what the operator reads
     // there is what the pipeline applies - not what the code happened to default to.
     CHECK(controller.engine().inputGainDb() == -6.0f);
     CHECK(controller.engine().outputGainDb() == 3.0f);
@@ -363,7 +363,7 @@ TEST_CASE("ApplicationController: text events reach NDI and diagnostics", "[app]
     controller.onPartialText("good evening");
     controller.onFinalText("good evening, welcome");
 
-    // Async delivery (code review P2): the pipeline hands its listener to a
+    // Async delivery: the pipeline hands its listener to a
     // dispatch worker, so the barrier replaces the old synchronous fire.
     controller.textPipeline().waitForDispatch();
     CHECK(ndiRef->publishedFrames() == 2);
@@ -424,10 +424,10 @@ TEST_CASE("ApplicationController: session uses the configured languages and inst
 TEST_CASE("ApplicationController: a pair outside the capability manifest is refused before the backend",
           "[app][languages]")
 {
-    // Task 011 (AGENTS.md 9): the operator cannot start what the product cannot
+    // Design note: the operator cannot start what the product cannot
     // deliver. The gate reads the versioned manifest - the controller holds no
     // list of its own - and the backend is never opened. Audio keeps running:
-    // a translation-side refusal is recorded, not fatal (AGENTS.md 12).
+    // a translation-side refusal is recorded, not fatal.
     QuietLog quiet;
     ApplicationController controller;
 
@@ -445,7 +445,7 @@ TEST_CASE("ApplicationController: a pair outside the capability manifest is refu
     CHECK(backendRef->lastRequest().pair.output.empty()); // openSession was never reached
     CHECK(controller.sessionState() == translation::SessionState::closed);
 
-    // And the reason is visible to the operator, not swallowed (AGENTS.md 19):
+    // And the reason is visible to the operator, not swallowed:
     // the recorded diagnostics error carries the manifest's own sentence.
     const auto snap = controller.diagnostics().snapshot();
     CHECK(snap.lastErrorSubsystem == "translation");

@@ -1,10 +1,10 @@
 #pragma once
 //
-// MockTranslationBackend - the deterministic mock translation backend of task 007,
-// hardened for the task 010 supervisor (which drives it from a second thread).
+// MockTranslationBackend - the deterministic mock translation deterministic mock backend,
+// hardened for the reconnect supervisor (which drives it from a second thread).
 //
-// It lives in the test tree, not in `src/`, on purpose: task 019 makes "mock
-// behavior leaking into production" a FAIL criterion, and AGENTS.md 19 forbids
+// It lives in the test tree, not in `src/`, on purpose: the mounting design makes "mock
+// behavior leaking into production" a FAIL criterion, and the project rules forbids
 // anything in the product that could be mistaken for a working translation.
 // The Null backend in the core stays a silent shell; this class is the one that
 // behaves, and it exists so that the contract, the controller routing and the
@@ -23,7 +23,7 @@
 //     closes, so a reopened session behaves like a fresh one, and total
 //     counters keep accumulating across sessions.
 //
-// Thread safety (task 010): the reconnect supervisor calls in from its own
+// Thread safety: the reconnect supervisor calls in from its own
 // worker thread while tests inspect from the main thread, so every method
 // takes the mock's lock for bookkeeping and every sink callback is issued
 // AFTER the lock is released - a sink that reaches back into the mock (or into
@@ -32,7 +32,7 @@
 // The lifecycle rules of ITranslationBackend (sink first, one open session,
 // reported transitions, refusal outside connected, idempotent close, no sink
 // callbacks after closeSession() returns) are implemented here as the reference
-// implementation task 009 can be checked against.
+// implementation the OpenAI backend can be checked against.
 
 #include <cstdint>
 #include <functional>
@@ -50,7 +50,7 @@ class MockTranslationBackend final : public translation::ITranslationBackend
 public:
     /// One translated block per this many queued input frames. 0 delivers no
     /// audio at all - which is how the tests prove audio and text channels are
-    /// independent (SPEC "Translation Provider Interface").
+    /// independent (spec "Translation Provider Interface").
     int deliverFrames = 0;
 
     /// Amplitude of a delivered block, applied to the submitted samples.
@@ -62,7 +62,7 @@ public:
 
     /// Sample rate stamped on every delivered block. 0 = "as the session
     /// requested" (the honest provider); a non-zero override exists to exercise
-    /// the receiver's rejection path - task 008 decides which rates are real,
+    /// the receiver's rejection path - the protocol documentation decides which rates are real,
     /// and until then no test may pretend to know them.
     int deliverAtSampleRate = 0;
 
@@ -70,7 +70,7 @@ public:
     bool refuseOpen = false;
     std::string openError = "mock: refusing to open";
 
-    /// Task 010: refuse this many further openSession() calls (then behave
+    /// Design note: refuse this many further openSession() calls (then behave
     /// normally) - the way a test walks the supervisor's backoff ladder.
     /// Set it through setOpenFails() once a supervisor thread may be live.
     int openFailsRemaining = 0;

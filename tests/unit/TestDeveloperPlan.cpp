@@ -27,7 +27,7 @@ struct QuietLog
 
 TEST_CASE("Developer plan: a production configuration plans NOTHING", "[app][developer][isolation]")
 {
-    // The FAIL criterion of task 019 is "mock behaviour leaks into production".
+    // The developer-mode FAIL criterion is "mock behaviour leaks into production".
     // This case is that criterion as executable: the shipped defaults produce a
     // plan whose every field says off and whose badge says nothing at all.
     const auto cfg = config::defaults();
@@ -99,8 +99,8 @@ TEST_CASE("Developer plan: a configured developer run carries every wish and nam
     AppConfig cfg = config::defaults();
     cfg.developer.enabled = true;
     cfg.developer.audioSource = "wav";
-    cfg.developer.wavInputPath = "D:\\rehearsal\\input.wav";
-    cfg.developer.wavOutputPath = "D:\\rehearsal\\record.wav";
+    cfg.developer.wavInputPath = "rehearsal\\\\input.wav";
+    cfg.developer.wavOutputPath = "rehearsal\\\\record.wav";
     cfg.developer.mockTranslation = true;
     cfg.developer.mockLatencyMs = 800;
     cfg.developer.loopback = true;
@@ -109,8 +109,8 @@ TEST_CASE("Developer plan: a configured developer run carries every wish and nam
 
     CHECK(plan.enabled);
     CHECK(plan.useWavSource);
-    CHECK(plan.wavInputPath == "D:\\rehearsal\\input.wav");
-    CHECK(plan.wavOutputPath == "D:\\rehearsal\\record.wav");
+    CHECK(plan.wavInputPath == "rehearsal\\\\input.wav");
+    CHECK(plan.wavOutputPath == "rehearsal\\\\record.wav");
     CHECK(plan.mockTranslation);
     CHECK(plan.mockLatencyMs == 800);
     CHECK(plan.loopback);
@@ -119,9 +119,9 @@ TEST_CASE("Developer plan: a configured developer run carries every wish and nam
     CHECK(plan.captureStreamOff);
 
     CHECK(plan.badge.find("DEVELOPER MODE") != std::string::npos);
-    CHECK(plan.badge.find("WAV 'D:\\rehearsal\\input.wav'") != std::string::npos);
+    CHECK(plan.badge.find("WAV 'rehearsal\\\\input.wav'") != std::string::npos);
     CHECK(plan.badge.find("no device was opened") != std::string::npos);
-    CHECK(plan.badge.find("recording output to 'D:\\rehearsal\\record.wav'") != std::string::npos);
+    CHECK(plan.badge.find("recording output to 'rehearsal\\\\record.wav'") != std::string::npos);
     CHECK(plan.badge.find("mock echo +800 ms") != std::string::npos);
     CHECK(plan.badge.find("LOOPBACK") != std::string::npos);
     CHECK(plan.badge.find("NOT fed") != std::string::npos);

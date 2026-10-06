@@ -246,7 +246,7 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     CHECK(report.find("state=running") != std::string::npos);
     CHECK(report.find("sample_rate=48000") != std::string::npos);
     CHECK(report.find("pipeline_buffer_delay_ms=") != std::string::npos);
-    CHECK(report.find("measured in task 018") != std::string::npos);   // honesty kept in the file
+    CHECK(report.find("measured earlier") != std::string::npos);   // honesty kept in the file
     // The 018 accounting: rows with kinds, the in-flight disclaimer, the limitation line.
     CHECK(report.find("[latency]") != std::string::npos);
     CHECK(report.find("estimated_total_(labeled_rows)=") != std::string::npos);
@@ -258,12 +258,12 @@ TEST_CASE("ApplicationController: the export answers the venue question, and a c
     CHECK(report.find("operator stored the API key") != std::string::npos);
     CHECK(report.find("[audio]") != std::string::npos);
     CHECK(report.find("[translation]") != std::string::npos);
-    // The paired truth of the instructions field (code review P1, 2026-10-05):
+    // The paired truth of the instructions field:
     // unreadable from the log alone, a venue report must see right there that
     // the text was never sent. Default config = not set; if it were set the
     // same key would say "ignored - ...".
     CHECK(report.find("instructions_effect=not set") != std::string::npos);
-    // P1 (2026-10-06): the operator's expectation and the provider's
+    // P1: the operator's expectation and the provider's
     // auto-detection are two separate facts in the file (docs section 5,
     // R8) - a venue reading the export cannot mistake the expectation for a
     // parameter OpenAI was given. The old combined "languages=en->ru" line,
@@ -321,7 +321,7 @@ TEST_CASE("ApplicationController: a credential pasted into a harmless field does
     std::string note;
     REQUIRE(controller.storeApiSecret(canary, note));
 
-    // The operator's own mistake this net catches (task 021): the key pasted
+    // The operator's own mistake this net catches: the key pasted
     // into the free-form instructions field and the NDI stream name. Both ship
     // under key names the secret-SHAPED redactor cannot flag - the value-side
     // pass is the only thing standing between the paste and the venue.

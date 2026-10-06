@@ -1,7 +1,7 @@
 #pragma once
 //
 // Simulated devices - the developer mode's stand-ins for sound hardware
-// (task 019, "allow operation without SoundGrid").
+// ("allow operation without SoundGrid").
 //
 // A SimulatedDeviceBackend is an IAudioBackend that is not a driver: it owns a
 // worker thread that delivers input blocks to the engine and takes output
@@ -12,20 +12,20 @@
 //
 // Honesty rules this module keeps:
 //   * It is a DEVELOPER feature. The composition root mounts it only when the
-//     task 019 developer plan says so (App/DeveloperMode.h); nothing here is
+//     the developer plan says so (App/DeveloperMode.h); nothing here is
 //     selected by default, and the log and the operator badge say which device
 //     story is actually running. The name() strings carry "(developer source)"
 //     so no status line can be mistaken for a SoundGrid machine.
 //   * The file backend refuses a WAV whose sample rate disagrees with the
 //     settings instead of resampling silently - the delivered-audio rule of
-//     task 007 applied to the input side: a wrong speed is an error, not a
+//     the same rate discipline applied to the input side: a wrong speed is an error, not a
 //     detail.
 //   * The pacing thread measures its OWN lateness (lateBlocks): a simulated
 //     device on a busy laptop drifts, pretending otherwise would be fake
 //     instrumentation. The counters are printed when the device closes.
 //   * File I/O happens only on this worker thread between processAudio()
 //     calls - never inside the engine callback - so the realtime rules of
-//     AGENTS.md 5 stay intact for the pipeline itself.
+//     the project rules stay intact for the pipeline itself.
 //
 // Threading: the lifecycle calls (open/start/stop/close/capabilities) come
 // from the controller thread, as with any backend. The pacing worker is owned
