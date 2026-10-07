@@ -505,6 +505,10 @@ TEST_CASE("End to end: restart brings a fresh session with the same wiring",
     // forget the first one.
     CHECK(rig.mock->acceptedSubmits() == 2);
 
+    // Wait for the block to reach the sink, not just to be booked at submit:
+    // the play below asserts its samples in the output.
+    REQUIRE(waitsFor([&] { return rig.mock->deliveredBlocks() >= 2; }));
+
     pump.play(rig.controller.engine());
     for (const float sample : pump.out)
         CHECK(sample == -0.2f);

@@ -154,10 +154,16 @@ bool MockTranslationBackend::submitAudio(const float* samples, int frameCount, s
                 for (float& sample : *block)
                     sample *= gain;
 
-                ++deliveredBlocks_;
-                deliveredFrames_ += static_cast<std::uint64_t>(block->size());
-                emit.push_back([sink, block, rate] {
+                // The counters move AFTER the sink has taken the block: a test
+                // that waits on deliveredBlocks() and then plays must see the
+                // samples in the jitter buffer, not merely a booked delivery.
+                // Incrementing here let the polling test race the callback on a
+                // descheduled worker (the CI runner found it).
+                emit.push_back([this, sink, block, rate] {
                     sink->onTranslatedAudio(block->data(), static_cast<int>(block->size()), rate);
+                    const std::lock_guard lock(mutex_);
+                    ++deliveredBlocks_;
+                    deliveredFrames_ += static_cast<std::uint64_t>(block->size());
                 });
             }
         }
