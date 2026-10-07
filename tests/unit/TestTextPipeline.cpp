@@ -358,6 +358,13 @@ TEST_CASE("TextPipeline: the listener is not under the pipeline lock",
     pipeline.ingestPartial("hello");
     pipeline.waitForDispatch();
 
+    // waitForDispatch covers what was queued when it was CALLED. The empty
+    // final the listener ingested during dispatch is a second event queued
+    // after that call - so its own delivery needs its own pass of the same
+    // barrier. After this returns, both listeners have fully run: eventsSeen,
+    // the ignored-empty count and the history are all in their final state.
+    pipeline.waitForDispatch();
+
     CHECK(snapshotsFromListener.load() >= 1);                // the listener SAW state
     CHECK(eventsSeen.load() >= 2);                           // partial, then its own final
     CHECK(pipeline.ignoredEmpty() >= 1);                     // the terminating recursion step
