@@ -193,8 +193,15 @@ TEST_CASE("ReconnectSupervisor: a dropped session is replaced by a fresh one",
 
     // Recovery is under way: the composite state says reconnecting...
     CHECK(supervisor->state() == SessionState::reconnecting);
-    // ...and it completes into a connected session.
-    REQUIRE(waitUntil([&] { return supervisor->state() == SessionState::connected; }));
+    // ...and it completes into a connected session. The attempt counter is
+    // booked by the worker AFTER openSession returns (while `connected` is
+    // observable inside the call), so the wait must cover it too - the same
+    // counter is asserted below; waiting only on the state raced with the
+    // booking (CI flake class of the Retry-After pin).
+    REQUIRE(waitUntil([&] {
+        return supervisor->state() == SessionState::connected
+            && supervisor->stats().attempts >= 1;
+    }));
 
     // The fresh session replays the stored request verbatim (protocol section 10).
     REQUIRE(m->sessionsOpened() == 2);
@@ -303,7 +310,14 @@ TEST_CASE("ReconnectSupervisor: the service Retry-After hint is honoured",
     const auto t0 = std::chrono::steady_clock::now();
     m->injectError(TranslationErrorCategory::connection, "slow_down", /*fatal=*/true,
                    /*retryAfterMs=*/250);
-    REQUIRE(waitUntil([&] { return supervisor->state() == SessionState::connected; }));
+    // The wait must cover the counter asserted below. `connected` becomes
+    // observable inside openSession (the hook books it), while the attempt is
+    // counted when the worker resumes after openSession returned - waiting
+    // only on the state let a preempted worker lose the race on a loaded CI.
+    REQUIRE(waitUntil([&] {
+        return supervisor->state() == SessionState::connected
+            && supervisor->stats().attempts >= 1;
+    }));
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - t0)
                              .count();
@@ -650,7 +664,12 @@ TEST_CASE("ReconnectSupervisor: transient refusals recover, the account gate doe
     CHECK(supervisor->stats().terminalFaults == 0);
 
     m->injectError(TranslationErrorCategory::serviceOverloaded, "overloaded", /*fatal=*/true);
-    REQUIRE(waitUntil([&] { return supervisor->state() == SessionState::connected; }));
+    // Wait for the second recovery AND its attempt booking (counted after
+    // openSession returns): the stability read below compares against it.
+    REQUIRE(waitUntil([&] {
+        return supervisor->state() == SessionState::connected
+            && supervisor->stats().attempts >= 2;
+    }));
     CHECK(supervisor->stats().recoveries == 2);
 
     // The account gate: terminal, no background hammering of a door that only
