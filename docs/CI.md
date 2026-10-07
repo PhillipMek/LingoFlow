@@ -111,7 +111,7 @@ Release exe would be file-locked); stop external ASIO hosts if you want plain
 ## Artifacts
 
 - `ci-diagnostics` (always, 7 days): build logs, ctest output, smoke logs,
-  and the app's own log file from the run (secret-free by design; the
-  settings file is not collected).
+  and the app's own log file from the run under `appdata/` (secret-free by
+  design; the settings file is not collected).
 - `LingoFlow-Windows-Release` (success only, 14 days): the Release executable
   as built by CI. CI is not a release pipeline - nothing is published.

@@ -180,14 +180,28 @@ jobs:
           exit 1
 
       # --------------------------------------------------------- artifacts
+      - name: Collect app logs into ci-logs (always)
+        if: always()
+        shell: pwsh
+        run: |
+          # upload-artifact takes a single root directory, and the app writes
+          # its own log under %APPDATA% - outside the workspace. It is copied
+          # in here rather than listed as a second search path (a second path
+          # makes the action compute the drive root as the artifact root and
+          # refuse the upload).
+          New-Item -ItemType Directory -Force ci-logs | Out-Null
+          $appLogs = Join-Path $env:APPDATA 'LingoFlow\logs'
+          if (Test-Path $appLogs) {
+              New-Item -ItemType Directory -Force ci-logs/appdata | Out-Null
+              Copy-Item -Path (Join-Path $appLogs '*') -Destination ci-logs/appdata/ -ErrorAction SilentlyContinue
+          }
+
       - name: Upload diagnostics (always - build/ctest/smoke/app logs)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ci-diagnostics
-          path: |
-            ci-logs/
-            ~/AppData/Roaming/LingoFlow/logs/
+          path: ci-logs/
           if-no-files-found: ignore
           retention-days: 7
 
