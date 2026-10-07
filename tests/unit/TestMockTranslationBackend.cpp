@@ -195,25 +195,37 @@ TEST_CASE("Mock translation: the echo arrives labelled, at the requested rate, a
     std::this_thread::sleep_for(10ms);
     CHECK(sink.deliveredCount() == 0);
 
-    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    // The worker hands the echo over as two separate sink callbacks - audio
+    // first, then its partial text - and a slow runner can deschedule it
+    // between them. The wait must therefore cover everything asserted below,
+    // not just the first callback to land.
+    const auto echoDeadline = std::chrono::steady_clock::now() + 3s;
 
-    while (sink.deliveredCount() == 0 && std::chrono::steady_clock::now() < deadline)
+    auto echoArrived = [&sink] {
+        const std::lock_guard lock(sink.mutex_);
+        return sink.deliveredFrames == 480 && !sink.partials.empty();
+    };
+
+    while (!echoArrived() && std::chrono::steady_clock::now() < echoDeadline)
         std::this_thread::sleep_for(20ms);
 
-    CHECK(sink.deliveredCount() == 480);
-    CHECK(sink.lastRate == 48000);   // the requested output rate, delivered at face value
-
-    // Text events exist and SAY mock - an unlabeled mock is indistinguishable
-    // from a malfunctioning provider, and this task forbids that ambiguity.
     {
         const std::lock_guard lock(sink.mutex_);
+        CHECK(sink.deliveredFrames == 480);
+        CHECK(sink.lastRate == 48000);   // the requested output rate, delivered at face value
+
+        // Text events exist and SAY mock - an unlabeled mock is indistinguishable
+        // from a malfunctioning provider, and this task forbids that ambiguity.
         REQUIRE_FALSE(sink.partials.empty());
         CHECK(sink.partials.front().rfind("mock", 0) == 0);
     }
 
     // An utterance ends after the silence: exactly one final, containing the
-    // echoed length in seconds.
-    while (sink.finalsCopy().empty() && std::chrono::steady_clock::now() < deadline)
+    // echoed length in seconds. Its own budget - the echo wait above must not
+    // have eaten it on a slow machine.
+    const auto finalDeadline = std::chrono::steady_clock::now() + 3s;
+
+    while (sink.finalsCopy().empty() && std::chrono::steady_clock::now() < finalDeadline)
         std::this_thread::sleep_for(20ms);
 
     const auto finals = sink.finalsCopy();
