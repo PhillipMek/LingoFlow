@@ -294,7 +294,8 @@ settled` — по ним видно, как часто и с какими пау
 - `build-release\src\Release\lingoflow_openai_probe.exe` + `test_en_24k.wav` (шаг 9, опция);
 - `build-release\src\Release\lingoflow_ndi_probe.exe` (шаг 11; нужен установленный
   NDI 6 runtime на самой машине — без него приложение честно живёт без подписей);
-- установленный **VC++ 2015-2022 x64 redistributable** — бинари линкуют динамический CRT;
+- бинари self-contained (статический CRT, проверено dumpbin'ом на
+  LingoFlow.exe и всех probe'ах) — **VC++ redistributable не нужен**;
 - этот файл;
 - для воспроизводимости: коммит, с которого собрано (см. git log).
   Если ноут площадки = эта dev-PC — ничего копировать не надо, всё уже на месте,
