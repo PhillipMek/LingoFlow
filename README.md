@@ -1,8 +1,12 @@
-<img src="assets/LingoFlow.png" alt="LingoFlow icon" width="96" height="96" align="left" hspace="16">
+<p align="center">
+  <img src="assets/LingoFlow.png" alt="LingoFlow icon" width="96" height="96">
+</p>
 
-# LingoFlow
+<h1 align="center">LingoFlow</h1>
 
-[![CI](https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml/badge.svg)](https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml)
+<p align="center">
+  <a href="https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml"><img src="https://github.com/PhillipMek/LingoFlow/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
 
 **Live AI Interpreter.** LingoFlow is a Windows desktop application for real-time
 simultaneous interpretation at live events: the console feed is translated on the
