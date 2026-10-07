@@ -80,12 +80,12 @@ From the repository root, in PowerShell:
 # Debug
 cmake -S . -B build-debug -DFETCHCONTENT_BASE_DIR="$PWD\.fc-cache"
 cmake --build build-debug --config Debug --parallel
-cmake --test-dir build-debug -C Debug --output-on-failure
+ctest --test-dir build-debug -C Debug --output-on-failure
 
 # Release
 cmake -S . -B build-release -DFETCHCONTENT_BASE_DIR="$PWD\.fc-cache"
 cmake --build build-release --config Release --parallel
-cmake --test-dir build-release -C Release --output-on-failure
+ctest --test-dir build-release -C Release --output-on-failure
 
 # smoke classification (identical logic to the workflow)
 & build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe --dev --smoke;   $LASTEXITCODE  # expect 0

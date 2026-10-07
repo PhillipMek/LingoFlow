@@ -93,11 +93,11 @@ jobs:
         id: tests-debug
         shell: pwsh
         run: |
-          $discovery = cmake --test-dir build-debug -C Debug -N *>&1 |
+          $discovery = ctest --test-dir build-debug -C Debug -N *>&1 |
               Tee-Object -FilePath ci-logs/ctest-discovery-debug.log
           $discovered = @($discovery | Select-String -Pattern '^\s*Test\s+#\d+:').Count
           "discovered=$discovered" | Out-File -Append $env:GITHUB_OUTPUT
-          cmake --test-dir build-debug -C Debug --output-on-failure *>&1 |
+          ctest --test-dir build-debug -C Debug --output-on-failure *>&1 |
               Tee-Object -FilePath ci-logs/ctest-debug.log
           exit $LASTEXITCODE
 
@@ -130,11 +130,11 @@ jobs:
         id: tests-release
         shell: pwsh
         run: |
-          $discovery = cmake --test-dir build-release -C Release -N *>&1 |
+          $discovery = ctest --test-dir build-release -C Release -N *>&1 |
               Tee-Object -FilePath ci-logs/ctest-discovery-release.log
           $discovered = @($discovery | Select-String -Pattern '^\s*Test\s+#\d+:').Count
           "discovered=$discovered" | Out-File -Append $env:GITHUB_OUTPUT
-          cmake --test-dir build-release -C Release --output-on-failure *>&1 |
+          ctest --test-dir build-release -C Release --output-on-failure *>&1 |
               Tee-Object -FilePath ci-logs/ctest-release.log
           exit $LASTEXITCODE
 
