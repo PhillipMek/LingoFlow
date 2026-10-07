@@ -29,7 +29,7 @@ does not allow. Therefore, with JUCE under AGPLv3:
    redistribution terms at that moment allow it; the installer should instead
    require NDI runtime/tools to be present.
 
-This is a a binding implementation requirement, not a suggestion, and the
+This is a binding implementation requirement, not a suggestion, and the
 `INdiOutput` design already supports it (no NDI type in any header).
 
 ## Source-offer obligation (AGPLv3)
@@ -43,6 +43,12 @@ must have:
   our build scripts, in a form a recipient can rebuild;
 * a visible licence notice in the UI (About/Settings) pointing at where the source is;
 * no obfuscation of the application sources.
+
+Status of these obligations in the current build: the repository and the release
+package carry the full chain (`LICENSE`, `THIRD_PARTY_NOTICES.md`, `LICENSES/`
+with the verbatim third-party texts, and the package places them next to the
+executable). The in-app licence notice is NOT yet implemented - an open release
+item, deliberately documented here rather than claimed anywhere it is not true.
 
 If the product ever needs to be closed-source, the only compliant route is buying the
 JUCE 9 commercial licence and removing the AGPL combination - that is a business

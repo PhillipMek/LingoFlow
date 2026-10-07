@@ -1,0 +1,16 @@
+# Keep the SHA-pinned actions current (docs/CI.md explains the pinning).
+# No package-ecosystem entries for the C++ side: the dependencies are vendored
+# or FetchContent-pinned in CMakeLists, which dependabot cannot bump - the
+# pins and their licences are reviewed manually (docs/dependencies.md).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"

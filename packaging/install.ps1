@@ -30,6 +30,16 @@ Copy-Item (Join-Path $PackageDir 'LingoFlow.exe') (Join-Path $TargetDir 'LingoFl
 if (Test-Path (Join-Path $PackageDir 'VERSION.txt')) {
     Copy-Item (Join-Path $PackageDir 'VERSION.txt') (Join-Path $TargetDir 'VERSION.txt') -Force
 }
+# the licence chain installs WITH the binary (the licensing policy forbids an
+# installer that hides it); the package build already fails if these are absent.
+foreach ($licence in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+    if (Test-Path (Join-Path $PackageDir $licence)) {
+        Copy-Item (Join-Path $PackageDir $licence) (Join-Path $TargetDir $licence) -Force
+    }
+}
+if (Test-Path (Join-Path $PackageDir 'LICENSES')) {
+    Copy-Item (Join-Path $PackageDir 'LICENSES') (Join-Path $TargetDir 'LICENSES') -Recurse -Force
+}
 
 if (-not $NoShortcut) {
     # PS 5.1/.NET Framework name for the per-user Start Menu Programs folder is

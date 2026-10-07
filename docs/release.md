@@ -6,14 +6,22 @@ diagnostics export).
 
 ## What ships
 
-A single executable. `packaging/release-package.ps1` assembles
-`out/release/LingoFlow-0.1.0/`:
+A single executable plus its licence chain. `packaging/release-package.ps1`
+assembles `out/release/LingoFlow-0.1.0/`:
 
 | File | Role |
 |---|---|
 | `LingoFlow.exe` (8.2 MB) | the product - icon, version info and manifest compiled in |
 | `LingoFlow-symbols.pdb` (85 MB, RelWithDebInfo) | crash-analysis symbols; carried to a venue in a folder, not installed |
 | `VERSION.txt` | the version stamp next to the binary |
+| `LICENSE` | the AGPLv3 text the program is offered under |
+| `THIRD_PARTY_NOTICES.md` | the combined-work notice (JUCE, ASIO SDK, nlohmann/json, Catch2, NDI, Waves, OpenAI) |
+| `LICENSES/` | verbatim third-party licence texts (JUCE notice, ASIO SDK notice, GPLv3, MIT, BSL-1.0) |
+
+The packaging script FAILS if `LICENSE`, `THIRD_PARTY_NOTICES.md` or `LICENSES/`
+are missing from the repository - an AGPL binary may not ship without its
+paperwork. `install.ps1` copies the licence chain into the install folder next
+to the executable; `uninstall.ps1` removes it with the folder.
 
 ## Verified runtime dependencies (the FAIL criterion: no developer-only dependencies)
 

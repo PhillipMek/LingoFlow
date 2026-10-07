@@ -9,9 +9,9 @@ recorded in `docs/licensing.md`.
 | JUCE | 9.0.3 | AGPLv3 | `third_party/JUCE/` | 3885 files, 53.6 MB |
 | Steinberg ASIO SDK | 2.3.4 | GPLv3 | `third_party/asiosdk/` | 27 files, 0.4 MB |
 
-Copied from the official local trees that were used to verify them
-(`D:\Рабочий\juce-9.0.3-windows\JUCE`, `D:\Рабочий\ASIO-SDK_2.3.4_2025-10-15\ASIOSDK`),
-which remain on disk for reference but are no longer build inputs: `CMakeLists.txt`
+Copied verbatim from the official upstream release archives (JUCE 9.0.3 source,
+Steinberg ASIO SDK 2.3.4) after verifying the trees against them; the local
+copies used for that verification are not build inputs: `CMakeLists.txt`
 now defaults `LIVEAI_JUCE_PATH` to `third_party/JUCE`.
 
 ## What is included and why
@@ -52,10 +52,10 @@ Do not relax either of these.
   `NDI_SDK_DIR`) - proprietary NewTek licence. Additionally, with JUCE under AGPLv3,
   linking `Processing.NDI.Lib.x64.lib` into the product would add a restriction the
   AGPL does not allow, so NDI is reached by runtime loading of
-  `Processing.NDI.Lib.x64.dll` behind `INdiOutput` (task 016 requirement).
+  `Processing.NDI.Lib.x64.dll` behind `INdiOutput` (see `docs/licensing.md`).
 * **Waves SoundGrid driver** - a system-installed product; never copied in.
-* **OpenAI Realtime** - a network service; protocol code will live in
-  `src/Network/` (task 009).
+* **OpenAI Realtime** - a network service; the protocol code lives in
+  `src/Network/`.
 * **Catch2, nlohmann/json** - fetched by CMake (`FetchContent`), with
   `-DLIVEAI_FETCH_CATCH2=OFF` / `-DLIVEAI_FETCH_NLOHMANN_JSON=OFF` to use installed
   copies offline.

@@ -29,6 +29,17 @@ Copy-Item $exe (Join-Path $package 'LingoFlow.exe')
 if (Test-Path $pdb) { Copy-Item $pdb (Join-Path $package 'LingoFlow-symbols.pdb') }
 else { Write-Warning 'RelWithDebInfo pdb not found - package will lack venue debug symbols (not required to run)' }
 
+# The AGPL chain travels WITH the binary: a recipient of the package alone has
+# the licence, the combined-work notice and the verbatim third-party texts.
+$repoRoot = Join-Path $PSScriptRoot '..'
+foreach ($licence in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+    $src = Join-Path $repoRoot $licence
+    if (-not (Test-Path $src)) { throw "release package would be incomplete: $licence missing from the repository" }
+    Copy-Item $src (Join-Path $package $licence)
+}
+if (-not (Test-Path (Join-Path $repoRoot 'LICENSES'))) { throw 'release package would be incomplete: LICENSES/ missing from the repository' }
+Copy-Item (Join-Path $repoRoot 'LICENSES') (Join-Path $package 'LICENSES') -Recurse
+
 $deps = @()
 if ($Dumpbin) {
     $deps = & $Dumpbin /DEPENDENTS $exe | Select-String -Pattern '^\s+(\S+\.dll)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.ToLower() }
@@ -47,6 +58,9 @@ Set-Content -Path (Join-Path $package 'VERSION.txt') -Value $Version -Encoding A
 
 Write-Output "PACKAGE: $package"
 Write-Output ("  LingoFlow.exe       " + [Math]::Round((Get-Item (Join-Path $package 'LingoFlow.exe')).Length / 1MB, 1) + " MB")
+Write-Output '  LICENSE             (AGPLv3)'
+Write-Output '  THIRD_PARTY_NOTICES.md'
+Write-Output ("  LICENSES/           " + @(Get-ChildItem (Join-Path $package 'LICENSES')).Count + ' verbatim third-party licence texts')
 if (Test-Path (Join-Path $package 'LingoFlow-symbols.pdb')) {
     Write-Output ("  symbols.pdb         " + [Math]::Round((Get-Item (Join-Path $package 'LingoFlow-symbols.pdb')).Length / 1MB, 1) + " MB (for crash analysis, not installed)")
 }

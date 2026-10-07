@@ -10,8 +10,8 @@
 
 **Live AI Interpreter.** LingoFlow is a Windows desktop application for real-time
 simultaneous interpretation at live events: the console feed is translated on the
-fly and returned to the audience channel, with optional burned-in subtitles over
-NDI.
+fly and returned to the audience channel, with optional subtitle output over NDI
+for receivers to display or burn in.
 
 ```text
 FOH/Console -> Waves SoundGrid -> ASIO -> LingoFlow -> OpenAI Realtime Translation
