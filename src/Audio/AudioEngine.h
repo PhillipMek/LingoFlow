@@ -17,10 +17,20 @@
 // survive deactivate() and are re-configured (not recreated) by the next activate().
 // A device restart must not silently reset the room's levels.
 //
-// Safety rule that the buffer design enforces: the only source of audio on the output
-// side is the jitter buffer, and only the network/loopback side writes into it. Input
-// audio can therefore never leak to the audience - an underrun plays silence, not the
-// microphone.
+// Safety rule that the buffer design enforces: while the engine routes the
+// TRANSLATION to the audience (OutputRouting::translation, the normal show),
+// the only source of output audio is the jitter buffer, and only the
+// network/loopback side writes into it - input audio can never leak out by
+// accident, and an underrun plays silence, not the microphone.
+//
+// The other two routes exist because the OPERATOR asked for them (the Off
+// target language): bypassOriginal copies the capture block straight to the
+// output inside one callback - the explicit, deliberate pass-through of the
+// Off/bypass mode, never an accident of an empty jitter buffer - and silence
+// fills the output while the device keeps being serviced. The leak the rule
+// protects against is "the microphone reaches the audience unplanned"; all
+// three routes are planned, and the active one is visible in the panel, the
+// export and the engine getter.
 //
 // The input rings are drained by whoever is consuming translation: the Windows build ships the
 // loopback worker; in production the OpenAI streaming worker. While nobody is attached, the
@@ -34,6 +44,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "Audio/AudioJitterBuffer.h"
@@ -45,6 +56,17 @@
 namespace liveai {
 
 class DiagnosticsManager;
+
+/// Where the output block gets its samples: the Off-mode routing the venue
+/// follow-up asked for. A closed vocabulary; the engine holds it as an int so
+/// the callback can read it with a relaxed load - never as a lock, never
+/// recomputed in the callback.
+enum class OutputRouting : int
+{
+    translation = 0,   ///< normal show: the jitter buffer is the only source
+    bypassOriginal = 1,///< off+bypass: capture copied straight to the output
+    silence = 2,       ///< off+silence: the output is silent, device still serviced
+};
 
 class AudioEngine final : public audio::IAudioProcessor
 {
@@ -113,6 +135,25 @@ public:
     /// deactivate like the other engine totals: an operator must be able to
     /// ask "how much did the Stop throw out" after the fact).
     std::uint64_t outputDiscardedFrames() const noexcept { return outputDiscardedFrames_.load(std::memory_order_relaxed); }
+
+    /// The Off-mode routing. The controller resolves the settings to this enum
+    /// once (never a string compare in the callback) and stores it here with a
+    /// relaxed write; the callback loads it once per block, so the routing
+    /// decision is uniform across the whole block: a channel cannot bypass on
+    /// one half of a block and read the jitter on the other. Callable from any
+    /// thread; nothing to wait for.
+    void setOutputRouting(OutputRouting routing) noexcept
+    {
+        outputRouting_.store(static_cast<int>(routing), std::memory_order_relaxed);
+    }
+
+    OutputRouting outputRouting() const noexcept
+    {
+        return static_cast<OutputRouting>(outputRouting_.load(std::memory_order_relaxed));
+    }
+
+    /// The routing's own name for a status line (translation/bypass/silence).
+    static std::string_view nameOf(OutputRouting routing) noexcept;
 
     // ------------------------------------------------------------------ gain (006)
     /// spec "Input Gain" and "Output Gain": two independent digital trims, settable at
@@ -294,6 +335,7 @@ private:
     std::atomic<bool> pipelineReady_{ false };
     std::atomic<bool> consumerAttached_{ false };
     std::atomic<bool> outputDiscardPending_{ false };   ///< requestOutputDiscard() -> callback
+    std::atomic<int> outputRouting_{ static_cast<int>(OutputRouting::translation) };
     std::atomic<int> inputChannels_{ 0 };
     std::atomic<int> outputChannels_{ 0 };
     std::atomic<int> jitterMs_{ 120 };

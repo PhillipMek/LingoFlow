@@ -12,6 +12,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Subtitles/SubtitleStyle.h"
@@ -24,7 +25,26 @@ namespace liveai {
 /// geometry and appearance. A v1 file still loads (its two ndi keys survive,
 /// everything new takes its default: video mode, 1920x1080@25, the task's
 /// style numbers), and the loader still refuses anything from the future.
-inline constexpr std::uint32_t kConfigSchemaVersion = 2;
+/// v3 (2026-10-11): translation.offOutput - what the output does while the
+/// target language is Off (bypass the original / silence the output). A v2 or
+/// v1 file loads unchanged: the key is absent, the default "bypass" survives,
+/// exactly the migration that made v1 files work under v2.
+inline constexpr std::uint32_t kConfigSchemaVersion = 3;
+
+/// The target-language list carries this one entry that is not a language:
+/// selecting it turns translation OFF. The value lives in
+/// translation.outputLanguage because that is where the operator's decision
+/// belongs (the task's wording: a point in the target list, not a separate
+/// switch), and everything downstream - the pair check, the session request,
+/// the status chip - recognizes this literal instead of pretending "off" is
+/// a language the model can speak.
+inline constexpr std::string_view kTranslationOffLanguage = "off";
+
+/// True when the operator turned translation off through the target list.
+inline constexpr bool isTranslationOff(const std::string& outputLanguage) noexcept
+{
+    return outputLanguage == kTranslationOffLanguage;
+}
 
 struct AudioSettings
 {
@@ -101,6 +121,19 @@ struct TranslationSettings
     /// 0 means "reopen exactly at the announced instant" - allowed, not
     /// recommended: the reopen itself takes time and the provider does not wait.
     int expirySafetyMarginSeconds = 300;
+
+    /// What the OUTPUT does while translation is off (§3): the original audio
+    /// is routed straight to the output with no translation delay ("bypass"),
+    /// or the output goes silent ("silence"). Kept in the translation section
+    /// because it is a property of the Off target, not of the device. The
+    /// realtime callback never reads it directly - the controller resolves it
+    /// to an AudioEngine::OutputRouting once, off the callback.
+    std::string offOutputBehavior = "bypass";
+
+    /// The two legal values of offOutputBehavior. Names are the config
+    /// vocabulary (schema-validated) - the engine speaks an enum, not strings.
+    static constexpr std::string_view kOffBypass = "bypass";
+    static constexpr std::string_view kOffSilence = "silence";
 
     friend constexpr bool operator==(const TranslationSettings&, const TranslationSettings&) = default;
 };

@@ -960,3 +960,97 @@ TEST_CASE("ConfigStore: startup file prefers the current location", "[config][st
     CHECK(config::ConfigStore::resolveStartupFile(current, legacy, fromLegacy) == current);
     CHECK_FALSE(fromLegacy);
 }
+
+TEST_CASE("ConfigSchema: the Off target validates as a decision, not as a language", "[config][schema][off]")
+{
+    // "off" in the target list (�3) must survive validation with its chosen
+    // behavior - and the vocabulary of that behavior is closed: a value the
+    // engine cannot route to is refused and repaired, never guessed.
+    auto cfg = config::defaults();
+    cfg.translation.outputLanguage = "off";
+    cfg.translation.offOutputBehavior = "silence";
+    CHECK(config::validate(cfg).empty());
+
+    cfg.translation.offOutputBehavior = "bypass";
+    CHECK(config::validate(cfg).empty());
+
+    // A nonsense behavior is a problem naming its own field:
+    cfg.translation.offOutputBehavior = "loudness";
+    const auto problems = config::validate(cfg);
+    REQUIRE(problems.size() == 1);
+    CHECK(problems[0].field == "translation.offOutputBehavior");
+
+    // And "off" is allowed on the TARGET only: the source is auto-detected
+    // (protocol docs section 12.3), so an off-source is nonsense the schema
+    // closes instead of forwarding to a session that cannot hold it.
+    auto bad = config::defaults();
+    bad.translation.inputLanguage = "off";
+    const auto badProblems = config::validate(bad);
+    REQUIRE(badProblems.size() == 1);
+    CHECK(badProblems[0].field == "translation.inputLanguage");
+}
+
+TEST_CASE("ConfigSchema: off fields round-trip and repair to the documented default",
+          "[config][schema][off][repair]")
+{
+    const std::string text = R"({
+        "schemaVersion": 3,
+        "translation": {
+            "inputLanguage": "en",
+            "outputLanguage": "off",
+            "offOutputBehavior": "silence"
+        }
+    })";
+
+    AppConfig parsed;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, parsed, problems, error));
+    CHECK(problems.empty());
+    CHECK(parsed.translation.outputLanguage == "off");
+    CHECK(parsed.translation.offOutputBehavior == "silence");
+
+    // Out of vocabulary: reported for that field, repaired to the default,
+    // while the sibling decisions (the operator's "off") survive untouched.
+    const std::string bad = R"({
+        "schemaVersion": 3,
+        "translation": {
+            "inputLanguage": "off",
+            "outputLanguage": "off",
+            "offOutputBehavior": "teleport"
+        }
+    })";
+
+    AppConfig repaired;
+    ConfigProblems repairProblems;
+    REQUIRE(config::fromJsonText(bad, repaired, repairProblems, error));
+    CHECK_FALSE(repairProblems.empty());
+    // Both ends of that pair are nonsense together (input cannot be off, and
+    // two identical tags are one pair too many), so the per-field repair
+    // restores both to the documented defaults - while the closed-vocabulary
+    // field is repaired to ITS default. The operator rewriting the file later
+    // gets clean values, never a half-repaired contradiction.
+    CHECK(repaired.translation.inputLanguage == config::defaults().translation.inputLanguage);
+    CHECK(repaired.translation.outputLanguage == config::defaults().translation.outputLanguage);
+    CHECK(repaired.translation.offOutputBehavior == "bypass");
+}
+
+TEST_CASE("ConfigSchema: a v2 settings file grows the v3 off-behavior default, not problems",
+          "[config][schema][migration]")
+{
+    // The same rule that made v1 files work under v2: the key simply was not
+    // there, the new default is, and the operator's data (an "off" decision
+    // written as a plain string before v3 was still honored) survives.
+    const std::string v2Text = R"({
+        "schemaVersion": 2,
+        "translation": { "inputLanguage": "en", "outputLanguage": "ru" }
+    })";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(v2Text, restored, problems, error));
+    CHECK(restored.translation.offOutputBehavior == "bypass");
+    CHECK(restored.translation.outputLanguage == "ru");
+    CHECK(restored.translation == config::defaults().translation);   // no surprise fields
+}

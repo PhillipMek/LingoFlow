@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "App/UiModel.h"
+#include "TestTempDir.h"
 #include "Audio/AudioEngine.h"
 #include "Config/ConfigSchema.h"
 #include "Utils/Log.h"
@@ -612,4 +613,62 @@ TEST_CASE("UiModel: raw details carry the truth and never a secret",
         CHECK(row.value.find(secret) == std::string::npos);
     for (const auto& line : diag.rawDetails)
         CHECK(line.find(secret) == std::string::npos);
+}
+
+TEST_CASE("UiModel: the target list offers Off, and the panel says what Off means",
+          "[app][ui][model][off]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    ApplicationController controller;
+    std::string note;
+    REQUIRE(controller.loadSettings(temp.file("config.json"), note));
+
+    // The decision the operator makes: target Off, output behavior silence.
+    auto cfg = controller.config().current();
+    cfg.translation.outputLanguage = "off";
+    cfg.translation.offOutputBehavior = "silence";
+    REQUIRE(controller.updateSettings(cfg, note));
+
+    const OperatorPanel panel = buildOperatorPanel(controller, {});
+
+    // Off is a point in the TARGET list - last, so a fast click cannot hit
+    // it first - with the settings' value surviving the list round-trip.
+    REQUIRE_FALSE(panel.targetLanguages.empty());
+    CHECK(panel.targetLanguages.back().value == "off");
+    CHECK(panel.targetLanguages.back().label.find("OFF") != std::string::npos);
+    CHECK(panel.selectedTarget == static_cast<int> (panel.targetLanguages.size()) - 1);
+    CHECK(panel.translationOff);
+
+    // The chip is the exact word the screen maps to hollow-and-muted: the
+    // operator asking "is translation running?" reads the truth in one glyph.
+    CHECK(panel.sessionState == "off");
+
+    // No nag: "off" is not an unsupported PAIR, it is the absence of one.
+    CHECK(panel.languagePairWarning.empty());
+
+    // The behavior selector offers exactly the schema's closed vocabulary,
+    // and lands on what the settings say.
+    REQUIRE(panel.offOutputBehaviors.size() == 2);
+    CHECK(panel.offOutputBehaviors[0].value == "bypass");
+    CHECK(panel.offOutputBehaviors[1].value == "silence");
+    CHECK(panel.selectedOffOutputBehavior == 1);
+
+    // And the diagnostics surface tells the live routing - the engine's fact,
+    // not the config's intention.
+    CHECK(counterValue(controller, "output routing")
+          == std::string(AudioEngine::nameOf(controller.engine().outputRouting())));
+
+    // Back to a language: the list still holds Off selectable, the chip is
+    // the session's word again, and the behavior stays stored (switching a
+    // target must not silently edit a different decision).
+    cfg = controller.config().current();
+    cfg.translation.outputLanguage = "ru";
+    REQUIRE(controller.updateSettings(cfg, note));
+    const OperatorPanel back = buildOperatorPanel(controller, {});
+    CHECK_FALSE(back.translationOff);
+    CHECK(back.sessionState != "off");
+    REQUIRE(back.selectedTarget >= 0);
+    CHECK(back.targetLanguages[static_cast<std::size_t> (back.selectedTarget)].value == "ru");
+    CHECK(back.selectedOffOutputBehavior == 1);   // still silence - untouched
 }

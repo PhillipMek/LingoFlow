@@ -391,6 +391,11 @@ but stays aligned with "now") - the docs do not choose it for us.
    detection, not by declaration.
 4. **Dynamic voice adaptation**: translated speech follows the source speaker's tone,
    pitch and style; in multi-speaker audio the output voice changes with the input [R8].
+   Product decision (venue task, 2026-10-11): there is therefore nothing to "fix"
+   client-side - no session of this app (create, reconnect rotation, or live target
+   change) ever sends a voice parameter, the UI offers no voice knob, and no code path
+   may invent one; the variation a room hears between speakers is this documented
+   provider behavior, and the diagnostics export says so in one line (`voice_identity`).
 5. **Same-language speech may produce silence**: the model "tries not to translate
    speech that is already in the selected output language" [R8]. Documented production
    pattern: duck (not mute) the original audio and keep source captions available [R8].

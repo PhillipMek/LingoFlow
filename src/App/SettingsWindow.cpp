@@ -333,7 +333,8 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     inputGainSlider_.setScrollWheelEnabled(false);
     outputGainSlider_.setScrollWheelEnabled(false);
     hint(audioRestartHintLabel_,
-         "Device, sample rate, buffer, channels and languages take effect on the next Start.",
+         "Device, sample rate, buffer and channels take effect on the next Start; the target "
+         "language (and the Off behavior) applies while running.",
          *audioPage_);
 
     // -------------------------------------------------------------- translation
@@ -347,6 +348,16 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     styleBox(sourceChoice_, *translationPage_);
     caption(targetCaption_, "Target language", *translationPage_);
     styleBox(targetChoice_, *translationPage_);
+    // §3: Off is a point in the target list; what the audience hears while
+    // off is this separate, persisted choice - not a third list entry and not
+    // a voice switch. Both values come from the panel's closed vocabulary, so
+    // the selector cannot offer what the schema would refuse.
+    caption(offBehaviorCaption_, "When the target is Off, the output:", *translationPage_);
+    styleBox(offBehaviorChoice_, *translationPage_);
+    hint(offBehaviorNoteLabel_,
+         "Bypass sends your live audio straight to the room (no translation, no added delay); "
+         "silence stops the output. The device stays open in both.",
+         *translationPage_);
     hint(sourceNoteLabel_,
          "OpenAI detects the spoken language automatically. The expectation above is used "
          "by LingoFlow for validation and diagnostics only.",
@@ -649,6 +660,11 @@ void SettingsContent::applyPressed()
     {
         candidate.translation.outputLanguage = targetCache_[static_cast<std::size_t> (index)].value;
     }
+    if (const int index = offBehaviorChoice_.getSelectedItemIndex();
+        index >= 0 && static_cast<std::size_t> (index) < offBehaviorCache_.size())
+    {
+        candidate.translation.offOutputBehavior = offBehaviorCache_[static_cast<std::size_t> (index)].value;
+    }
     candidate.translation.instructions = instructionsEditor_.getText().toStdString();
     candidate.translation.modelHint = modelHintEditor_.getText().toStdString();
     candidate.translation.reconnectEnabled = reconnectToggle_.getToggleState();
@@ -745,6 +761,8 @@ void SettingsContent::refreshFromSettings()
     syncBox(sampleRateChoice_, sampleRateCache_, panel.sampleRates, panel.selectedSampleRate);
     syncBox(sourceChoice_, sourceCache_, panel.sourceLanguages, panel.selectedSource);
     syncBox(targetChoice_, targetCache_, panel.targetLanguages, panel.selectedTarget);
+    syncBox(offBehaviorChoice_, offBehaviorCache_, panel.offOutputBehaviors,
+            panel.selectedOffOutputBehavior);
     syncBox(inputChannelChoice_, inputChannelCache_, panel.inputChannelChoices,
             panel.selectedInputChannel);
     syncBox(outputChannelChoice_, outputChannelCache_, panel.outputChannelChoices,
@@ -1192,6 +1210,12 @@ void SettingsContent::layoutTranslationPage()
     b.removeFromTop(4);
 
     pairWarningLabel_.setBounds(b.removeFromTop(18));
+    b.removeFromTop(kRowGap);
+
+    offBehaviorCaption_.setBounds(b.removeFromTop(kCaptionH));
+    offBehaviorChoice_.setBounds(b.removeFromTop(kControlH));
+    b.removeFromTop(4);
+    offBehaviorNoteLabel_.setBounds(b.removeFromTop(28));
     b.removeFromTop(kRowGap);
 
     modelHintCaption_.setBounds(b.removeFromTop(kCaptionH));

@@ -409,8 +409,23 @@ ConfigProblems validate(const AppConfig& candidate)
     if (!isLanguageTag(translation.outputLanguage))
         problems.push_back(ConfigProblem{ "translation.outputLanguage", "language tag must be 1-12 alphanumeric characters" });
 
+    // "off" is not a language: it is the target-list entry that turns
+    // translation OFF, and only the OUTPUT may carry it. An "off" source
+    // would be a nonsense instruction to a model that auto-detects the
+    // source anyway (protocol docs section 12.3), so the shape check that
+    // "off" passes as a tag is closed here instead.
+    if (translation.inputLanguage == "off")
+        problems.push_back(ConfigProblem{ "translation.inputLanguage", "cannot be 'off': the source is auto-detected; Off belongs to the target list" });
+
     if (translation.inputLanguage == translation.outputLanguage)
         problems.push_back(ConfigProblem{ "translation.outputLanguage", "input and output language must differ" });
+
+    // The Off behavior is a closed vocabulary; anything else is repaired to
+    // the documented default, not guessed.
+    if (translation.offOutputBehavior != TranslationSettings::kOffBypass
+        && translation.offOutputBehavior != TranslationSettings::kOffSilence)
+        problems.push_back(ConfigProblem{ "translation.offOutputBehavior",
+                                          "must be 'bypass' (original audio to the output) or 'silence'" });
 
     // Optional since an earlier review: "not set" is legal - the
     // current translation model ignores this text entirely (docs section 12.1),
@@ -635,7 +650,8 @@ std::string toJsonText(const AppConfig& settings)
             { "reconnectInitialBackoffMs", settings.translation.reconnectInitialBackoffMs },
             { "reconnectMaxBackoffMs", settings.translation.reconnectMaxBackoffMs },
             { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds },
-            { "expirySafetyMarginSeconds", settings.translation.expirySafetyMarginSeconds } } },
+            { "expirySafetyMarginSeconds", settings.translation.expirySafetyMarginSeconds },
+            { "offOutputBehavior", settings.translation.offOutputBehavior } } },
         { "ndi", {
             { "enabled", settings.ndi.enabled },
             { "streamName", settings.ndi.streamName },
@@ -759,7 +775,7 @@ bool fromJsonText(std::string_view text,
                                                   "modelHint",     "jitterBufferMs",
                                                   "reconnectEnabled", "reconnectInitialBackoffMs",
                                                   "reconnectMaxBackoffMs", "sessionMaxAgeSeconds",
-                                                  "expirySafetyMarginSeconds" };
+                                                  "expirySafetyMarginSeconds", "offOutputBehavior" };
         reportUnknownKeys(*section, "translation", kKeys, problems);
 
         auto& translation = out.translation;
@@ -767,6 +783,8 @@ bool fromJsonText(std::string_view text,
         readString(*section, "outputLanguage", "translation.outputLanguage", translation.outputLanguage, problems);
         readString(*section, "instructions", "translation.instructions", translation.instructions, problems);
         readString(*section, "modelHint", "translation.modelHint", translation.modelHint, problems);
+        readString(*section, "offOutputBehavior", "translation.offOutputBehavior",
+                   translation.offOutputBehavior, problems);
         readNumber<int>(*section, "jitterBufferMs", "translation.jitterBufferMs", translation.jitterBufferMs, problems);
         readBool(*section, "reconnectEnabled", "translation.reconnectEnabled", translation.reconnectEnabled, problems);
         readNumber<int>(*section, "reconnectInitialBackoffMs", "translation.reconnectInitialBackoffMs",
@@ -895,6 +913,8 @@ bool fromJsonText(std::string_view text,
               if (c.translation.inputLanguage == c.translation.outputLanguage)
                   c.translation.inputLanguage = d.translation.inputLanguage;
           } },
+        { "translation.offOutputBehavior",
+          [](AppConfig& c, const AppConfig& d) { c.translation.offOutputBehavior = d.translation.offOutputBehavior; } },
         { "translation.instructions",
           [](AppConfig& c, const AppConfig& d) { c.translation.instructions = d.translation.instructions; } },
         { "translation.modelHint", [](AppConfig& c, const AppConfig& d) { c.translation.modelHint = d.translation.modelHint; } },

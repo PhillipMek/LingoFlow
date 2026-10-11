@@ -108,7 +108,15 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     // ---------------------------------------------------------------- status
     panel.applicationState = std::string(nameOf(status.application));
     panel.audioState = std::string(audio::nameOf(status.audio));
-    panel.sessionState = std::string(translation::nameOf(status.session));
+    // The operator's Off is a decision, not a provider state - and the chip is
+    // exactly where the operator asks "is translation running". So when the
+    // target list says off, the chip says off: the word is chosen to be the
+    // exact vocabulary the screen's glyph/color mapping already renders as
+    // hollow-and-muted ("is it running? no, by choice"), and the routing line
+    // in translation health names WHICH output behavior the decision selected.
+    panel.sessionState = isTranslationOff(cfg.translation.outputLanguage)
+                             ? "off"
+                             : std::string(translation::nameOf(status.session));
     panel.ndiState = std::string(ndi::nameOf(status.ndi));
     panel.audioBackendName = status.audioBackendName.empty() ? "none" : status.audioBackendName;
     panel.detail = status.detail.empty() ? "ok" : status.detail;   // silence reads as ok
@@ -171,6 +179,13 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
         panel.targetLanguages.push_back({ language.code,
                                           language.code + " - " + language.englishName });
 
+    // The one entry in the target list that is not a language: selecting it
+    // turns translation OFF, and the settings' off-output behavior then says
+    // what the audience hears (original bypass or silence). It is part of the
+    // list because that is where the operator decides; it is LAST because a
+    // safety control should never be the item a fast click hits first.
+    panel.targetLanguages.push_back({ "off", "off - OFF (no translation)" });
+
     panel.selectedSource = indexOfValue(panel.sourceLanguages, lower(cfg.translation.inputLanguage));
     panel.selectedTarget = indexOfValue(panel.targetLanguages, lower(cfg.translation.outputLanguage));
 
@@ -180,12 +195,28 @@ OperatorPanel buildOperatorPanel(ApplicationController& controller, const std::s
     // Diagnostics; it is never presented as something OpenAI is told.
     panel.sourceDisplay = "Automatic detection";
 
-    if (const auto pair = translation::openAiManifest().checkPair(cfg.translation.inputLanguage,
-                                                                  cfg.translation.outputLanguage);
-        !pair)
+    // With translation off there is no pair to be unsupported: the warning
+    // would nag about "off" not being a language, which is the one thing it
+    // is supposed to not be.
+    if (!isTranslationOff(cfg.translation.outputLanguage))
     {
-        panel.languagePairWarning = pair.detail;
+        if (const auto pair = translation::openAiManifest().checkPair(cfg.translation.inputLanguage,
+                                                                      cfg.translation.outputLanguage);
+            !pair)
+        {
+            panel.languagePairWarning = pair.detail;
+        }
     }
+
+    // The Off behavior options, in the schema's own vocabulary - a selector
+    // built from these can only produce a value validate() will accept.
+    panel.translationOff = isTranslationOff(cfg.translation.outputLanguage);
+    panel.offOutputBehaviors = {
+        { "bypass", "bypass - the original audio goes to the output" },
+        { "silence", "silence - the output stops (the device stays open)" },
+    };
+    panel.selectedOffOutputBehavior =
+        indexOfValue(panel.offOutputBehaviors, cfg.translation.offOutputBehavior);
 
     // ------------------------------------------------- format and geometry
     for (const int rate : config::supportedSampleRates())
@@ -348,6 +379,12 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
 
     panel.translationHealth = {
         { "session", std::string(translation::nameOf(status.session)) },
+        // The routing the engine is running THIS instant - translation, or one
+        // of the two Off behaviors. It is shown even when not off, so an
+        // operator who set Off and watched the panel can SEE the engine obey
+        // (and a post-mortem can tell "settings said off" from "audio was
+        // actually bypassed").
+        { "output routing", std::string(AudioEngine::nameOf(engine.outputRouting())) },
         { "capture submitted", formatCount(diag.translationSubmittedFrames) },
         { "capture gap-refused", formatCount(diag.translationGapFrames) },
         { "translated audio frames", formatCount(diag.translatedAudioFrames) },

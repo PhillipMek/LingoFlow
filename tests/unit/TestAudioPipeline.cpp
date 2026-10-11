@@ -1263,3 +1263,139 @@ TEST_CASE("AudioEngine: a Stop discard under a live producer and repeated reques
     CHECK(engine.outputDiscardedFrames() > 0);          // the discards did happen
     engine.deactivate();
 }
+
+TEST_CASE("AudioEngine: off/bypass routes the capture inside the block and never reads the queue",
+          "[audio][engine][pipeline][off]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    // Park a translation queue: bypass must not consume a frame of it, and
+    // the audience must not hear a sample of it either. "The original never
+    // mixes with the old translation's remainder" is THIS assertion.
+    std::vector<float> queued (static_cast<std::size_t> (24000), 0.6f);
+    REQUIRE(engine.outputJitter(0)->write(queued.data(), queued.size()) == queued.size());
+
+    engine.setOutputRouting(OutputRouting::bypassOriginal);
+    CHECK(engine.outputRouting() == OutputRouting::bypassOriginal);
+
+    std::array<float, static_cast<std::size_t> (kFrames)> in{};
+    std::array<float, static_cast<std::size_t> (kFrames)> out{};
+    in.fill(0.4f);
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    for (int block = 0; block < 5; ++block)
+    {
+        out.fill(-1.0f);
+        engine.processAudio(inPointers, outPointers, kFrames);
+        for (const float sample : out)
+            CHECK(sample == 0.4f);   // default 0 dB on both stages: the block, unchanged
+    }
+
+    CHECK(engine.outputJitter(0)->available() == queued.size());   // untouched, unread
+    engine.setOutputRouting(OutputRouting::translation);
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: off/silence is deliberate silence - zero output, no alarm, discard still honoured",
+          "[audio][engine][pipeline][off]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    std::vector<float> queued (static_cast<std::size_t> (24000), 0.6f);
+    REQUIRE(engine.outputJitter(0)->write(queued.data(), queued.size()) == queued.size());
+
+    engine.setOutputRouting(OutputRouting::silence);
+    engine.requestOutputDiscard();   // what the controller does when entering Off
+
+    std::array<float, static_cast<std::size_t> (kFrames)> in{};
+    std::array<float, static_cast<std::size_t> (kFrames)> out{};
+    in.fill(0.4f);   // a live microphone must not escape through a "silence" output
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    const std::uint64_t silenceBefore = engine.outputSilenceSamples();
+    for (int block = 0; block < 4; ++block)
+    {
+        out.fill(-1.0f);
+        engine.processAudio(inPointers, outPointers, kFrames);
+        for (const float sample : out)
+            CHECK(sample == 0.0f);
+    }
+
+    CHECK(engine.outputSilenceSamples() == silenceBefore);        // not an incident, a decision
+    CHECK(engine.outputDiscardedFrames() >= queued.size());       // the queue died at the switch
+    CHECK(engine.outputJitter(0)->available() == 0u);
+    CHECK(engine.underrunEvents() == 0);                          // and no alarm was earned either
+
+    engine.setOutputRouting(OutputRouting::translation);
+    engine.deactivate();
+}
+
+TEST_CASE("AudioEngine: a routing flip between threads never splits one block",
+          "[audio][engine][pipeline][off][concurrency]")
+{
+    // The routing is loaded once per callback, so a flip lands on a block
+    // boundary. The consumer hammers blocks while a second thread cycles the
+    // routing as fast as it dares; the observable lie we forbid is a block
+    // containing BOTH the bypass value and the jitter value - half room,
+    // half translation, heard as a garbled overlap.
+    AudioEngine engine;
+    NullAudioBackend backend;
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    std::vector<float> queued (static_cast<std::size_t> (24000), 0.6f);
+    REQUIRE(engine.outputJitter(0)->write(queued.data(), queued.size()) == queued.size());
+
+    std::atomic<bool> stopFlipper { false };
+    std::thread flipper (
+        [&]
+        {
+            int next = 0;
+            while (!stopFlipper.load(std::memory_order_relaxed))
+            {
+                engine.setOutputRouting(static_cast<OutputRouting> (next % 3));
+                ++next;
+                std::this_thread::sleep_for(std::chrono::microseconds (50));
+            }
+        });
+
+    std::array<float, static_cast<std::size_t> (kFrames)> in{};
+    std::array<float, static_cast<std::size_t> (kFrames)> out{};
+    in.fill(0.2f);
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    for (int block = 0; block < 400; ++block)
+    {
+        out.fill(0.0f);
+        engine.processAudio(inPointers, outPointers, kFrames);
+
+        bool hasInput = false;
+        bool hasJitter = false;
+        for (const float sample : out)
+        {
+            if (sample == 0.2f)
+                hasInput = true;
+            if (sample == 0.6f)
+                hasJitter = true;
+            // Values outside this closed set could only come from a torn
+            // routing decision or an unserviced buffer - both are defects.
+            CHECK((sample == 0.0f || sample == 0.2f || sample == 0.6f));
+        }
+        CHECK_FALSE((hasInput && hasJitter));   // one block, one routing - always
+    }
+
+    stopFlipper.store(true);
+    flipper.join();
+
+    engine.setOutputRouting(OutputRouting::translation);
+    engine.deactivate();
+}

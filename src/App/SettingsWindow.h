@@ -126,7 +126,9 @@ private:
     // ------------------------------------------------------------ translation
     juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
     juce::Label sourceNoteLabel_;         ///< the expectation-vs-wire truth, in one sentence
-    juce::ComboBox sourceChoice_, targetChoice_;
+    juce::Label offBehaviorCaption_;      ///< "When the target is Off, the output:"
+    juce::Label offBehaviorNoteLabel_;    ///< what the two behaviors do, in plain words
+    juce::ComboBox sourceChoice_, targetChoice_, offBehaviorChoice_;
     juce::Label modelHintCaption_;
     juce::TextEditor modelHintEditor_;
     juce::ToggleButton reconnectToggle_ { "Reconnect after a dropped session" };
@@ -222,7 +224,7 @@ private:
     juce::Label noteLabel_;
 
     std::vector<UiOption> logLevelCache_, sampleRateCache_;
-    std::vector<UiOption> deviceCache_, sourceCache_, targetCache_;
+    std::vector<UiOption> deviceCache_, sourceCache_, targetCache_, offBehaviorCache_;
     std::vector<UiOption> inputChannelCache_, outputChannelCache_;
     std::vector<std::string> devSourceCache_;   ///< developer.audioSource values, schema's list
     bool updatingWidgets_ = false;

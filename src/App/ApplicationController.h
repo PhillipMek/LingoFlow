@@ -306,11 +306,14 @@ public:
     //
     // onTranslatedAudio is the delivery point of the translation contract: blocks
     // that pass the checks are written straight into the engine's output jitter
-    // buffer - the one and only source of played audio (the safety rule).
+    // buffer - the source of played audio while the routing is translation (the
+    // safety rule; bypass and silence are the operator's Off decision, not a
+    // delivery).
     // Everything refused is counted and warned about once, never swallowed
-    // silently, and never retried at the wrong speed: there is no resampler in
-    // this product yet, and playing 16 kHz audio at 48 kHz would be a lie with
-    // chipmunk voice.
+    // silently, and never retried at the wrong speed: the controller plays
+    // what the backend delivered at the device's own rate - the resampling is
+    // the backend's documented job - and a wrong-rate block here would be a
+    // lie with chipmunk voice.
     void onTranslatedAudio(const float* samples, int frameCount, int sampleRate) override;
 
     /// Text events cross the seam as the contract's partial/final string pair and
@@ -337,6 +340,15 @@ private:
     void stopAudio() noexcept;
     bool startSession(std::string& error);
     void stopSession() noexcept;
+    /// Bring the live session in line with the CURRENT settings after an
+    /// operator decision changed the translation shape (target language,
+    /// Off, back from Off). Runs on the lifecycle worker - never on the GUI
+    /// thread, never on the audio thread: the socket waits this method has
+    /// (an abandoning close, a bounded handshake) are exactly what the UI
+    /// must not freeze on. No-ops unless the show is running; an app that
+    /// stopped or is starting has already applied (or will apply) the same
+    /// settings through start().
+    void reconcileTranslation();
     /// Streams the engine's capture into the session. Refusal to start is not a
     /// session failure: the log and the counters say the translator is not being
     /// fed, and everything else keeps running.

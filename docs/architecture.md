@@ -309,6 +309,23 @@ new code is written against behaviour that already has proof, not against commen
   Wrong-rate blocks are rejected and counted, never silently resampled or
   played fast: a resampler does not exist yet and inventing one outside the documented pipeline
   would change measured latency without telling anyone.
+* **The output routing is a decided mode, never an accident.** The engine
+  (`AudioEngine::OutputRouting`) plays the translation queue, the raw capture
+  (Off/bypass - one memcpy inside the callback, no added delay and no detour
+  through any queue), or silence (Off/stop-output) - and the routing is read
+  once per block, so no callback can be half room and half translation.
+  Bypass exists because the operator chose Off; the microphone never reaches
+  the audience while the routing says `translation`. Entering or leaving any
+  routing crosses a discard: the unheard remainder of the previous decision
+  is never overlaid on the new one.
+* **Live language and Off are lifecycle-worker acts, not UI stalls.** A target
+  change while running flips the routing atomically (immediate, callback-safe)
+  and queues a reconcile: streaming stops, the session closes with the
+  abandoning verb (the previous language's late audio is exactly the stale
+  segment that must not appear), and a fresh session opens with the CURRENT
+  target - voice included, which for this provider means "no voice parameter
+  at all", the same in every session (docs section 12.1/12.4). The GUI thread
+  waits for none of it.
 * **Diagnostics answer three questions separately**: `translatedAudioFrames` (what was
   accepted), `rejectedAudioFrames` (what arrived unusable - rate, null, empty) and
   `translatedAudioDroppedFrames` (what our own full buffer dropped). "The translator

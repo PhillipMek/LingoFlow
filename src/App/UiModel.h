@@ -90,6 +90,14 @@ struct OperatorPanel
     int selectedTarget = -1;
     std::string languagePairWarning;   ///< empty = the manifest supports this pair
 
+    // The Off output behavior (§3): a closed two-value choice the Settings tab
+    // offers next to the target, because a fake control is forbidden - this one
+    // has a real engine routing behind it. The vocabulary lives in UiModel so
+    // the selector can never offer a value the schema would refuse.
+    std::vector<UiOption> offOutputBehaviors;
+    int selectedOffOutputBehavior = -1;
+    bool translationOff = false;       ///< the target list currently says "off"
+
     // ------------------------------------------------- format and geometry
     std::vector<UiOption> sampleRates;
     int selectedSampleRate = -1;       ///< index into sampleRates

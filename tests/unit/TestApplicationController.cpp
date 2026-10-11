@@ -20,6 +20,7 @@
 #include "TestTempDir.h"
 #include "Translation/Null/NullTranslationBackend.h"
 #include "Utils/Log.h"
+#include "support/MockTranslationBackend.h"
 
 using namespace liveai;
 using liveai::audio::BackendState;
@@ -27,6 +28,7 @@ using liveai::audio::IAudioBackend;
 using liveai::ndi::OutputState;
 using liveai::translation::ITranslationBackend;
 using liveai::translation::SessionState;
+using liveai::test::MockTranslationBackend;
 
 namespace {
 
@@ -877,4 +879,351 @@ TEST_CASE("ApplicationController: Start->Stop->Start keeps two sessions apart",
     CHECK(pumpBlocks(controller, 40) > 0);
 
     controller.stop();
+}
+
+// ---------------------------------------------------- Off mode & live language
+//
+// Task 2 of the venue follow-up: the target list gained a real OFF entry with
+// its own output behavior (bypass / silence), and the target language became
+// a live control. These tests walk the whole transition matrix with the
+// deterministic support mock: what must be TRUE after each click - session
+// counts, routing, what the audience hears, what was discarded - is asserted,
+// and the caller returning quickly is timed, because "the GUI must not freeze
+// on a socket" is the requirement these paths exist for. Every controller here
+// reads its settings from a TempDirectory file: updateSettings SAVES, and a
+// test must never write into the real operator's store.
+
+namespace {
+
+/// Point the controller's settings at a disposable file (defaults when the
+/// path holds nothing yet).
+void useTempSettings(ApplicationController& controller, livetest::TempDirectory& temp)
+{
+    std::string note;
+    REQUIRE(controller.loadSettings(temp.file("config.json"), note));
+}
+
+} // namespace
+
+namespace {
+
+/// Pump one block through the engine and report what the audience got:
+/// `maxAbs` of the output and whether any sample differs from {0, expected}.
+void pumpOneBlock(ApplicationController& controller, float inputLevel, std::vector<float>& out)
+{
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> in(static_cast<std::size_t>(frames), inputLevel);
+    float* inPtr[] = { in.data() };
+    float* outPtr[] = { out.data() };
+    std::fill(out.begin(), out.end(), 0.0f);
+    controller.engine().processAudio(inPtr, outPtr, frames);
+}
+
+} // namespace
+
+TEST_CASE("ApplicationController: Off/bypass opens no session, submits nothing, plays the original",
+          "[app][off][bypass]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "off";
+    candidate.translation.offOutputBehavior = "bypass";
+    std::string note;
+    REQUIRE(controller.updateSettings(candidate, note));   // before Start: stored, not applied by a worker
+
+    REQUIRE(controller.start());
+
+    // "Do not send new translation requests" - at the source: no session was
+    // opened to accept anything, and no streaming worker exists to feed one.
+    CHECK(mock->sessionsOpened() == 0);
+    CHECK(mock->acceptedSubmits() == 0);
+    CHECK(controller.translationStreamer() == nullptr);
+    CHECK(controller.sessionState() == SessionState::closed);
+    CHECK(controller.engine().outputRouting() == OutputRouting::bypassOriginal);
+
+    // The original reaches the audience inside the same block it was captured:
+    // default gains (0 dB) leave the samples exactly what the device handed in.
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> out(static_cast<std::size_t>(frames), -1.0f);
+    pumpOneBlock(controller, 0.4f, out);
+    for (const float sample : out)
+        CHECK(sample == 0.4f);
+
+    // And the original never mixes with an old translation: park audio in the
+    // jitter buffer (a stray delivery, the shape an off-path bug would leave)
+    // - bypass must not read it, not now and not later.
+    std::vector<float> stale(static_cast<std::size_t>(24000), 0.6f);
+    REQUIRE(controller.engine().outputJitter(0)->write(stale.data(), stale.size()) == stale.size());
+    pumpOneBlock(controller, 0.4f, out);
+    for (const float sample : out)
+        CHECK(sample == 0.4f);                                        // still only the room
+    CHECK(controller.engine().outputJitter(0)->available() == stale.size());  // never consumed
+
+    controller.stop();
+    CHECK(controller.state() == ApplicationState::stopped);
+}
+
+TEST_CASE("ApplicationController: Off/silence stops the output and never counts as an underrun alarm",
+          "[app][off][silence]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "off";
+    candidate.translation.offOutputBehavior = "silence";
+    std::string note;
+    REQUIRE(controller.updateSettings(candidate, note));
+    REQUIRE(controller.start());
+
+    CHECK(mock->sessionsOpened() == 0);
+    CHECK(controller.engine().outputRouting() == OutputRouting::silence);
+
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> out(static_cast<std::size_t>(frames), -1.0f);
+
+    // Even a stray queue in the jitter buffer cannot leak: the routing does
+    // not read it, and the deliberate silence is NOT counted in
+    // outputSilenceSamples - that row answers "the buffer came up short",
+    // and a stopped output was always going to be short on purpose.
+    std::vector<float> stale(static_cast<std::size_t>(24000), 0.25f);
+    REQUIRE(controller.engine().outputJitter(0)->write(stale.data(), stale.size()) == stale.size());
+
+    const std::uint64_t before = controller.engine().outputSilenceSamples();
+    for (int block = 0; block < 5; ++block)
+    {
+        pumpOneBlock(controller, 0.4f, out);
+        for (const float sample : out)
+            CHECK(sample == 0.0f);
+    }
+    CHECK(controller.engine().outputSilenceSamples() == before);
+
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: entering Off discards the unheard translation; leaving it reopens with the CURRENT target",
+          "[app][off][transition]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+    REQUIRE(mock->sessionsOpened() == 1);
+    REQUIRE(mock->openRequests()[0].pair.output == "ru");   // the default candidate
+
+    // Half a second of translated audio is queued unheard.
+    std::vector<float> oldLanguage(static_cast<std::size_t>(24000), 0.25f);
+    controller.onTranslatedAudio(oldLanguage.data(), 24000, controller.engine().sampleRate());
+    REQUIRE(controller.engine().outputJitter(0)->available() > 0u);
+
+    // Step into Off/bypass. The call must return while the session teardown
+    // still runs somewhere else - this is the GUI thread of the real app.
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "off";
+    std::string note;
+    const auto t0 = std::chrono::steady_clock::now();
+    REQUIRE(controller.updateSettings(candidate, note));
+    CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()
+          < 100);
+
+    REQUIRE(waitUntil([&] { return mock->sessionsAbandoned() >= 1; }));
+    REQUIRE(waitUntil([&] { return controller.translationStreamer() == nullptr; }));
+    CHECK(controller.engine().outputRouting() == OutputRouting::bypassOriginal);
+    CHECK(controller.sessionState() == SessionState::closed);
+
+    // The queue died at the switch: what the audience hears from now is the
+    // room (0.4), and NEVER the old 0.25 tail.
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> out(static_cast<std::size_t>(frames), -1.0f);
+    bool discarded = false;
+    for (int block = 0; block < 10 && !discarded; ++block)
+    {
+        pumpOneBlock(controller, 0.4f, out);
+        discarded = controller.engine().outputDiscardedFrames() > 0;
+    }
+    CHECK(discarded);
+    for (int block = 0; block < 3; ++block)
+    {
+        pumpOneBlock(controller, 0.4f, out);
+        for (const float sample : out)
+            CHECK(sample == 0.4f);
+    }
+
+    // Leave Off with a DIFFERENT target in the same click: the reopened
+    // session must carry the current language, not the one from before Off.
+    candidate.translation.outputLanguage = "de";
+    REQUIRE(controller.updateSettings(candidate, note));
+    REQUIRE(waitUntil([&] { return mock->sessionsOpened() >= 2; }));
+    REQUIRE(mock->openRequests().size() >= 2);
+    CHECK(mock->openRequests()[1].pair.output == "de");
+    CHECK(controller.engine().outputRouting() == OutputRouting::translation);
+    CHECK(controller.sessionState() == SessionState::connected);
+    CHECK(controller.translationStreamer() != nullptr);
+
+    // The fresh session starts from silence (its queue was never filled), and
+    // deliveries work normally. First burn a few blocks: the transition's
+    // discards are consumed BEFORE the first real delivery arrives - which is
+    // exactly the real order, since the session can only deliver after it
+    // opened, and the discard was requested before that.
+    for (int block = 0; block < 3; ++block)
+        pumpOneBlock(controller, 0.0f, out);
+
+    std::vector<float> freshDelivery(static_cast<std::size_t>(24000), 0.5f);
+    controller.onTranslatedAudio(freshDelivery.data(), 24000, controller.engine().sampleRate());
+    int audibleBlocks = 0;
+    for (int block = 0; block < 40; ++block)
+    {
+        pumpOneBlock(controller, 0.0f, out);
+        for (const float sample : out)
+        {
+            if (sample == 0.5f)
+            {
+                ++audibleBlocks;
+                break;
+            }
+        }
+    }
+    CHECK(audibleBlocks > 0);
+
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: live target change rotates the session and buries the old language's queue",
+          "[app][translation][live]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+    const auto firstRequest = mock->openRequests()[0];
+    CHECK(firstRequest.pair.output == "ru");
+
+    std::vector<float> queued(static_cast<std::size_t>(24000), 0.25f);
+    controller.onTranslatedAudio(queued.data(), 24000, controller.engine().sampleRate());
+    REQUIRE(controller.engine().outputJitter(0)->available() > 0u);
+
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "de";
+    std::string note;
+    const auto t0 = std::chrono::steady_clock::now();
+    REQUIRE(controller.updateSettings(candidate, note));
+    const auto returnedIn = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    CHECK(returnedIn < 100);   // the rotation was dispatched, not endured
+
+    REQUIRE(waitUntil([&] { return mock->sessionsOpened() >= 2; }));
+    CHECK(mock->sessionsAbandoned() >= 1);              // the old one died by ABANDON
+    CHECK(mock->openRequests()[1].pair.output == "de"); // the new one carries the new target
+    CHECK(controller.sessionState() == SessionState::connected);
+    CHECK(controller.engine().outputRouting() == OutputRouting::translation);
+
+    // Nothing of the previous language survives to the audience: the first
+    // pumped block eats the discard, and no block ever shows 0.25.
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> out(static_cast<std::size_t>(frames), -1.0f);
+    for (int block = 0; block < 20; ++block)
+    {
+        pumpOneBlock(controller, 0.0f, out);
+        for (const float sample : out)
+            CHECK(sample != 0.25f);
+    }
+    CHECK(controller.engine().outputDiscardedFrames() > 0u);
+
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: fast Off/behavior/target clicks land on the last decision, never hang",
+          "[app][off][matrix]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+
+    struct Step { const char* target; const char* behavior; };
+    const std::vector<Step> matrix = {
+        { "off", "bypass" },   // Translation -> Off/bypass
+        { "off", "silence" },  // Bypass -> Stop output
+        { "de",  "silence" },  // Stop output -> Translation (new target)
+        { "off", "silence" },  // Translation -> Off/silence
+        { "off", "bypass" },   // Stop output -> Bypass
+        { "ru",  "bypass" },   // Bypass -> Translation (back to the old default)
+    };
+
+    long long worstUpdateMs = 0;
+    for (const auto& step : matrix)
+    {
+        auto candidate = controller.config().current();
+        candidate.translation.outputLanguage = step.target;
+        candidate.translation.offOutputBehavior = step.behavior;
+        std::string note;
+        const auto t0 = std::chrono::steady_clock::now();
+        REQUIRE(controller.updateSettings(candidate, note));
+        worstUpdateMs = std::max<long long>(
+            worstUpdateMs,
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
+
+        // The routing (a flag the callback reads) follows immediately...
+        const auto want = isTranslationOff(step.target)
+                              ? (std::string(step.behavior) == "silence" ? OutputRouting::silence
+                                                                          : OutputRouting::bypassOriginal)
+                              : OutputRouting::translation;
+        CHECK(controller.engine().outputRouting() == want);
+
+        // ...and the session side lands on the same truth via the worker.
+        if (isTranslationOff(step.target))
+        {
+            REQUIRE(waitUntil([&] { return controller.sessionState() == SessionState::closed; }));
+            REQUIRE(waitUntil([&] { return controller.translationStreamer() == nullptr; }));
+        }
+        else
+        {
+            REQUIRE(waitUntil([&] { return controller.sessionState() == SessionState::connected; }));
+            REQUIRE(waitUntil([&] { return controller.translationStreamer() != nullptr; }));
+        }
+    }
+
+    // Every click returned well under a blocking window; the show is still
+    // exactly what the LAST click said.
+    CHECK(worstUpdateMs < 100);
+    CHECK(controller.isRunning());
+    CHECK(controller.engine().outputRouting() == OutputRouting::translation);
+
+    // And the session ledger is consistent: each landing on a language opened
+    // its own session (three in this matrix: Start, the Off->de step, the
+    // Off->ru step), and by the final Stop nothing is left open.
+    const int opens = mock->sessionsOpened();
+    CHECK(opens == 3);
+    controller.stop();
+    CHECK(mock->state() == SessionState::closed);
+    CHECK(mock->sessionsAbandoned() >= opens);   // every crossing left through the
+                                                 // abandoning verb, no stragglers
+    CHECK(controller.sessionState() == SessionState::closed);
 }

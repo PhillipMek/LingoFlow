@@ -1690,3 +1690,83 @@ TEST_CASE("OpenAI backend: a delta exactly at the budget is delivered, not refus
     s.backend->closeSession();
     s.sink.armAfterCloseExpectation();
 }
+
+TEST_CASE("OpenAI backend: one voice story - no voice parameter at create, rotate, or target change",
+          "[openai][voice][contract]")
+{
+    // The venue task demands ONE fixed voice for every segment of the show.
+    // The honest protocol fact (docs section 12.1): gpt-realtime-translate
+    // HAS no voice parameter - the model adapts the voice to the source
+    // speaker (section 12.4), and no client-side value can pin a timbre.
+    // So what this product guarantees is the negative contract, identical in
+    // every session of every shape: create, the reconnect rotation, and a
+    // live target-language change all send the same voice-less
+    // session.update, and none can smuggle in a voice-shaped field.
+    auto updatesSent = [](test::FakeWebSocketTransport* f)
+    {
+        std::vector<std::string> out;
+        for (const std::string& frame : f->sent())
+            if (frame.find("session.update") != std::string::npos)
+                out.push_back(frame);
+        return out;
+    };
+    auto languageOf = [](const std::string& frame)
+    {
+        const std::size_t p = frame.find(R"("language":")");
+        if (p == std::string::npos)
+            return std::string();
+        const std::size_t start = p + 12;
+        const std::size_t end = frame.find('"', start);
+        return frame.substr(start, end - start);
+    };
+    auto voiceFree = [](const std::string& frame)
+    {
+        return frame.find("voice") == std::string::npos
+            && frame.find("Voice") == std::string::npos
+            && frame.find("VOICE") == std::string::npos;
+    };
+
+    Scenario s;
+
+    // 1. Create.
+    REQUIRE(s.openDefault());
+    test::FakeWebSocketTransport* first = s.fake;
+    const auto createUpdates = updatesSent(first);
+    REQUIRE(createUpdates.size() == 1);
+    CHECK(languageOf(createUpdates[0]) == "ru");
+    CHECK(voiceFree(createUpdates[0]));
+
+    // 2. The graceful rotation close, then a NEW target language.
+    s.backend->closeSession();
+
+    auto req = s.Request();
+    req.pair.output = "de";
+    REQUIRE(s.open(req).empty());
+    test::FakeWebSocketTransport* second = s.fake;
+    const auto rotatedUpdates = updatesSent(second);
+    REQUIRE(rotatedUpdates.size() == 1);
+    CHECK(languageOf(rotatedUpdates[0]) == "de");      // the new target travels
+    CHECK(voiceFree(rotatedUpdates[0]));               // and no voice with it
+
+    // 3. Reconnect-style reopen: SAME target, fresh session - same shape.
+    s.backend->closeSession();
+    REQUIRE(s.open(req).empty());
+    const auto thirdUpdates = updatesSent(s.fake);
+    REQUIRE(thirdUpdates.size() == 1);
+    CHECK(languageOf(thirdUpdates[0]) == "de");
+    CHECK(voiceFree(thirdUpdates[0]));
+
+    // The three frames are the same SHAPE apart from event_id: the key set
+    // of every one of them is exactly the documented configuration.
+    auto stripIds = [](std::string frame)
+    {
+        const std::size_t p = frame.find(R"("event_id":")");
+        if (p == std::string::npos)
+            return frame;
+        const std::size_t end = frame.find('"', p + 12);
+        return frame.erase(p, end - p + 1);
+    };
+    CHECK(stripIds(rotatedUpdates[0]) == stripIds(thirdUpdates[0]));
+
+    s.backend->closeSession();
+}

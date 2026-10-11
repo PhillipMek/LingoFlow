@@ -667,10 +667,16 @@ void AudioEngine::processAudio(const float* const* input,
     // ------------------------------------------------------------ output side
     if (ready)
     {
-        // A requested discard runs BEFORE any reading: the Stop said the
-        // queued backlog is not the audience's any more. One exchange serves
-        // every channel (one decision, one flag), and the block that carries
-        // the decision is silence - which is exactly what a stopped show owes.
+        // The routing is read ONCE for the whole block: every output channel
+        // of one callback is decided by the same value, so a mode switch can
+        // never split a block half bypass / half jitter. The next block is
+        // where the new routing begins - that is the whole cost of the change.
+        const OutputRouting routing = outputRouting();
+
+        // A requested discard runs BEFORE any reading, in every routing: the
+        // Stop (or the step into Off) said the queued backlog is not the
+        // audience's any more. Executing it here even in bypass/silence is how
+        // the discarded-frames counter still tells the truth about the switch.
         const bool discard = outputDiscardPending_.exchange(false, std::memory_order_relaxed);
 
         for (int channel = 0; channel < outChannels; ++channel)
@@ -687,47 +693,75 @@ void AudioEngine::processAudio(const float* const* input,
                                                      std::memory_order_relaxed);
             }
 
-            // The jitter buffer is the ONLY source of output audio, which is what makes
-            // it impossible for the microphone to reach the audience by accident.
-            const std::size_t taken = jitter != nullptr
-                                          ? jitter->readOrSilence(destination, frames)
-                                          : (std::memset(destination, 0, frames * sizeof(float)), 0);
-
-            // Silence is a fact and an underrun is a fact, and since the venue
-            // report they were NOT the same fact: pre-roll silence (the
-            // operator-requested delay, and the re-priming after an explicit
-            // discard) is normal operation, while a PRIMED buffer running dry
-            // mid-playback is the hiccup the "Underruns" row is for. The
-            // jitter buffer keeps those apart internally; the engine reports
-            // its underruns_ from the jitter's own event count, so a block of
-            // honest priming no longer inflates the alarm counter.
-            if (taken != frames)
-                outputSilenceSamples_.fetch_add(static_cast<std::uint64_t>(frames - taken),
-                                                std::memory_order_relaxed);
-
-            if (jitter != nullptr)
+            // The source of this block, decided by the routing - never by an
+            // accident of buffer contents.
+            if (routing == OutputRouting::bypassOriginal)
             {
-                const std::uint64_t events = jitter->underrunEvents();
-                const std::uint64_t seen = jitterUnderrunSeen_[static_cast<std::size_t>(channel)];
-                if (events != seen)
-                {
-                    jitterUnderrunSeen_[static_cast<std::size_t>(channel)] = events;
-                    const std::uint64_t fresh = events - seen;   // monotone, so this cannot underflow
-                    underruns_.fetch_add(fresh, std::memory_order_relaxed);
+                // Off/bypass: the capture goes to the audience unchanged in
+                // time (one memcpy inside this callback - zero added latency,
+                // no resample: same rate, device blocks, no detour through any
+                // queue). Channels beyond the inputs have nothing to bypass;
+                // they get honest silence, not the driver's leftovers.
+                if (channel < inChannels)
+                    std::memcpy(destination, input[static_cast<std::size_t>(channel)],
+                                frames * sizeof(float));
+                else
+                    std::memset(destination, 0, frames * sizeof(float));
+            }
+            else if (routing == OutputRouting::silence)
+            {
+                // Off/stop-output: the device stays open and is serviced; the
+                // audience hears nothing. Deliberate silence is NOT counted in
+                // outputSilenceSamples - that row answers "the buffer came up
+                // short", and a buffer nobody reads never got the chance.
+                std::memset(destination, 0, frames * sizeof(float));
+            }
+            else
+            {
+                // The jitter buffer is the ONLY source of output audio while the
+                // show is in translation mode, which is what makes it impossible
+                // for the microphone to reach the audience by accident.
+                const std::size_t taken = jitter != nullptr
+                                              ? jitter->readOrSilence(destination, frames)
+                                              : (std::memset(destination, 0, frames * sizeof(float)), 0);
 
-                    for (std::uint64_t i = 0; i < fresh; ++i)
+                // Silence is a fact and an underrun is a fact, and since the venue
+                // report they were NOT the same fact: pre-roll silence (the
+                // operator-requested delay, and the re-priming after an explicit
+                // discard) is normal operation, while a PRIMED buffer running dry
+                // mid-playback is the hiccup the "Underruns" row is for. The
+                // jitter buffer keeps those apart internally; the engine reports
+                // its underruns_ from the jitter's own event count, so a block of
+                // honest priming no longer inflates the alarm counter.
+                if (taken != frames)
+                    outputSilenceSamples_.fetch_add(static_cast<std::uint64_t>(frames - taken),
+                                                    std::memory_order_relaxed);
+
+                if (jitter != nullptr)
+                {
+                    const std::uint64_t events = jitter->underrunEvents();
+                    const std::uint64_t seen = jitterUnderrunSeen_[static_cast<std::size_t>(channel)];
+                    if (events != seen)
                     {
-                        if (diagnostics_ != nullptr)
-                            diagnostics_->countUnderrun();
+                        jitterUnderrunSeen_[static_cast<std::size_t>(channel)] = events;
+                        const std::uint64_t fresh = events - seen;   // monotone, so this cannot underflow
+                        underruns_.fetch_add(fresh, std::memory_order_relaxed);
+
+                        for (std::uint64_t i = 0; i < fresh; ++i)
+                        {
+                            if (diagnostics_ != nullptr)
+                                diagnostics_->countUnderrun();
+                        }
                     }
                 }
             }
 
-            // spec "Audio Pipeline" puts Output Gain after the jitter buffer and before
-            // the wire, so the operator can level-match translated audio against the
-            // source without touching what the translator was fed. In place, because this
-            // buffer belongs to the callback. Applied before the meter on purpose: the
-            // audience and the meter must see the same thing.
+            // spec "Audio Pipeline" puts Output Gain after the source and before
+            // the wire, so the operator can level-match what the audience hears -
+            // translated audio AND the deliberate bypass - without touching what
+            // the translator was fed. In place, because this buffer belongs to the
+            // callback. Applied before the meter on purpose: the audience and the
+            // meter must see the same thing.
             audio::GainStage* stage = outputStages_[static_cast<std::size_t>(channel)].get();
 
             if (stage != nullptr)
@@ -756,6 +790,18 @@ void AudioEngine::onAudioConfigurationChanged(int sampleRate, int bufferFrames)
 
     if (diagnostics_ != nullptr)
         diagnostics_->noteAudioGeometry(sampleRate, bufferFrames);
+}
+
+std::string_view AudioEngine::nameOf(OutputRouting routing) noexcept
+{
+    switch (routing)
+    {
+        case OutputRouting::translation:    return "translation";
+        case OutputRouting::bypassOriginal: return "bypass original";
+        case OutputRouting::silence:        return "output stopped";
+    }
+
+    return "translation";   // unreachable; the vocabulary is closed
 }
 
 // -------------------------------------------------------------------------- readouts

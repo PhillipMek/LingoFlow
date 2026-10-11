@@ -20,6 +20,20 @@ namespace {
 
 constexpr std::string_view kComponent = "app";
 
+/// One place turns the operator's settings into the engine's routing enum:
+/// the config stores a language tag + an off-behavior string, the callback
+/// must not compare strings, and start()/updateSettings()/the export must not
+/// disagree about which routing "off + silence" means.
+OutputRouting routingForSettings(const TranslationSettings& translation) noexcept
+{
+    if (!isTranslationOff(translation.outputLanguage))
+        return OutputRouting::translation;
+
+    return translation.offOutputBehavior == TranslationSettings::kOffSilence
+               ? OutputRouting::silence
+               : OutputRouting::bypassOriginal;
+}
+
 /// The meter view as one export line: the product reads levels, not raw
 /// fractions (the same conversion the UI bar uses).
 std::string meterText(const audio::LevelMeter* meter)
@@ -377,6 +391,36 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
     if (!(cfg.ndi.subtitles == previous.ndi.subtitles))
         ndiOutput_->applySubtitleSettings(cfg.ndi.subtitles);
 
+    // The target language - and the Off decision with its output behavior -
+    // are LIVE controls now (the venue asked; the old "apply on Start" note
+    // lied by omission). The split is deliberate: the routing flip is one
+    // relaxed atomic store, safe to do right here on the UI thread, and the
+    // discard it owes is a flag the callback consumes - neither waits for
+    // anything. The SESSION side (stop feeding, abandon, reopen) can wait on
+    // a socket for its bounded time, so it goes onto the lifecycle worker's
+    // queue and this call returns while the rotation runs. Fast clicking
+    // queues several reconciles; each reads config_.current() at its own
+    // moment, so they all describe the same latest settings and the last one
+    // is the truth - no intermediate language can linger, no callback ever
+    // blocks the GUI here.
+    const bool wasOff = isTranslationOff(previous.translation.outputLanguage);
+    const bool isOff = isTranslationOff(cfg.translation.outputLanguage);
+    const bool sessionMayChange = wasOff != isOff
+                                  || (!wasOff && cfg.translation.outputLanguage != previous.translation.outputLanguage);
+
+    const auto routingBefore = engine_.outputRouting();
+    engine_.setOutputRouting(routingForSettings(cfg.translation));
+    if (engine_.outputRouting() != routingBefore)
+    {
+        // Every routing change crosses a discard: leaving translation must not
+        // overlay the original on the old translation's queue, and returning
+        // to it must not hear the bypassed room as if it were a voice.
+        engine_.requestOutputDiscard();
+    }
+
+    if (sessionMayChange && state_ == ApplicationState::running)
+        scheduleLifecycle([this] { reconcileTranslation(); });
+
     // Design note: the log level is a mid-show control - the venue run-sheet asks
     // for debug lines while everything is already running - and reconfiguring
     // sinks is a documented non-realtime act (Utils/Log). Only the level is
@@ -391,10 +435,12 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
 
     std::string saveError;
     if (saveSettings(saveError))
-        note = "settings saved. Gain, jitter, the log level and the NDI subtitle look (appearance, "
-               "geometry, mode) are live. Device, sample rate, buffer, channels, languages, instructions "
-               "and the NDI on/off + stream name take effect on Stop + Start. Recovery policy (backoff, "
-               "session age) and the log-file sink take effect when the application restarts.";
+        note = "settings saved. Gain, jitter, the log level, the NDI subtitle look (appearance, "
+               "geometry, mode) and the target language - including Off and its output behavior - "
+               "are live; a language change reopens the session in the background. Device, sample "
+               "rate, buffer, channels, instructions and the NDI on/off + stream name take effect "
+               "on Stop + Start. Recovery policy (backoff, session age) and the log-file sink take "
+               "effect when the application restarts.";
     else
         note = "settings are active for this run but were NOT saved: " + saveError;
 
@@ -657,7 +703,22 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     translationRows.emplace_back("provider_source_detection",
                                  "automatic (the wire carries only the target)");
     translationRows.emplace_back("target_language",
-                                 named(cfg.translation.outputLanguage, capabilities.targets));
+                                 isTranslationOff(cfg.translation.outputLanguage)
+                                     ? std::string("off (translation disabled)")
+                                     : named(cfg.translation.outputLanguage, capabilities.targets));
+    // §3: what the output does while off is a setting of its own, and the
+    // routing the engine is running NOW (not just what settings say) is the
+    // fact a post-mortem must be able to compare against what the room heard.
+    translationRows.emplace_back("off_output_behavior", cfg.translation.offOutputBehavior);
+    translationRows.emplace_back("output_routing",
+                                 std::string(AudioEngine::nameOf(engine_.outputRouting())));
+    // §1: the model has no voice-selection parameter (docs section 12.1), so
+    // the app's contract is that no session - create, reconnect or target
+    // change - ever sends a voice identifier. Pinned by tests; stated here so
+    // the venue reading the file knows variation is the provider's dynamic
+    // voice adaptation (section 12.4), not an app switch.
+    translationRows.emplace_back("voice_identity",
+                                 "fixed: no voice parameter is ever sent (docs 12.1/12.4)");
     translationRows.emplace_back("model_hint", cfg.translation.modelHint.empty()
                                                            ? "(backend default)"
                                                            : cfg.translation.modelHint);
@@ -899,9 +960,29 @@ bool ApplicationController::start()
     engine_.requestOutputDiscard();
     audienceAudioOn_.store(true, std::memory_order_relaxed);
 
+    const auto& cfg = config_.current();
+
+    // The output routing follows the operator's target list: a real language
+    // plays the translation, "off" plays the chosen off-behavior (bypass of
+    // the original, or silence). Applied before any session talk, so even a
+    // refused session leaves the audience in the mode the settings name.
+    engine_.setOutputRouting(routingForSettings(cfg.translation));
+    const bool off = isTranslationOff(cfg.translation.outputLanguage);
+
     // Translation and NDI are best-effort at this level: a failure is recorded
-    // and stays recoverable, it must not take the audio path down.
-    if (!startSession(error))
+    // and stays recoverable, it must not take the audio path down. Off is not
+    // a failure at all - it is a decision - and no session is opened behind
+    // it: "do not send new translation requests" starts here, at the source.
+    if (off)
+    {
+        log::info(kComponent,
+                  std::string("translation is OFF (target set to 'off'): no session, output ")
+                      + std::string(AudioEngine::nameOf(engine_.outputRouting())));
+        diagnostics_.noteEvent("translation",
+                               "translation OFF - output routing: "
+                                   + std::string(AudioEngine::nameOf(engine_.outputRouting())));
+    }
+    else if (!startSession(error))
     {
         log::warning(kComponent, "translation session not started: " + error);
         diagnostics_.noteError("translation", error);
@@ -1186,6 +1267,70 @@ void ApplicationController::stopSession() noexcept
     // - there the audience is still listening.
     if (translationBackend_ != nullptr)
         translationBackend_->abandonSession();
+}
+
+void ApplicationController::reconcileTranslation()
+{
+    // Serialized with every other lifecycle act by the run-mutex: an operator
+    // who presses Stop while this rotation is queued or running sees the
+    // queue order (this first, the stop after), never an interleaving.
+    const std::lock_guard<std::mutex> run(lifecycleRunMutex_);
+
+    // This job services a RUNNING show only: stopped, the settings are simply
+    // waiting for Start (which reads them fresh); starting or stopping, that
+    // other act already owns the translation shape.
+    if (state_ != ApplicationState::running)
+        return;
+
+    const auto& cfg = config_.current();
+    const bool off = isTranslationOff(cfg.translation.outputLanguage);
+    const bool rotated = translationBackend_ != nullptr
+                         && translationBackend_->state() != translation::SessionState::closed;
+
+    // The operator's new decision makes the old session's future audio
+    // history: stop feeding the translator, close with the ABANDONING verb
+    // (late deltas of the previous language are exactly the stale segments
+    // that must not appear), and let the callback throw the audible backlog
+    // away. The routing was flipped on the UI thread when this was queued -
+    // the audience has already moved to bypass/silence or to pre-roll
+    // silence; nothing here waits on the network with an audio path in hand.
+    stopSession();
+    engine_.requestOutputDiscard();
+
+    if (off)
+    {
+        log::info(kComponent, std::string("translation turned off live: session ")
+                                  + (rotated ? "closed, " : "was not open, ")
+                                  + "output routing "
+                                  + std::string(AudioEngine::nameOf(engine_.outputRouting())));
+        diagnostics_.noteEvent("translation",
+                               "translation OFF - output routing: "
+                                   + std::string(AudioEngine::nameOf(engine_.outputRouting())));
+        return;
+    }
+
+    std::string error;
+    if (!startSession(error))
+    {
+        // The reopen failed: the application stays running (audio, NDI, the
+        // panel all real), the session chip says what is true, and the detail
+        // line answers the operator's "why is there no translation" with the
+        // attempt that actually failed - not with the old language's success.
+        log::warning(kComponent, "translation session not reopened: " + error);
+        diagnostics_.noteError("translation", error);
+        {
+            const std::lock_guard lock(subsystemMutex_);
+            lastTranslationError_ = "translation session not reopened: " + error;
+        }
+        return;
+    }
+
+    log::info(kComponent, "translation target applied live: " + cfg.translation.outputLanguage
+                              + (rotated ? " (session rotated)" : " (session opened)"));
+    diagnostics_.noteEvent("translation",
+                           "target language applied live: " + cfg.translation.outputLanguage
+                               + (rotated ? " - session rotated, previous-language audio discarded"
+                                          : " - session opened"));
 }
 
 void ApplicationController::startStreaming()
