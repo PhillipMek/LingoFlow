@@ -457,6 +457,16 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
     CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 0);
 
     REQUIRE(controller.start());
+
+    // The session-scoped ledger (venue task 3 §2): Start begins a clean sheet.
+    // The pre-start stray above belonged to no show; the number that answers
+    // "did THIS session see old audio" must not inherit it - and it does not,
+    // because beginSession() zeroes the per-run counters before the first new
+    // callback. The refusal itself still happened and is still in the log; the
+    // ledger now describes only the running session.
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == 0);
+    CHECK(controller.diagnostics().snapshot().sessionGeneration == 1);
+
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
     CHECK(controller.diagnostics().snapshot().translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
 
@@ -468,18 +478,30 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
     // session (joined: no callbacks after the return) and deactivated the
     // engine, so a real backend could not be producing now; this guard is what
     // keeps a programming error in a future task from becoming a buffered lie.
+    // The count survives the Stop: it is THIS session's story, and the operator
+    // reading the panel after the show ended must still see it. Only the NEXT
+    // explicit Start clears it.
     CHECK_FALSE(controller.translationStreamer());
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
-    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(kFrames));
     CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 0);
     CHECK(controller.diagnostics().snapshot().translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
 
     // Malformed deliveries are refused before the gate question even: they are
     // broken INPUT, counted as rejections, separately from any lifecycle fact.
+    // (These are counted while stopped: no session is live to clear them, and
+    // the next Start will scope them out for the same reason it scoped the
+    // pre-start stray above out.)
     controller.onTranslatedAudio(nullptr, 480, kRate);
     controller.onTranslatedAudio(audio.data(), 0, kRate);
     CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 480);
-    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(kFrames));
+
+    REQUIRE(controller.start());
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == 0);
+    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 0);
+    CHECK(controller.diagnostics().snapshot().sessionGeneration == 2);
+    controller.stop();
 }
 
 TEST_CASE("End to end: restart brings a fresh session with the same wiring",

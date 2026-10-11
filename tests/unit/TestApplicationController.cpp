@@ -1227,3 +1227,164 @@ TEST_CASE("ApplicationController: fast Off/behavior/target clicks land on the la
                                                  // abandoning verb, no stragglers
     CHECK(controller.sessionState() == SessionState::closed);
 }
+
+// ------------------------------------------------- waiting start & session ledger
+//
+// Venue task 3 sections 1 and 2, from the operator's side: the application LAUNCHES
+// idle - presses of Start are the only thing that speaks to the provider - and
+// every explicit Start opens a clean diagnostic ledger while the permanent
+// history crosses the boundary intact.
+
+TEST_CASE("ApplicationController: a fresh app waits - no session, no submits, no translation before an explicit Start",
+          "[app][startup][session]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    // Opening the application is not starting a show. The backend mount is a
+    // seam, not an intention: until somebody presses Start (or a smoke check
+    // calls start() itself, which is its documented job), nothing may open a
+    // session, feed a translator or claim a session number.
+    CHECK(controller.state() == ApplicationState::stopped);
+    CHECK(mock->sessionsOpened() == 0);
+    CHECK(mock->acceptedSubmits() == 0);
+    CHECK_FALSE(controller.translationStreamer());
+    CHECK(controller.diagnostics().snapshot().sessionGeneration == 0);
+    CHECK(controller.engine().blockCount() == 0);
+
+    // Opening and closing Settings changes the file, not the airtime: a saved
+    // candidate while stopped must not start anything and must not even
+    // schedule a reconcile - the lifecycle queue is for RUNNING shows.
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "de";
+    std::string note;
+    REQUIRE(controller.updateSettings(candidate, note));
+    CHECK(mock->sessionsOpened() == 0);
+    CHECK_FALSE(controller.translationStreamer());
+    CHECK(controller.state() == ApplicationState::stopped);
+
+    // And the FIRST explicit Start is the only event that opens a session.
+    REQUIRE(controller.start());
+    CHECK(mock->sessionsOpened() == 1);
+    REQUIRE(controller.translationStreamer() != nullptr);
+    CHECK(controller.diagnostics().snapshot().sessionGeneration == 1);
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: an explicit Start opens a clean ledger and keeps the history",
+          "[app][diagnostics][session]")
+{
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+    pumpBlocks(controller, 4);
+    std::vector<float> block(480, 0.25f);
+    controller.onTranslatedAudio(block.data(), 480, 48000);
+
+    const auto running = controller.diagnostics().snapshot();
+    REQUIRE(running.audioBlocks > 0);
+    REQUIRE(controller.engine().blockCount() > 0);
+    REQUIRE(running.translatedAudioFrames > 0);
+
+    controller.stop();
+
+    // Stop does NOT clear the numbers: the operator asks "how was the show"
+    // after it ended, and the panel must still answer. The late fact recorded
+    // under a stopped show counts too - it belongs to THIS session's story.
+    CHECK(controller.diagnostics().snapshot().audioBlocks > 0);
+    controller.onTranslatedAudio(block.data(), 480, 48000);
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == 480);
+
+    // The next EXPLICIT Start is the line between sessions: both ledgers -
+    // the DiagnosticsManager's and the engine's own counters the panel reads -
+    // start clean. One line, one point in the lifecycle, not a UI-refresh
+    // mystery.
+    REQUIRE(controller.start());
+    const auto fresh = controller.diagnostics().snapshot();
+    CHECK(fresh.sessionGeneration == 2);
+    CHECK(fresh.audioBlocks == 0);
+    CHECK(fresh.translatedAudioFrames == 0);
+    CHECK(fresh.lateAudioFrames == 0);
+    CHECK(controller.engine().blockCount() == 0);
+    CHECK(controller.engine().inputSamplesCaptured() == 0);
+    CHECK(mock->sessionsOpened() == 2);
+
+    // The permanent history crossed the line intact, and the boundary event
+    // itself archived the previous session's headline numbers: an export taken
+    // now still answers "how bad was the FIRST show".
+    const auto events = controller.diagnostics().events();
+    bool sawFirstBoundary = false;
+    bool sawArchivedLate = false;
+    for (const auto& event : events)
+    {
+        if (event.message.find("session 1 started") != std::string::npos)
+            sawFirstBoundary = true;
+        if (event.message.find("session 2 started") != std::string::npos
+            && event.message.find("480 late audio frames") != std::string::npos)
+            sawArchivedLate = true;
+    }
+    CHECK(sawFirstBoundary);
+    CHECK(sawArchivedLate);
+
+    controller.stop();
+}
+
+TEST_CASE("ApplicationController: rotations and Off crossings keep the running show's ledger",
+          "[app][diagnostics][session]")
+{
+    // Reopening a provider session is NOT a new operator session. A reconnect,
+    // a live language rotation or an Off->translation resume are mid-show
+    // events, and the numbers that describe the show - blocks served, audio
+    // delivered, reconnects survived - must survive them, or the venue's "how
+    // stable was tonight" question becomes unreadable at the second click.
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    auto backend = std::make_unique<MockTranslationBackend>();
+    auto* mock = backend.get();
+    ApplicationController controller;
+    useTempSettings(controller, temp);
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+    pumpBlocks(controller, 3);
+
+    auto candidate = controller.config().current();
+    candidate.translation.outputLanguage = "de";
+    std::string note;
+    REQUIRE(controller.updateSettings(candidate, note));
+    REQUIRE(waitUntil([&] { return mock->sessionsOpened() >= 2; }));
+    REQUIRE(waitUntil([&] { return controller.sessionState() == SessionState::connected; }));
+
+    pumpBlocks(controller, 2);
+
+    auto afterRotation = controller.diagnostics().snapshot();
+    CHECK(afterRotation.sessionGeneration == 1);                 // one show
+    CHECK(afterRotation.audioBlocks >= 5);                       // its ledger was never wiped
+    CHECK(controller.engine().blockCount() >= 5);
+    CHECK(afterRotation.translationErrors == 0);
+
+    // Off and back: still one show, still one ledger.
+    candidate.translation.outputLanguage = "off";
+    REQUIRE(controller.updateSettings(candidate, note));
+    REQUIRE(waitUntil([&] { return controller.sessionState() == SessionState::closed; }));
+    candidate.translation.outputLanguage = "ru";
+    REQUIRE(controller.updateSettings(candidate, note));
+    REQUIRE(waitUntil([&] { return controller.sessionState() == SessionState::connected; }));
+
+    const auto afterOff = controller.diagnostics().snapshot();
+    CHECK(afterOff.sessionGeneration == 1);
+    CHECK(afterOff.audioBlocks >= 5);
+
+    controller.stop();
+}

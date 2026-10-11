@@ -216,6 +216,21 @@ public:
     bool takeInputClipIndicator() noexcept;
     bool takeOutputClipIndicator() noexcept;
 
+    /// Clear the SHOW's statistics: every block/frames/silence/drop/underrun/
+    /// overrun/malformed total, the gain stages' signal counters and the jitter
+    /// underrun baselines. The controller calls this once per run, at the
+    /// explicit operator Start inside the point where Stop has already joined
+    /// every old thread and the first new callback has not happened yet - so
+    /// the counters describe exactly one session from its first block (venue
+    /// task 3; the DiagnosticsManager ledger resets at the same point).
+    ///
+    /// What survives is deliberately not session-shaped: gains, mutes and ramp
+    /// (the operator's settings), the device geometry, the routing (re-applied
+    /// from settings seconds later anyway), and the knob-operation quality
+    /// totals (clamped/rejected gain requests - facts about the console, not
+    /// the show). Never call while the callback can be running.
+    void resetRunCounters() noexcept;
+
     /// Buffer endpoints for the non-realtime side. Valid from activate() until
     /// deactivate(); nullptr when the channel index is out of range or the pipeline
     /// is not built. The engine keeps ownership.

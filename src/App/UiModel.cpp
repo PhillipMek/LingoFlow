@@ -93,6 +93,7 @@ UiMeterView meterView(const AudioEngine& engine, int channel, bool inputSide)
     view.peakDb = audio::linearToDb(meter->peakLinear());
     view.rmsDb = audio::linearToDb(meter->rmsLinear());
     view.signalPresent = meter->signalPresent();
+    view.blocksMeasured = meter->blocksMeasured();
     return view;
 }
 
@@ -445,6 +446,14 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
         { "audio backend", status.audioBackendName.empty() ? "none" : status.audioBackendName },
         { "channels in use (in/out)", std::to_string(caps.inputChannels) + " / "
                                       + std::to_string(caps.outputChannels) },
+        // The session scope of everything this panel counts (venue task 3 §2):
+        // which explicit operator Start owns these numbers, and when it began.
+        // "#0 never started" is the truthful reading of an app that is open but
+        // idle - waiting is a state, not a failure.
+        { "diagnostics session",
+          "#" + std::to_string(diag.sessionGeneration) + (diag.sessionStarted.empty()
+                                                              ? std::string(" never started")
+                                                              : " started " + diag.sessionStarted) },
         { "API key", controller.hasApiSecret() ? "stored" : std::string("NOT stored") },
         { "secret store", controller.secretStoreName() },
         { "developer plan", plan.badge.empty() ? std::string("production") : plan.badge },

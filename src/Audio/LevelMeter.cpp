@@ -65,15 +65,54 @@ void LevelMeter::reset() noexcept
 
 float linearToDb(float linear) noexcept
 {
-    constexpr float kFloorDb = -120.0f;
-
     if (!std::isfinite(linear) || linear <= 0.0f)
-        return kFloorDb;
+        return kMeterFloorDb;
 
     // 20*log10 for amplitude quantities; a magnitude of 1.0 is full scale (0 dBFS).
     const double db = 20.0 * std::log10(static_cast<double>(linear));
 
-    return db < static_cast<double>(kFloorDb) ? kFloorDb : static_cast<float>(db);
+    return db < static_cast<double>(kMeterFloorDb) ? kMeterFloorDb : static_cast<float>(db);
+}
+
+MeterSmoother::Display MeterSmoother::update(float rawPeakDb, float rawRmsDb,
+                                             double elapsedMs) noexcept
+{
+    const double dt = elapsedMs > 0.0 ? elapsedMs : 0.0;   // a rewound clock is not a step back
+
+    auto sanitize = [](float value) noexcept
+    {
+        // A non-finite readout is not a level. It arrives only from an already
+        // broken measurement; the display owes the operator silence, not NaN.
+        if (!std::isfinite(value))
+            return kMeterFloorDb;
+        return value < kMeterFloorDb ? kMeterFloorDb : value;
+    };
+
+    auto glide = [dt](float& value, float target, double tauMs) noexcept
+    {
+        if (dt == 0.0)
+            return;   // same instant: no time passed, no movement is owed
+
+        // First-order exponential approach. Note the algebra the tests lean on:
+        // each step multiplies the remaining distance by e^(-dt/tau), so the
+        // product over a sequence depends only on the TOTAL time - the filter
+        // is a rate in seconds, not a magic coefficient per repaint.
+        const double alpha = 1.0 - std::exp(-dt / tauMs);
+        const double moved = static_cast<double>(value) + alpha * (static_cast<double>(target) - value);
+
+        // Never below the floor (exp() cannot cross the target, but float
+        // rounding near it deserves the boundary), and never away from it in
+        // the wrong direction: an exponential to a target cannot overshoot.
+        value = moved < static_cast<double>(kMeterFloorDb) ? kMeterFloorDb : static_cast<float>(moved);
+    };
+
+    const float peakTarget = sanitize(rawPeakDb);
+    const float rmsTarget = sanitize(rawRmsDb);
+
+    glide(peak_, peakTarget, peakTarget > peak_ ? kAttackTauMs : kReleaseTauMs);
+    glide(rms_, rmsTarget, rmsTarget > rms_ ? kAttackTauMs : kReleaseTauMs);
+
+    return Display{ peak_, rms_ };
 }
 
 } // namespace audio

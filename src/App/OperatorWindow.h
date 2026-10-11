@@ -30,6 +30,7 @@
 // end - or immediately for a typed text value, which arrives while no drag is
 // active. Channels are discrete combo choices; they commit directly on change.
 
+#include <chrono>
 #include <functional>
 #include <string>
 #include <vector>
@@ -38,6 +39,7 @@
 
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
+#include "Audio/LevelMeter.h"
 
 namespace liveai {
 
@@ -146,6 +148,20 @@ private:
 
     juce::Label inputMeterCaption_, outputMeterCaption_;
     MeterBar inputMeter_, outputMeter_;
+
+    /// Venue task 3 §3: the bar and the numeric readout show attack/release
+    /// smoothed levels, while the measurement itself stays the engine's raw
+    /// fact (LevelMeter, realtime side; the export keeps printing raw numbers).
+    /// The smoother state belongs to THIS view - one owner, the message thread,
+    /// no locks; the clock decides each step's coefficient, so the motion does
+    /// not depend on how often rebuild() happens to run; and the meter's
+    /// blocksMeasured() progress tells "no new data" from "quiet": when the
+    /// data stops, the display glides to silence instead of freezing.
+    audio::MeterSmoother inputMeterSmoothing_;
+    audio::MeterSmoother outputMeterSmoothing_;
+    std::uint64_t lastInputMeterBlocks_ = 0;
+    std::uint64_t lastOutputMeterBlocks_ = 0;
+    std::chrono::steady_clock::time_point lastMeterUpdate_ {};
     juce::Label inputLevelLabel_, outputLevelLabel_;   ///< numeric level + peak, from the same view
     juce::Label inputGainCaption_, outputGainCaption_;
     juce::Slider inputGainSlider_, outputGainSlider_;

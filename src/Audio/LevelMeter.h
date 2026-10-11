@@ -71,5 +71,62 @@ private:
 /// silent channel reads as silence instead of -inf, which the UI cannot format.
 float linearToDb(float linear) noexcept;
 
+/// The shared floor every meter readout uses: linearToDb() clamps to it, silence
+/// is a VALUE (-120 dBFS) and not minus infinity, and the display smoother treats
+/// "no data" by gliding to it. Documented once here so no surface invents its own.
+inline constexpr float kMeterFloorDb = -120.0f;
+
+/// Time-aware attack/release smoothing for DISPLAYING a meter level (venue task
+/// 3 §3: the bar jumped with every raw block value and read as nervous).
+///
+/// The separation is the point: LevelMeter keeps the real-time measurement -
+/// the fact of the last block, published atomically from the callback - and
+/// this class only filters what the UI already read. It never runs in the
+/// callback, never allocates, never locks; the UI thread that owns a widget
+/// calls update() with the milliseconds elapsed since its own previous call,
+/// and the coefficient is DERIVED from that interval (first-order exponential:
+/// 1 - e^(-dt/tau)). Consequences the tests pin:
+///   * the display moves at a physical speed, not per-frame: ten 20 ms steps
+///     and one 200 ms step converge to the same value, so a 30 fps machine and
+///     a 144 fps machine show the same meter;
+///   * attack (rising) is fast - 60 ms; release (falling) is slow - 350 ms:
+///     a jump must look immediate to trust, a decay may look smooth;
+///   * it never overshoots the raw target and never goes below the floor;
+///   * "no new data" is the CALLER's fact: the widget feeds the floor when the
+///     meter's blocksMeasured() stopped advancing, and the display glides to
+///     silence instead of freezing at the last level (OperatorWindow does
+///     exactly that).
+class MeterSmoother final
+{
+public:
+    struct Display
+    {
+        float peakDb;
+        float rmsDb;
+    };
+
+    /// One glance at the raw dB values, dtMs = milliseconds since the previous
+    /// update() call (<= 0 means "same instant": the values hold their ground).
+    /// Non-finite raw values are treated as the floor - a poisoned measurement
+    /// must not poison the display either.
+    Display update(float rawPeakDb, float rawRmsDb, double elapsedMs) noexcept;
+
+    /// Back to the floor. When a widget is shown again, the first fresh frame
+    /// attacks up from silence - which is the honest story, not a frozen bar
+    /// from a previous run.
+    void reset() noexcept
+    {
+        peak_ = kMeterFloorDb;
+        rms_ = kMeterFloorDb;
+    }
+
+    static constexpr double kAttackTauMs = 60.0;
+    static constexpr double kReleaseTauMs = 350.0;
+
+private:
+    float peak_ = kMeterFloorDb;
+    float rms_ = kMeterFloorDb;
+};
+
 } // namespace audio
 } // namespace liveai

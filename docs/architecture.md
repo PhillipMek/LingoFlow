@@ -331,6 +331,31 @@ new code is written against behaviour that already has proof, not against commen
   `translatedAudioDroppedFrames` (what our own full buffer dropped). "The translator
   stopped delivering" and "delivery went somewhere wrong" are different operator
   problems and get different numbers.
+* **The diagnostic ledger is scoped to the operator's session** (venue task 3):
+  launching the application starts nothing - the windowed run waits in the stopped
+  state until Start is pressed (only `--smoke` self-starts, because a startup check
+  is its contract), and no Settings edit, device scan or re-scan can begin a
+  session. `DiagnosticsManager::beginSession()` + `AudioEngine::resetRunCounters()`
+  run together at that one explicit Start, before the device opens: every per-run
+  counter, the last-error pair and the engine's statistics then describe exactly
+  one show, from its first callback to its last. Permanent history is not deleted:
+  the event ring survives the boundary, and the boundary event itself archives the
+  replaced session's headline numbers (underruns, reconnects, translation errors,
+  late audio). Late events cannot corrupt a fresh ledger by construction - the
+  previous run's Stop joined every session thread first (rules 5 and 6) - and
+  `sessionGeneration()` is the tag any future asynchronous writer needs. Mid-show
+  events (a supervisor reconnect, a live language rotation, an Off->translation
+  reopen) deliberately do NOT reset: those numbers are the show's own evidence.
+* **The meter's smoothing is a display-layer fact** (venue task 3): `LevelMeter`
+  keeps measuring the raw block in the realtime path exactly as before - the
+  export and the diagnostics rows still print those facts. `audio::MeterSmoother`
+  is the UI-side filter for the screen only: an exponential attack/release step
+  whose coefficient is computed from the elapsed real time between glances, so
+  the bar moves at a constant physical speed on any repaint rate, rises fast,
+  falls slow, never overshoots, and glides to silence when the meter's
+  `blocksMeasured()` stops advancing (no new data is not "hold the last level").
+  No locks, no allocation, nothing added to the callback; the clipping lamp
+  stays raw, because a hazard flag must never be hidden by polish.
 * **Typed text is real today, and the seam is still the string pair**:
   `Translation/TextPipeline.h` turns the sink's partial/final strings into
   `TranslationTextEvent`s with a product-owned sequence and arrival clock, a

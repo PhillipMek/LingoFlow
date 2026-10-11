@@ -33,18 +33,21 @@
 // and the subtitle model. The application adds the Settings dialog: the translation
 // instructions, recovery policy, NDI and diagnostics fields, and the masked
 // API-key entry that is stored in the Windows Credential Manager (the value
-// never touches settings, logs or the screen after a successful store). It
-// starts the subsystems exactly like --smoke does - but a runtime start that
-// fails no longer ends the process (fix 2026-10-06): the window opens in the
-// controller's faulted state, shows the reason and the Retry button, and the
+// never touches settings, logs or the screen after a successful store).
+// Launching the window starts NOTHING (venue task 3 §1): the app waits in the
+// stopped state until the operator presses Start, which opens the device and
+// the translation session on the lifecycle worker. A Start that fails keeps the
+// old promise (fix 2026-10-06): the process does not end, the window shows the
+// controller's faulted state with the reason and an amber Retry, and the
 // operator recovers without a relaunch. Everything the operator changes
 // afterwards goes through the controller - the UI itself owns no logic
 // (App/UiModel is the tested half).
 //
 // Exit codes:
-//   0   started (and, with --smoke, shut down) normally; a windowed run that
-//       opens its window in a faulted state and is later closed by the
-//       operator also exits 0 - a runtime problem is not a startup problem.
+//   0   --smoke: started and shut down normally. A windowed run always exits 0
+//       by closing its window - a runtime problem of a session the operator
+//       started is not a startup problem, and the application itself cannot
+//       fail at startup on the runtime's account anymore.
 //   2   --smoke only: a subsystem refused to start (e.g. the selected ASIO
 //       device is unavailable). The reason is in the log and in the status
 //       detail; the same failure in a windowed run is shown, not exited on.
@@ -346,18 +349,21 @@ public:
             installProductionNdi();
 #endif
 
-        const bool started = controller_.start();
-
-        if (!started)
-            liveai::log::error(kLogComponent, "runtime start failed: " + controller_.status().detail);
-
         if (smoke)
         {
-            // A start that failed must not look like a successful run: --smoke is
-            // evidence in CI and by the operator, so it reports the failure in the
-            // exit code as well as in the log. The windowed fix below deliberately
-            // did not move this contract: for a startup check, runtime failure IS
-            // startup failure.
+            // Smoke is the ONE run mode that starts by itself, and that is not
+            // an accident of history: --smoke is a startup CHECK, its whole
+            // contract is "exercise the runtime and report in the exit code",
+            // and no operator is present to press a button. A start that fails
+            // must not look like a successful run: --smoke is evidence in CI
+            // and by the operator, so it reports the failure in the exit code
+            // as well as in the log (for a startup check, runtime failure IS
+            // startup failure).
+            const bool started = controller_.start();
+
+            if (!started)
+                liveai::log::error(kLogComponent, "runtime start failed: " + controller_.status().detail);
+
             if (!started)
                 setApplicationReturnValue(kExitStartupFailure);
             else
@@ -368,15 +374,26 @@ public:
             return;
         }
 
-        // The windowed run shows the operator screen even when the runtime
-        // refused to start (fix 2026-10-06): a desktop application that
-        // vanishes on a busy ASIO device gives the operator neither the
-        // reason nor a way forward. The controller has just recorded the
-        // failure as a fault with the reason in the status detail - the
-        // window shows exactly that (red faulted line, the reason, an amber
-        // Retry), the log keeps the original error, and the operator can fix
-        // the external cause and retry without a relaunch. Closing this
-        // window later is a normal exit, not a startup failure.
+        // The windowed run opens WAITING (venue task 3 §1): the app launching
+        // is not the show beginning. Nothing above this line touched a device
+        // or a socket - the factory and the lister are seams, the plan is a
+        // mounted authority, the credential store is an entry point - and no
+        // translation request exists until the operator presses Start on this
+        // screen (the button routes through the lifecycle worker, so even the
+        // device open and the handshake run off the window). Reaching this
+        // line is no more a session than double-clicking an icon can be:
+        // opening or closing Settings, a device re-scan, an API reconnect
+        // inside a session the operator began, or a failed Start that the
+        // operator then Retries all keep the same rule - the operator starts
+        // the show, nothing else does.
+        //
+        // What a FAILED Start still shows is unchanged (fix 2026-10-06, moved
+        // from "before the window existed" to "on the operator's own click"):
+        // the controller records the refusal as a fault with the reason in the
+        // status detail - the window shows exactly that (red faulted line, the
+        // reason, an amber Retry), the log keeps the original error, and the
+        // operator can fix the external cause and retry without a relaunch.
+        // Closing this window later is a normal exit, not a startup failure.
         window_ = std::make_unique<liveai::OperatorWindow>(controller_);
     }
 

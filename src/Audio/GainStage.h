@@ -132,6 +132,24 @@ public:
     /// not have to remember counters to render it. Consumes the latch.
     bool takeClipIndicator() noexcept { return clipIndicator_.exchange(false, std::memory_order_relaxed); }
 
+    /// Zero the SIGNAL facts this stage counted (full-scale samples, non-finite
+    /// replacements, contract violations, processed blocks/samples, and the latch).
+    /// The stage's SETTINGS - level, mute, ramp - are what survives a run by design
+    /// (a device restart must not silently reset the room's levels); these counters
+    /// are not settings, they are "what happened during the show", and the show now
+    /// has its own ledger per session (venue task 3). Called between runs from
+    /// AudioEngine::resetRunCounters(), never while the callback uses the stage.
+    void resetSignalCounters() noexcept
+    {
+        clippedIn_.store(0, std::memory_order_relaxed);
+        clippedOut_.store(0, std::memory_order_relaxed);
+        nonFiniteIn_.store(0, std::memory_order_relaxed);
+        invalidCalls_.store(0, std::memory_order_relaxed);
+        blocks_.store(0, std::memory_order_relaxed);
+        samples_.store(0, std::memory_order_relaxed);
+        clipIndicator_.store(false, std::memory_order_relaxed);
+    }
+
     /// Linear multiplier for a dB value. exp2 rather than powf: fixed cost, no libm
     /// path that could allocate, and exactly what a 20*log10() readout inverts.
     static float dbToLinear(float gainDb) noexcept;

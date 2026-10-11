@@ -575,6 +575,12 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
         { "ndi_state", std::string(ndi::nameOf(status.ndi)) },
         { "audio_backend", status.audioBackendName },
         { "detail", status.detail },
+        // Task 3 §2 made the session scope explicit: every number in this file
+        // describes ONE operator session, and these two rows say which one.
+        // "0 / never started" is the honest reading of an app that was opened
+        // and never run - Start is a decision, not a side effect of launch.
+        { "diagnostics_session", std::to_string(diag.sessionGeneration) },
+        { "session_started", diag.sessionStarted.empty() ? "never" : diag.sessionStarted },
     } });
 
     const LatencyEstimate latency = estimateBufferDelay(engine, cfg);
@@ -935,6 +941,21 @@ bool ApplicationController::start()
         std::lock_guard lock(subsystemMutex_);
         lastTranslationError_.clear();
     }
+
+    // The one lifecycle point where the per-session diagnostic ledger resets
+    // (venue task 3 §2): the operator's explicit Start. Both ledgers are
+    // cleared together, in this order, BEFORE the device opens and before any
+    // session talk - so the first callback of the new run and the first
+    // response of the new session are counted, and nothing else is. Nothing
+    // from the previous session can write late into the fresh numbers: Stop
+    // ran on the same lifecycle worker and its abandoning close JOINS every
+    // backend/supervisor/streaming thread before returning (rules 5 and 6),
+    // and sessionGeneration() is the tag for any future asynchronous writer.
+    // A supervisor reconnect or an Off->translation reopen is deliberately
+    // NOT a reset: "how many reconnects did this show survive" is a question
+    // about the show, and its answer must survive them.
+    diagnostics_.beginSession();
+    engine_.resetRunCounters();
 
     warnedRateMismatch_.store(false, std::memory_order_relaxed);
     warnedNoBuffer_.store(false, std::memory_order_relaxed);

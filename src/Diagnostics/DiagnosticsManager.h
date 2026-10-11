@@ -115,6 +115,35 @@ public:
     /// an operator most needs replayed, so the two roles share one call site.
     void noteError(std::string_view subsystem, std::string_view message);
 
+    // ---------------------------------------------------------------- sessions
+    /// The one lifecycle point where the per-run ledger starts clean (venue
+    /// task 3): an EXPLICIT operator Start. Zeroes every numeric counter this
+    /// class owns, clears the recorded last-error pair and takes a fresh
+    /// session-start timestamp, then bumps the generation and writes a
+    /// boundary event into the ring.
+    ///
+    /// What is deliberately NOT touched is the permanent side of diagnostics:
+    /// the event ring (history survives runs - the boundary event itself
+    /// archives the headline numbers of the session it replaced), the
+    /// eviction count, and the device geometry/backend label, which describe
+    /// the machine, not the show.
+    ///
+    /// Late events from the previous session cannot corrupt the fresh ledger
+    /// not by luck but by construction: the callers run start() on the
+    /// lifecycle worker after the previous run's Stop, and the Stop's abandoning
+    /// close JOINS every backend/supervisor/streaming thread before returning
+    /// (rules 5 and 6). At this point nobody from the old session can write.
+    /// The generation number is the tag for any future asynchronous writer
+    /// that needs to say which session a fact belongs to.
+    void beginSession();
+
+    /// The number of beginSession() calls since startup: 0 until the first
+    /// explicit start, 1 for the first session, and so on. Cheap atomic.
+    std::uint64_t sessionGeneration() const noexcept
+    {
+        return sessionGeneration_.load(std::memory_order_relaxed);
+    }
+
     // ---------------------------------------------------------------- events (017)
     /// One dated entry in the ring-buffered event log: the replay of "what
     /// happened this run" that survives neither the screen (a glance is a
@@ -171,6 +200,8 @@ public:
         std::string audioBackend;                 ///< empty while no backend is running
         std::string lastErrorSubsystem;           ///< empty when no error was recorded
         std::string lastErrorMessage;
+        std::uint64_t sessionGeneration = 0;      ///< 0 until the first explicit operator Start
+        std::string sessionStarted;               ///< timestamp of the current session's beginSession()
     };
 
     /// Aggregation point for the UI/worker threads. Never call from the audio thread.
@@ -222,9 +253,11 @@ private:
     std::string audioBackend_;
     std::string lastErrorSubsystem_;
     std::string lastErrorMessage_;
+    std::string sessionStarted_;              ///< guarded by textMutex_: beginSession() timestamp
     std::deque<DiagnosticEvent> events_;      ///< oldest first, capped at kMaxEvents
     std::uint64_t eventSequence_ = 0;         ///< guarded by textMutex_
     std::atomic<std::uint64_t> evictedEvents_{ 0 };
+    std::atomic<std::uint64_t> sessionGeneration_{ 0 };
 
     /// Caller holds textMutex_.
     void appendEventLocked(std::string_view subsystem, std::string_view message);

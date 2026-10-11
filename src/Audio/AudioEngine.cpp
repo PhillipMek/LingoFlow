@@ -489,6 +489,50 @@ bool AudioEngine::takeOutputClipIndicator() noexcept
     return any;
 }
 
+void AudioEngine::resetRunCounters() noexcept
+{
+    // One session's statistical ledger, cleared (venue task 3 §2; the matching
+    // DiagnosticsManager reset happens at the same lifecycle point). Nothing
+    // here frees or reallocates: plain stores into atomics the same as the
+    // callback's own increments - the only rule is that no callback is
+    // running, which is exactly the property "called between runs" gives.
+    blocks_.store(0, std::memory_order_relaxed);
+    frames_.store(0, std::memory_order_relaxed);
+    inputSamplesCaptured_.store(0, std::memory_order_relaxed);
+    inputSamplesForwarded_.store(0, std::memory_order_relaxed);
+    inputSamplesNotForwarded_.store(0, std::memory_order_relaxed);
+    outputSilenceSamples_.store(0, std::memory_order_relaxed);
+    underruns_.store(0, std::memory_order_relaxed);
+    overruns_.store(0, std::memory_order_relaxed);
+    ringDroppedSamples_.store(0, std::memory_order_relaxed);
+    malformedCallbacks_.store(0, std::memory_order_relaxed);
+    oversized_.store(0, std::memory_order_relaxed);
+    outputDiscardedFrames_.store(0, std::memory_order_relaxed);
+
+    // The gain stages' signal facts (clipping, non-finite replacements, the
+    // latch) - but NOT their settings: growGainStages keeps the operator's
+    // levels across a restart, and a session reset must not disagree with
+    // that promise.
+    for (auto& stage : inputStages_)
+    {
+        if (stage != nullptr)
+            stage->resetSignalCounters();
+    }
+
+    for (auto& stage : outputStages_)
+    {
+        if (stage != nullptr)
+            stage->resetSignalCounters();
+    }
+
+    // The per-channel jitter underrun snapshot baselines. The buffers
+    // themselves are rebuilt fresh by the next activate() (their own event
+    // counts start at zero), so zeroing the baselines here keeps the
+    // engine's diff-based classification honest from the first block.
+    for (auto& seen : jitterUnderrunSeen_)
+        seen = 0;
+}
+
 void AudioEngine::growGainStages(int inputChannels, int outputChannels)
 {
     const auto grow = [](std::vector<std::unique_ptr<audio::GainStage>>& stages, int needed)

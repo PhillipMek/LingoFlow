@@ -420,7 +420,7 @@ void OperatorContent::stopPressed()
 {
     controller_.requestStop();
     actionNote_ = "Stopping. Unplayed translated audio is discarded; device, rate, "
-                  "channel, language and NDI changes apply on Start.";
+                  "channel and NDI changes apply on Start.";
     rebuild();
 }
 
@@ -618,7 +618,7 @@ void OperatorContent::rebuild()
 {
     updatingWidgets_ = true;
 
-    const OperatorPanel panel = buildOperatorPanel(controller_, actionNote_);
+    OperatorPanel panel = buildOperatorPanel(controller_, actionNote_);
 
     // ------------------------------------------------------------- status card
     appValue_.setText(stateGlyph(panel.applicationState) + juce::String(panel.applicationState),
@@ -713,6 +713,48 @@ void OperatorContent::rebuild()
                                panel.inputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
     outputMuteButton_.setColour(juce::TextButton::buttonColourId,
                                 panel.outputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
+
+    // ---- meter display (venue task 3 §3). The raw measurement is the engine's
+    // fact; the smoothing is this view's own, here in the message thread - never
+    // in the callback, never in UiModel: the export and the diagnostics rows keep
+    // printing raw numbers, only the screen glides. dt comes from the real clock,
+    // so the visual speed is independent of how often rebuild() happens to run.
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const double dtMs =
+            lastMeterUpdate_.time_since_epoch().count() == 0
+                ? 100.0   // first glance: the timer's own interval is the honest assumed pace
+                : std::chrono::duration<double, std::milli>(now - lastMeterUpdate_).count();
+        lastMeterUpdate_ = now;
+
+        const auto smooth = [dtMs](const UiMeterView& raw, std::uint64_t& lastBlocks,
+                                   audio::MeterSmoother& smoother)
+        {
+            UiMeterView shown = raw;
+
+            // No progress in the meter's own block counter means no data: the
+            // honest raw reading is silence, not the frozen last block. The
+            // smoother then releases toward it - the bar ends quietly instead
+            // of holding a level that no longer exists.
+            const bool fresh = raw.blocksMeasured != lastBlocks;
+            lastBlocks = raw.blocksMeasured;
+
+            const auto levels =
+                smoother.update(fresh ? raw.peakDb : audio::kMeterFloorDb,
+                                fresh ? raw.rmsDb : audio::kMeterFloorDb, dtMs);
+            shown.peakDb = levels.peakDb;
+            shown.rmsDb = levels.rmsDb;
+            shown.signalPresent = fresh && raw.signalPresent;
+
+            // The clipping lamp is deliberately NOT smoothed: it is this
+            // block's hazard flag, and delaying a full-scale fact is hiding,
+            // not polish.
+            return shown;
+        };
+
+        panel.inputMeter = smooth(panel.inputMeter, lastInputMeterBlocks_, inputMeterSmoothing_);
+        panel.outputMeter = smooth(panel.outputMeter, lastOutputMeterBlocks_, outputMeterSmoothing_);
+    }
 
     inputMeter_.setLevels(panel.inputMeter);
     outputMeter_.setLevels(panel.outputMeter);

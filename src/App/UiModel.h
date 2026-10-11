@@ -37,6 +37,12 @@ struct UiMeterView
 {
     float peakDb = -120.0f;      ///< linearToDb floor: silence reads as -120, never -inf
     float rmsDb = -120.0f;
+    /// The meter's own progress counter, carried so the DISPLAY layer can tell
+    /// "no new data" from "quiet" (venue task 3 §3): when this stops advancing,
+    /// the widget feeds its smoother silence instead of freezing at the last
+    /// measured level. The number is a fact of the measurement, not of the
+    /// smoothing - which is exactly the separation the task asks for.
+    std::uint64_t blocksMeasured = 0;
     bool signalPresent = false;  ///< the meter's documented -60 dBFS display threshold
     bool clipping = false;       ///< the engine's latched clip indicator, consumed by this build
 };

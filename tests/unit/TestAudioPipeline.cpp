@@ -1399,3 +1399,187 @@ TEST_CASE("AudioEngine: a routing flip between threads never splits one block",
     engine.setOutputRouting(OutputRouting::translation);
     engine.deactivate();
 }
+
+// ---------------------------------------------------------------- MeterSmoother
+// Venue task 3 �3: the measurement is the engine's fact, the smoothing is the
+// display's. These tests own the pure filter - rise, fall, timing, silence and
+// "no data" - without a window in sight, because the class is designed to be
+// testable exactly like this.
+
+TEST_CASE("MeterSmoother: a jump attacks fast, a decay releases slow", "[audio][meter][smoothing]")
+{
+    audio::MeterSmoother smoother;
+
+    // From silence the first glance at -20 dBFS must cross MOST of the distance
+    // (the operator needs to trust the meter sees them)...
+    const auto first = smoother.update(-20.0f, -20.0f, 100.0);
+    CHECK(first.peakDb > -50.0f);                        // attack: most of the way in one glance
+    CHECK(first.rmsDb > -50.0f);
+
+    // ...and it converges from BELOW, never overshooting the raw target.
+    const auto second = smoother.update(-20.0f, -20.0f, 100.0);
+    CHECK(second.peakDb > first.peakDb);
+    CHECK(second.peakDb <= -20.0f);
+
+    // The decay is the documented slower half: after the same 100 ms the value
+    // has moved clearly LESS toward silence than the attack moved toward the
+    // signal - that asymmetry is the whole attack/release design, pinned.
+    auto settled = smoother.update(-20.0f, -20.0f, 2000.0);   // settle exactly
+    CHECK(settled.peakDb == Catch::Approx(-20.0f).margin(0.5f));
+
+    const auto falling = smoother.update(-120.0f, -120.0f, 100.0);
+    const double fallMove = static_cast<double>(settled.peakDb) - falling.peakDb;
+    const double riseMove = static_cast<double>(first.peakDb) - static_cast<double>(-120.0);
+    CHECK(fallMove < riseMove);                              // slower down than up
+    CHECK(falling.peakDb > -120.0f);                         // and it glides, not drops
+}
+
+TEST_CASE("MeterSmoother: the speed is physical time, not frames per repaint",
+          "[audio][meter][smoothing]")
+{
+    // Ten glances 20 ms apart and one glance 200 ms apart describe the same
+    // elapsed world: the exponential step is e^(-dt/tau), so the product
+    // depends only on the TOTAL time. This is the property that makes the
+    // display behave identically on a 30 fps laptop and a 144 Hz console.
+    audio::MeterSmoother frequent;
+    audio::MeterSmoother rare;
+
+    audio::MeterSmoother::Display last {};
+    for (int i = 0; i < 10; ++i)
+        last = frequent.update(-30.0f, -40.0f, 20.0);
+    const auto once = rare.update(-30.0f, -40.0f, 200.0);
+
+    CHECK(last.peakDb == Catch::Approx(once.peakDb).margin(0.01f));
+    CHECK(last.rmsDb == Catch::Approx(once.rmsDb).margin(0.01f));
+}
+
+TEST_CASE("MeterSmoother: dt of zero holds, silence stays silence, floors and junk are honoured",
+          "[audio][meter][smoothing]")
+{
+    audio::MeterSmoother smoother;
+
+    // No time passed (a double repaint in the same instant): no movement owed.
+    const auto held = smoother.update(-20.0f, -20.0f, 0.0);
+    CHECK(held.peakDb == -120.0f);          // still the untouched floor...
+    CHECK(held.rmsDb == -120.0f);
+
+    // ...and a rewound clock is not a step back either.
+    const auto rewound = smoother.update(-20.0f, -20.0f, -50.0);
+    CHECK(rewound.peakDb == -120.0f);
+
+    // Silence is a value, not a mystery: staying at the floor keeps the floor.
+    const auto quiet = smoother.update(-120.0f, -120.0f, 100.0);
+    CHECK(quiet.peakDb == -120.0f);
+    CHECK(quiet.rmsDb == -120.0f);
+
+    // The floor is a boundary: no sequence drives the display below it.
+    const auto past = smoother.update(-1e30f, -1e30f, 5000.0);
+    CHECK(past.peakDb >= -120.0f);
+    CHECK(past.rmsDb >= -120.0f);
+
+    // A poisoned readout (NaN/Inf from a broken measurement) is treated as
+    // silence, not copied into the UI forever - the meter's non-finite rule,
+    // repeated at the display layer.
+    smoother.reset();
+    const auto junk = smoother.update(std::nanf(""), std::numeric_limits<float>::infinity(), 100.0);
+    CHECK(junk.peakDb == -120.0f);
+    CHECK(junk.rmsDb == -120.0f);
+
+    // Over-scale is NOT a floor violation: a clipped feed reads above 0 dBFS
+    // and the display must glide there rather than lie "full scale is the max".
+    smoother.reset();
+    auto hot = audio::MeterSmoother::Display { -120.0f, -120.0f };
+    for (int i = 0; i < 10; ++i)
+        hot = smoother.update(3.0f, 3.0f, 100.0);
+    CHECK(hot.peakDb > 0.0f);
+    CHECK(hot.peakDb <= 3.0f);
+
+    // reset() returns to the floor - a fresh widget tells a fresh story.
+    smoother.reset();
+    const auto again = smoother.update(-30.0f, -30.0f, 1.0);
+    CHECK(again.peakDb < -100.0f);
+}
+
+TEST_CASE("MeterSmoother: fed the floor when data stops, the display glides to silence",
+          "[audio][meter][smoothing]")
+{
+    // The "no new data" contract of task 3 �3 in the shape the widget uses it:
+    // the caller notices blocksMeasured() stopped advancing and feeds silence;
+    // the smoother's job is that the bar then RELEASES toward silence instead
+    // of freezing at the last level of a show that ended.
+    audio::MeterSmoother smoother;
+
+    for (int i = 0; i < 3; ++i)
+        smoother.update(-18.0f, -24.0f, 100.0);            // a live signal settles in
+
+    const auto firstSilentStep = smoother.update(audio::kMeterFloorDb, audio::kMeterFloorDb, 100.0);
+    CHECK(firstSilentStep.peakDb < -18.0f);                // heading down...
+    CHECK(firstSilentStep.peakDb > audio::kMeterFloorDb);  // ...but not gone instantly
+
+    auto last = firstSilentStep;
+    for (int i = 0; i < 60; ++i)
+        last = smoother.update(audio::kMeterFloorDb, audio::kMeterFloorDb, 100.0);
+    CHECK(last.peakDb == Catch::Approx(audio::kMeterFloorDb).margin(0.5f));   // silence reached
+    CHECK(last.rmsDb == Catch::Approx(audio::kMeterFloorDb).margin(0.5f));
+}
+
+TEST_CASE("AudioEngine: resetRunCounters clears the show's ledger and keeps the operator's settings",
+          "[audio][engine][diagnostics][session]")
+{
+    AudioEngine engine;
+    NullAudioBackend backend;
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    // Fill every kind of per-run fact: blocks and samples, silence, a discard,
+    // a clipped block and an underrun.
+    engine.setInputGainDb(-6.0f);
+    std::array<float, static_cast<std::size_t> (kFrames)> in {};
+    std::array<float, static_cast<std::size_t> (kFrames)> out {};
+    in.fill(0.2f);
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+    for (int block = 0; block < 5; ++block)
+        engine.processAudio(inPointers, outPointers, kFrames);
+
+    std::vector<float> queued (static_cast<std::size_t> (2400), 0.3f);
+    REQUIRE(engine.outputJitter(0)->write(queued.data(), queued.size()) == queued.size());
+    engine.requestOutputDiscard();
+    engine.processAudio(inPointers, outPointers, kFrames);   // executes the discard
+
+    REQUIRE(engine.blockCount() > 0);
+    REQUIRE(engine.inputSamplesCaptured() > 0);
+    REQUIRE(engine.outputSilenceSamples() > 0);              // pre-roll silence was played
+    REQUIRE(engine.outputDiscardedFrames() > 0);
+
+    engine.deactivate();
+
+    engine.resetRunCounters();
+
+    // The show's statistics start clean...
+    CHECK(engine.blockCount() == 0);
+    CHECK(engine.frameCount() == 0);
+    CHECK(engine.inputSamplesCaptured() == 0);
+    CHECK(engine.inputSamplesForwarded() == 0);
+    CHECK(engine.inputSamplesNotForwarded() == 0);
+    CHECK(engine.outputSilenceSamples() == 0);
+    CHECK(engine.outputDiscardedFrames() == 0);
+    CHECK(engine.inputRingDroppedSamples() == 0);
+    CHECK(engine.underrunEvents() == 0);
+    CHECK(engine.overrunEvents() == 0);
+    CHECK(engine.malformedCallbacks() == 0);
+    CHECK(engine.oversizedCallbacks() == 0);
+    CHECK(engine.inputClippedSamples() == 0);
+    CHECK(engine.inputGainClippedSamples() == 0);
+    CHECK(engine.outputGainClippedSamples() == 0);
+    CHECK(engine.nonFiniteInputSamples() == 0);
+    CHECK_FALSE(engine.takeInputClipIndicator());            // the latch too
+    CHECK_FALSE(engine.takeOutputClipIndicator());
+
+    // ...and what is NOT a session fact survives: the operator's trim (the
+    // documented promise "a device restart must not silently reset the room's
+    // levels"), the knob-operation quality totals, the geometry and the routing.
+    CHECK(engine.inputGainDb() == -6.0f);
+    CHECK(engine.jitterBufferMs() > 0);
+    CHECK(engine.outputRouting() == OutputRouting::translation);
+}
