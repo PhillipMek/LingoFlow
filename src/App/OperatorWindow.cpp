@@ -405,18 +405,22 @@ void OperatorContent::startPressed()
     if (controller_.state() == ApplicationState::faulted)
         controller_.clearFault();   // the original failure stays in the log
 
-    if (controller_.start())
-        actionNote_.clear();
-    else
-        actionNote_ = "Start failed: " + controller_.status().detail;
-
+    // The async front on purpose: what used to freeze this window - the
+    // handshake, the device open, the session teardown - now runs on the
+    // controller's lifecycle thread, and the 100 ms refresh below carries the
+    // truth (starting / running / faulted + detail) as the action completes.
+    // The export, the log and the operator screen all read the same atomics,
+    // so nothing here has to block to be honest about the outcome.
+    controller_.requestStart();
+    actionNote_.clear();
     rebuild();
 }
 
 void OperatorContent::stopPressed()
 {
-    controller_.stop();
-    actionNote_ = "Stopped. Device, rate, channel, language and NDI changes apply on Start.";
+    controller_.requestStop();
+    actionNote_ = "Stopping. Unplayed translated audio is discarded; device, rate, "
+                  "channel, language and NDI changes apply on Start.";
     rebuild();
 }
 

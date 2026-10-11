@@ -72,6 +72,16 @@ public:
     /// real frames read; 0 means the block was pure silence (an underrun).
     std::size_t readOrSilence(float* data, std::size_t frames) noexcept;
 
+    /// Consumer role, realtime-safe: throws away everything readable RIGHT NOW
+    /// (the frames between the read position and a snapshot of the write
+    /// position) and returns how many. This is SPSC-legal because only the
+    /// consumer owns the read position: the producer is untouched and may keep
+    /// writing. Anything the producer hands over AFTER the snapshot stays
+    /// readable - a discard is a line drawn at "now", not a closed door; the
+    /// caller who needs "nothing after this moment" gates the producer as well
+    /// (the stop path does: engine gate first, discard second).
+    std::size_t discardAll() noexcept;
+
     /// Frames the producer had to drop because the consumer was too slow.
     std::uint64_t droppedFrames() const noexcept { return dropped_.load(std::memory_order_relaxed); }
 

@@ -125,6 +125,12 @@ public:
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
+    /// Counts which close VERB the caller used, and then closes (the mock's
+    /// close was always the immediate kind - it has no drain to skip). The
+    /// stop-lifecycle tests assert the controller stops the session with
+    /// abandon, not with the draining verb.
+    void abandonSession() noexcept override;
+
     // ------------------------------------------------------- injection (010 tests)
     /// Report an error on the sink right now, from the calling thread; a fatal
     /// one faults the session, exactly like the real backends do. This is how a
@@ -146,6 +152,11 @@ public:
     /// Successful openSession() calls so far - distinguishes "state reset per
     /// session" from "totals", which the tests assert separately.
     int sessionsOpened();
+
+    /// Calls of each close verb so far, separately: the lifecycle tests name
+    /// which one a given teardown must use.
+    int sessionsClosed();
+    int sessionsAbandoned();
 
     /// Accepted submits of the current session (cue positions count these).
     int sessionSubmits();
@@ -173,6 +184,8 @@ private:
     int errorEvents_ = 0;
     int sessionsOpened_ = 0;
     int sessionSubmits_ = 0;
+    int sessionsClosedCalls_ = 0;   ///< every call of either close verb lands here
+    int sessionsAbandoned_ = 0;     ///< of which how many came through abandonSession()
     long long expiryRemainingMs_ = -1;   ///< -1: no announcement (see announceServerExpiry)
 };
 

@@ -682,3 +682,30 @@ TEST_CASE("ReconnectSupervisor: transient refusals recover, the account gate doe
     CHECK(supervisor->stats().attempts == attemptsAfter);
     CHECK(supervisor->stats().recoveries == 2);   // and no "recoveries" were invented
 }
+
+
+TEST_CASE("ReconnectSupervisor: abandonSession hands the immediate verb down and ends recovery",
+          "[translation][reconnect][stop]")
+{
+    // The operator's Stop travels through the wrapper: the wrapped backend must
+    // see abandonSession() (not the draining close), recovery intent ends, and
+    // nothing reopens behind the operator's back - a stop is not a loss.
+    RecordingSink sink;
+    MockTranslationBackend* m = nullptr;
+    auto supervisor = makeSupervisor(std::make_unique<MockTranslationBackend>(), fastPolicy(), m, sink);
+
+    openAndRequire(*supervisor);
+    REQUIRE(m->sessionsOpened() == 1);
+
+    supervisor->abandonSession();
+
+    CHECK(m->sessionsAbandoned() == 1);
+    CHECK(m->sessionsClosed() >= 1);   // the mock's abandon runs through its own close
+    CHECK(supervisor->state() == SessionState::closed);
+
+    // And the recovery machinery stayed asleep: no attempt, no reopen.
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    CHECK(supervisor->stats().attempts == 0);
+    CHECK(m->sessionsOpened() == 1);
+    CHECK(sink.stateCount("reconnecting") == 0);
+}

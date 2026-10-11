@@ -102,6 +102,18 @@ public:
     void detachInputConsumer() noexcept { consumerAttached_.store(false, std::memory_order_relaxed); }
     bool inputConsumerAttached() const noexcept { return consumerAttached_.load(std::memory_order_relaxed); }
 
+    /// The Stop-means-silence rule, made mechanical: ask the callback to throw
+    /// away everything the output jitter buffers hold before its next block,
+    /// so a stopped show never plays out the old queue even while subsystem
+    /// teardown is still in progress. Callable from any thread; does nothing
+    /// but flip a flag the realtime side consumes.
+    void requestOutputDiscard() noexcept { outputDiscardPending_.store(true, std::memory_order_relaxed); }
+
+    /// Frames the explicit discards have thrown away (cumulative, survives
+    /// deactivate like the other engine totals: an operator must be able to
+    /// ask "how much did the Stop throw out" after the fact).
+    std::uint64_t outputDiscardedFrames() const noexcept { return outputDiscardedFrames_.load(std::memory_order_relaxed); }
+
     // ------------------------------------------------------------------ gain (006)
     /// spec "Input Gain" and "Output Gain": two independent digital trims, settable at
     /// any time, including from the UI while the device runs. Both glide to the new
@@ -281,6 +293,7 @@ private:
 
     std::atomic<bool> pipelineReady_{ false };
     std::atomic<bool> consumerAttached_{ false };
+    std::atomic<bool> outputDiscardPending_{ false };   ///< requestOutputDiscard() -> callback
     std::atomic<int> inputChannels_{ 0 };
     std::atomic<int> outputChannels_{ 0 };
     std::atomic<int> jitterMs_{ 120 };
@@ -299,6 +312,14 @@ private:
     std::atomic<std::uint64_t> ringDroppedSamples_{ 0 };
     std::atomic<std::uint64_t> malformedCallbacks_{ 0 };
     std::atomic<std::uint64_t> oversized_{ 0 };
+    std::atomic<std::uint64_t> outputDiscardedFrames_{ 0 };
+
+    /// Last per-channel reading of the jitter's own underrunEvents(), so the
+    /// engine can count TRUE underruns (a primed buffer that ran dry) instead
+    /// of confusing them with pre-roll silence (the operator's own requested
+    /// delay). Callback-thread state, sized by buildPipeline(); a plain vector
+    /// because exactly one thread - the audio callback - ever touches it.
+    std::vector<std::uint64_t> jitterUnderrunSeen_;
 
     /// The operator's gain state, kept here rather than only in the stages so that a
     /// level can be set before the device exists and survives a restart of the pipeline.

@@ -1,9 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "App/ApplicationController.h"
@@ -527,4 +533,348 @@ TEST_CASE("ApplicationController: settings from the pre-rename folder migrate on
     CHECK(livetest::readFile(legacy) == oldContent);
     CHECK(livetest::readFile(current).find("96000") != std::string::npos);
     CHECK(livetest::readFile(current).find("512") != std::string::npos);
+}
+
+// ------------------------------------------------------------- stop lifecycle
+//
+// The venue report pinned three facts this section guards: Start/Stop must not
+// freeze the calling thread, the unheard translated audio must die at the Stop
+// (not play out at speed), and the fast Start->Stop->Start sequence must not
+// mix sessions. The instrument is a backend whose open and close can be held
+// on a leash, plus the controller's own lifecycle worker.
+
+namespace {
+
+/// A latch the test controls: armed doors make the backend method wait;
+/// release opens every armed door at once.
+struct StallGate
+{
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool armed = false;
+    bool open = true;
+
+    void arm()
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        armed = true;
+        open = false;
+    }
+
+    void release()
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            armed = false;
+            open = true;
+        }
+        cv.notify_all();
+    }
+
+    void waitIfArmed()
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [this] { return open; });
+    }
+};
+
+/// An ITranslationBackend whose openSession() and closeSession() can be held
+/// inside the call, recording which close VERB the application used.
+class StallingBackend final : public ITranslationBackend
+{
+public:
+    std::string_view name() const noexcept override { return "Stalling"; }
+    translation::SessionState state() const noexcept override { return state_.load(); }
+    void setSink(translation::ITranslationSink& sink) noexcept override { sink_ = &sink; }
+
+    bool openSession(const translation::SessionRequest&, std::string& error) override
+    {
+        ++opens;
+        report(translation::SessionState::connecting);
+        openGate.waitIfArmed();
+
+        if (refuseOpen)
+        {
+            error = "stalling: open refused";
+            return false;
+        }
+
+        state_ = translation::SessionState::connected;
+        ++connectedOpens;
+        report(translation::SessionState::connected);
+        return true;
+    }
+
+    bool submitAudio(const float*, int, std::string& error) override
+    {
+        if (state_.load() != translation::SessionState::connected)
+        {
+            error = "stalling: not connected";
+            return false;
+        }
+        ++submits;
+        return true;
+    }
+
+    void closeSession() noexcept override
+    {
+        ++closes;
+        closeGate.waitIfArmed();
+
+        if (state_.exchange(translation::SessionState::closed) != translation::SessionState::closed)
+            report(translation::SessionState::closed);
+    }
+
+    void abandonSession() noexcept override
+    {
+        ++abandons;
+        closeSession();   // the production backends distinguish; this one records and reuses
+    }
+
+    StallGate openGate;
+    StallGate closeGate;
+    std::atomic<int> opens { 0 };
+    std::atomic<int> connectedOpens { 0 };
+    std::atomic<int> closes { 0 };
+    std::atomic<int> abandons { 0 };
+    std::atomic<int> submits { 0 };
+    std::atomic<bool> refuseOpen { false };
+
+private:
+    void report(translation::SessionState next)
+    {
+        if (sink_ != nullptr)
+            sink_->onSessionStateChanged(next);
+    }
+
+    translation::ITranslationSink* sink_ = nullptr;
+    std::atomic<translation::SessionState> state_ { translation::SessionState::closed };
+};
+
+/// Drive the engine's callback from the test side (the null backend has no
+/// thread of its own): returns once any block left the output non-silent.
+int pumpBlocks(ApplicationController& controller, int count)
+{
+    const int frames = controller.engine().bufferFrames();
+    std::vector<float> in(static_cast<std::size_t>(frames), 0.0f);
+    std::vector<float> out(static_cast<std::size_t>(frames), 0.0f);
+    float* inPtr[] = { in.data() };
+    float* outPtr[] = { out.data() };
+
+    int audible = 0;
+    for (int block = 0; block < count; ++block)
+    {
+        std::fill(out.begin(), out.end(), 0.0f);
+        controller.engine().processAudio(inPtr, outPtr, frames);
+        for (const float sample : out)
+        {
+            if (sample != 0.0f)
+            {
+                ++audible;
+                break;
+            }
+        }
+    }
+    return audible;
+}
+
+template <typename Predicate>
+bool waitUntil(Predicate predicate, int timeoutMs = 5000)
+{
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (predicate())
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return predicate();
+}
+
+} // namespace
+
+TEST_CASE("ApplicationController: the queue drains in order - a Stop queued behind a stalled Start runs after it",
+          "[app][lifecycle][stop]")
+{
+    QuietLog quiet;
+    auto backend = std::make_unique<StallingBackend>();
+    auto* stall = backend.get();
+    ApplicationController controller;
+    controller.setTranslationBackend(std::move(backend));
+
+    stall->openGate.arm();
+    controller.requestStart();          // the worker parks inside openSession()
+    controller.requestStop();           // queued BEHIND the still-running start
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    stall->openGate.release();
+
+    // The queue owes both actions, in order: the session connected and then
+    // was closed - never the reverse, never dropped.
+    REQUIRE(waitUntil([&] { return stall->connectedOpens.load() >= 1; }));
+    REQUIRE(waitUntil([&] { return controller.state() == ApplicationState::stopped; }));
+    CHECK(stall->abandons.load() >= 1);
+    CHECK(stall->state() == SessionState::closed);   // (backend view agrees)
+
+    controller.stop();   // idempotent, safe
+}
+
+TEST_CASE("ApplicationController: Stop silences the output while a slow session close is still running",
+          "[app][lifecycle][stop]")
+{
+    QuietLog quiet;
+    auto backend = std::make_unique<StallingBackend>();
+    auto* stall = backend.get();
+    ApplicationController controller;
+    controller.setTranslationBackend(std::move(backend));
+
+    REQUIRE(controller.start());
+
+    // Half a second of translated audio is queued on the output.
+    std::vector<float> audio(24000, 0.25f);
+    controller.onTranslatedAudio(audio.data(), static_cast<int>(audio.size()), controller.engine().sampleRate());
+    REQUIRE(controller.engine().outputJitter(0) != nullptr);
+    REQUIRE(controller.engine().outputJitter(0)->available() > 0u);
+
+    stall->closeGate.arm();
+    const auto t0 = std::chrono::steady_clock::now();
+    controller.requestStop();
+    const auto returnedIn = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+    CHECK(returnedIn.count() < 100);   // the button thread is not an accessory to the teardown
+
+    // The worker parks inside the abandoning close. The discard Stop requests
+    // is a real-time decision, executed by the callback - so the test drives
+    // the callback and watches the moment it takes effect. The buffer must go
+    // empty and the output must be silence while the close is still running.
+    REQUIRE(waitUntil([&] { return controller.state() == ApplicationState::stopping; }));
+    bool discarded = false;
+    for (int attempt = 0; attempt < 50 && !discarded; ++attempt)
+    {
+        pumpBlocks(controller, 1);
+        discarded = controller.engine().outputDiscardedFrames() > 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(discarded);
+    CHECK(pumpBlocks(controller, 4) == 0);
+    CHECK(controller.engine().outputJitter(0)->available() == 0u);
+
+    // Audio delivered mid-close (a backend finishing a callback it was legally
+    // inside when the gate flipped) is counted and dropped, never buffered:
+    // the blocks after it stay silent too.
+    controller.onTranslatedAudio(audio.data(), 4800, controller.engine().sampleRate());
+    CHECK(pumpBlocks(controller, 2) == 0);
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames > 0u);
+
+    stall->closeGate.release();
+    REQUIRE(waitUntil([&] { return controller.state() == ApplicationState::stopped; }));
+
+    // The stop used the ABANDONING verb (not the draining one) exactly once,
+    // and the engine is down with its buffers.
+    CHECK(stall->abandons.load() == 1);
+    CHECK(stall->closes.load() == 1);
+    CHECK(controller.engine().outputJitter(0) == nullptr);
+
+    controller.requestStop();   // idempotent through the queue too
+}
+
+TEST_CASE("ApplicationController: requestStart returns while the handshake runs and the session lands ready",
+          "[app][lifecycle][start]")
+{
+    QuietLog quiet;
+    auto backend = std::make_unique<StallingBackend>();
+    auto* stall = backend.get();
+    ApplicationController controller;
+    controller.setTranslationBackend(std::move(backend));
+
+    stall->openGate.arm();
+    const auto t0 = std::chrono::steady_clock::now();
+    controller.requestStart();
+    const auto returnedIn = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0);
+    CHECK(returnedIn.count() < 100);   // no handshake minutes frozen into the UI
+
+    CHECK(waitUntil([&] { return stall->opens.load() >= 1; }));          // the open really started
+    stall->openGate.release();
+
+    REQUIRE(waitUntil([&] { return controller.state() == ApplicationState::running; }));
+    CHECK(controller.sessionState() == SessionState::connected);
+    CHECK(stall->connectedOpens.load() == 1);
+
+    controller.stop();   // synchronous path for the cleanup (gates unarmed)
+    CHECK(stall->abandons.load() == 1);
+}
+
+TEST_CASE("ApplicationController: a refused session start leaves a running, stoppable, restartable app",
+          "[app][lifecycle][partial-start]")
+{
+    QuietLog quiet;
+    auto backend = std::make_unique<StallingBackend>();
+    auto* stall = backend.get();
+    stall->refuseOpen = true;
+    ApplicationController controller;
+    controller.setTranslationBackend(std::move(backend));
+
+    // The partial-init path: audio up, session refused. The application keeps
+    // running with the failure said, the streamer never exists, and Stop is
+    // still the same clean door.
+    CHECK(controller.start());
+    CHECK(controller.isRunning());
+    CHECK_FALSE(controller.translationStreamer());
+    CHECK(controller.sessionState() == SessionState::closed);
+    CHECK(controller.status().detail.find("not started") != std::string::npos);
+
+    controller.stop();
+    CHECK(controller.state() == ApplicationState::stopped);
+    CHECK(stall->abandons.load() == 1);   // even a session that never connected
+                                          // leaves through the abandoning verb
+
+    // Restartable: the same controller, now that the refusal is gone.
+    stall->refuseOpen = false;
+    CHECK(controller.start());
+    CHECK(stall->connectedOpens.load() == 1);
+    CHECK(controller.sessionState() == SessionState::connected);
+    CHECK(controller.translationStreamer() != nullptr);
+
+    // And a fast stop-on-start with audio still buffered: the Stop discards
+    // instead of playing out (the burst this whole section pins).
+    std::vector<float> audio(9600, 0.5f);
+    controller.onTranslatedAudio(audio.data(), static_cast<int>(audio.size()), controller.engine().sampleRate());
+    controller.stop();
+    CHECK(stall->abandons.load() == 2);
+    CHECK(controller.engine().outputJitter(0) == nullptr);
+}
+
+TEST_CASE("ApplicationController: Start->Stop->Start keeps two sessions apart",
+          "[app][lifecycle][restart]")
+{
+    QuietLog quiet;
+    auto backend = std::make_unique<StallingBackend>();
+    auto* stall = backend.get();
+    ApplicationController controller;
+    controller.setTranslationBackend(std::move(backend));
+
+    // Session one: connect, buffer audio, stop hard (gates unarmed - the
+    // abandoning close is still the one under test).
+    CHECK(controller.start());
+    std::vector<float> first(4800, 0.25f);
+    controller.onTranslatedAudio(first.data(), static_cast<int>(first.size()), controller.engine().sampleRate());
+    CHECK(controller.engine().outputJitter(0)->available() > 0u);
+    controller.stop();
+
+    // Session two: the fresh pipeline begins from silence - old audio had to
+    // die at the Stop, and nothing of session one survives to leak out.
+    CHECK(controller.start());
+    CHECK(stall->connectedOpens.load() == 2);
+    CHECK(controller.engine().outputJitter(0)->available() == 0u);
+    CHECK(pumpBlocks(controller, 3) == 0);   // silence, not the old 0.25 queue
+
+    // New deliveries work normally on the new session: feed a full pre-roll
+    // (the fresh pipeline primes like any new one - that is the requested
+    // delay, not a leftover) and the audience hears session two, not session one.
+    std::vector<float> second(24000, 0.5f);
+    controller.onTranslatedAudio(second.data(), static_cast<int>(second.size()), controller.engine().sampleRate());
+    CHECK(pumpBlocks(controller, 40) > 0);
+
+    controller.stop();
 }

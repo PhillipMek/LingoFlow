@@ -306,6 +306,11 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     // not repeat it must not find the previous deadline still armed here.
     expiryAnnounced_.store(false, std::memory_order_relaxed);
 
+    // The abandon gate opens again: this is a new show, its audio is owed.
+    deliverAudio_ = true;
+    abandoning_ = false;
+    lateAudioDropped_ = 0;
+
     {
         const std::lock_guard<std::mutex> lock (lifeMutex_);
         handshakeDone_ = false;
@@ -538,10 +543,58 @@ void OpenAIRealtimeBackend::closeSession() noexcept
         }
     }
 
-    // Faulted/closed: the threads have ended or are ending; reaping is all
-    // that is left. join cannot be cancelled: if a thread ever outlives every
-    // bound above, blocking here is the honest behavior (no callbacks racing
-    // the caller's teardown, rule 5).
+    finishClose(false);
+}
+
+void OpenAIRealtimeBackend::abandonSession() noexcept
+{
+    // The operator said STOP: nothing this session still produces belongs to
+    // the audience any more. The graceful close deliberately spends seconds
+    // draining the service's last words, because during a session ROTATION the
+    // audience is still listening; on a stop there is no show to be polite to,
+    // and the measured fact (protocol docs section 15) is that most deltas
+    // arrive AFTER session.close - which is exactly the "the leftover plays
+    // out after Stop" the venue reported. So: drop the audio gate first, ask
+    // for the courtesy session.close without waiting for its echo, cancel the
+    // socket (the pending WinHttp receive returns cancelled - the 2026-10-02
+    // live diagnostic), join, and let the shared tail finish the job.
+    deliverAudio_ = false;
+    abandoning_ = true;
+
+    const SessionState current = state();
+
+    if (current == SessionState::connected || current == SessionState::connecting)
+    {
+        closeRequested_ = true;   // sender: attempt session.close, then leave
+        lifeCv_.notify_all();
+
+        {
+            // A bounded courtesy, 150 ms: the sender wakes for closeRequested_
+            // within its 50 ms slices - that is ITS latency, not the service's.
+            // senderStop_ stays false through this window on purpose: the
+            // sender checks it before the close request, and setting it here
+            // would skip the goodbye we still want to send.
+            std::unique_lock<std::mutex> lock (lifeMutex_);
+            lifeCv_.wait_for (lock, std::chrono::milliseconds (150),
+                              [this] { return senderDone_; });
+        }
+
+        senderStop_ = true;       // whatever remains of the loops leaves now
+        lifeCv_.notify_all();
+        drainForced_ = true;      // the error the cancel answers with is ours, not a fault
+        if (transport_ != nullptr)
+            transport_->closeTransport("operator stop: late audio discarded");
+    }
+
+    finishClose(true);
+}
+
+void OpenAIRealtimeBackend::finishClose(bool abandoned)
+{
+    // Rule 5 is not negotiable, close or abandon: the threads are joined
+    // before anything below touches the sink. join cannot be cancelled: if a
+    // thread ever outlived every bound the close verbs set, blocking here is
+    // the honest behavior (no callbacks racing the caller's teardown).
     try
     {
         if (senderThread_.joinable())
@@ -551,7 +604,7 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     }
     catch (const std::exception&)
     {
-        log::error(kLogComponent, "thread join failed during closeSession");
+        log::error(kLogComponent, "thread join failed during session close");
     }
     senderThread_ = std::thread {};
     receiverThread_ = std::thread {};
@@ -563,6 +616,7 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     // which keeps the audience's tail of the translation in order in history.
     // A faulted death may have let the controller close the same words first;
     // the TextPipeline duplicate guard eats whichever copy arrives second.
+    // (TEXT survives a stop on purpose; it is audio that abandons.)
     {
         const std::string line = takeTranscriptLine();
 
@@ -590,6 +644,11 @@ void OpenAIRealtimeBackend::closeSession() noexcept
     receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
+    if (abandoned && lateAudioDropped_.load(std::memory_order_relaxed) > 0)
+        log::info(kLogComponent,
+                  "abandoned close: " + std::to_string(lateAudioDropped_.load(std::memory_order_relaxed))
+                      + " late audio block(s) discarded (operator stop)");
+    lateAudioDropped_ = 0;
     expiryAnnounced_.store(false, std::memory_order_relaxed);   // rule 6 again: nothing survives the session
     {
         const std::lock_guard<std::mutex> lock (lifeMutex_);
@@ -1137,6 +1196,19 @@ void OpenAIRealtimeBackend::deliverAudioDelta(const std::vector<std::uint8_t>& p
     if (pcm16Bytes.empty())
         return;
 
+    // The abandon gate: after an operator stop, late deltas may still be in the
+    // receiver's hands (protocol section 15 says most of them are). This is
+    // exactly the audio that must NOT reach the audience - count it, say it
+    // once, drop it. The graceful close keeps delivering: there the audience is
+    // still in the room.
+    if (!deliverAudio_.load(std::memory_order_relaxed))
+    {
+        const std::uint64_t dropped = lateAudioDropped_.fetch_add(1, std::memory_order_relaxed);
+        if (dropped == 0)
+            log::info(kLogComponent, "abandoned session: late translated audio is being discarded");
+        return;
+    }
+
     // Authoritative payload bound (An earlier review, Network/NetworkLimits.h):
     // the decoded PCM16 must fit the audio budget no matter which path handed
     // it over. One oversized block is a section-7 shape anomaly - dropped,
@@ -1371,6 +1443,14 @@ void OpenAIRealtimeBackend::reportError(TranslationErrorCategory category,
         log::error(kLogComponent, message);
     else
         log::warning(kLogComponent, message);
+
+    // The cancel of an abandoned close answers as a transport error - that is
+    // the designed shape of an operator stop, not a show fault, and letting it
+    // through would leave "connection error" as the status sentence after
+    // every clean stop. The log above still carries the fact; the sink does
+    // not learn about our own hand.
+    if (abandoning_.load(std::memory_order_relaxed))
+        return;
 
     if (sink_ != nullptr)
     {

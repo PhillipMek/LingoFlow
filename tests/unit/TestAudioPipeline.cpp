@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -433,9 +434,31 @@ TEST_CASE("AudioEngine: input frames are measured and underruns are reported to 
 
     CHECK(instrumented.inputSamplesCaptured() == static_cast<std::uint64_t>(kFrames));
     CHECK(instrumented.outputSilenceSamples() == static_cast<std::uint64_t>(kFrames));
-    CHECK(instrumented.underrunEvents() >= 1);
-    CHECK(diagnostics.counters().underruns >= 1);
+
+    // Pre-roll silence is the operator-requested delay, not an incident: since
+    // the venue report separated the two facts, a priming block counts as
+    // silence ONLY. The underrun alarm starts when a PRIMED buffer runs dry.
+    CHECK(instrumented.underrunEvents() == 0);
+    CHECK(diagnostics.counters().underruns == 0);
+    CHECK(instrumented.outputJitter(0)->primingFrames() == static_cast<std::uint64_t>(kFrames));
     CHECK(diagnostics.counters().overruns == 0);
+
+    // Now make it a true underrun: fill exactly one pre-roll, play it out, and
+    // let the next block starve.
+    const auto target = instrumented.outputJitter(0)->targetFrames();
+    std::vector<float> prime(target, 0.25f);
+    REQUIRE(instrumented.outputJitter(0)->write(prime.data(), prime.size()) == target);
+
+    for (std::size_t played = 0; played < target / static_cast<std::size_t>(kFrames) + 2; ++played)
+        backend.renderOneBlock();
+
+    CHECK(instrumented.underrunEvents() >= 1);
+    CHECK(instrumented.outputJitter(0)->underrunEvents() >= 1);
+    CHECK(diagnostics.counters().underruns >= 1);   // the alarm reached diagnostics at last
+
+    // Microphone audio never appears on the output: everything read was the
+    // primed translation buffer, and what starved was silence.
+    CHECK(instrumented.outputSilenceSamples() >= static_cast<std::uint64_t>(kFrames));
 
     instrumented.deactivate();
 }
@@ -478,6 +501,17 @@ TEST_CASE("AudioEngine: pipeline counters survive deactivation", "[audio][engine
     for (int block = 0; block < 400; ++block)
         engine.processAudio(inPointers, outPointers, kFrames);
 
+    // 400 blocks of an empty jitter buffer are pre-roll, not a stall: the
+    // underrun alarm has to be earned by starving a PRIME
+    CHECK(engine.underrunEvents() == 0);
+
+    const auto target = engine.outputJitter(0)->targetFrames();
+    std::vector<float> prime(target, 0.25f);
+    REQUIRE(engine.outputJitter(0)->write(prime.data(), prime.size()) == target);
+    for (std::size_t played = 0; played < target / static_cast<std::size_t>(kFrames) + 1; ++played)
+        engine.processAudio(inPointers, outPointers, kFrames);
+    REQUIRE(engine.underrunEvents() > 0);                  // now the event is real
+
     const std::uint64_t captured = engine.inputSamplesCaptured();
     const std::uint64_t forwarded = engine.inputSamplesForwarded();
     const std::uint64_t dropped = engine.inputRingDroppedSamples();
@@ -494,7 +528,7 @@ TEST_CASE("AudioEngine: pipeline counters survive deactivation", "[audio][engine
     CHECK(engine.inputRingDroppedSamples() == dropped);
     CHECK(engine.underrunEvents() > 0);
     CHECK(engine.overrunEvents() > 0);
-    CHECK(engine.blockCount() == 400);
+    CHECK(engine.blockCount() == 400 + target / static_cast<std::size_t>(kFrames) + 1);
 }
 
 // ----------------------------------------------------------------------------- gain
@@ -1168,4 +1202,64 @@ TEST_CASE("AudioEngine: stress - device callback and loopback thread against the
     CHECK(engine.malformedCallbacks() == 0);
     CHECK(engine.inputSamplesForwarded() > 0);
     CHECK(heard > 0);
+}
+
+TEST_CASE("AudioEngine: a Stop discard under a live producer and repeated requests stays whole and realtime-safe",
+          "[audio][engine][pipeline][stop]")
+{
+    // Case 5 of the stop-lifecycle work: the discard runs in the callback while
+    // a producer thread hammers write() and another thread hammers
+    // requestOutputDiscard(). The ring positions are one-writer-each by design,
+    // so what this test demands is not "no locks inside" (there are none) but
+    // the observable truth: every block leaves whole (its samples are either the
+    // delivered 0.25 or silence, never a torn mixture of old and new), frames
+    // are counted, and nothing hangs or crashes under pressure.
+    AudioEngine engine;
+    NullAudioBackend backend;
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+
+    std::atomic<bool> stopThreads{ false };
+
+    std::thread producer(
+        [&]
+        {
+            std::vector<float> block(static_cast<std::size_t>(kFrames), 0.25f);
+            while (!stopThreads.load(std::memory_order_relaxed))
+            {
+                if (auto* jitter = engine.outputJitter(0); jitter != nullptr)
+                    jitter->write(block.data(), block.size());
+                std::this_thread::sleep_for(std::chrono::microseconds(50));
+            }
+        });
+
+    std::thread stopper(
+        [&]
+        {
+            while (!stopThreads.load(std::memory_order_relaxed))
+            {
+                engine.requestOutputDiscard();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+
+    std::array<float, static_cast<std::size_t>(kFrames)> in{};
+    std::array<float, static_cast<std::size_t>(kFrames)> out{};
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    for (int block = 0; block < 600; ++block)
+    {
+        out.fill(-1.0f);
+        engine.processAudio(inPointers, outPointers, kFrames);
+        for (const float sample : out)
+            CHECK((sample == 0.0f || sample == 0.25f));   // whole values, no torn block
+    }
+
+    stopThreads.store(true);
+    producer.join();
+    stopper.join();
+
+    CHECK(engine.outputDiscardedFrames() > 0);          // the discards did happen
+    engine.deactivate();
 }

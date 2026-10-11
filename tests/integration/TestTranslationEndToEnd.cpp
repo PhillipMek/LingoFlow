@@ -440,15 +440,21 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
 {
     // A backend callback that races with the audio path being down must not
     // crash, must not queue memory waiting for a device, and must not pretend
-    // the frames went somewhere.
+    // the frames went somewhere. Since the stop-lifecycle fix the facts are
+    // named apart: "no pipeline to deliver into" (rejected) and "the operator
+    // already stopped the show" (late audio) are different counters - a venue
+    // post-mortem must tell the two questions apart, so the test now demands it.
     QuietLog quiet;
     ApplicationController controller;
 
     std::vector<float> audio = filled(kFrames, 0.5f);
 
-    // The sink itself, with no pipeline: nullptr jitter is the honest answer.
+    // The sink itself, with no pipeline: the delivery gate is closed before any
+    // start, and an unclosed gate with a null buffer would be the same refusal
+    // anyway - what it must never be is silent.
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
-    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == static_cast<std::uint64_t>(kFrames));
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(kFrames));
+    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 0);
 
     REQUIRE(controller.start());
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
@@ -456,20 +462,24 @@ TEST_CASE("End to end: deliveries before start and after stop are refused, count
 
     controller.stop();
 
-    // After stop(): the engine has released its buffers, and a late delivery is
-    // rejected again - counted, not swallowed. stop() stopped the streaming
-    // worker, then closed the session, then deactivated the engine, so a real
-    // backend could not be producing now; the controller's guard is what keeps
-    // a programming error in a future task from becoming a use-after-free.
+    // After stop(): the gate is closed and the engine has released its buffers;
+    // a late delivery is discarded and counted as exactly what it is - late
+    // audio after a Stop. stop() stopped the streaming worker, abandoned the
+    // session (joined: no callbacks after the return) and deactivated the
+    // engine, so a real backend could not be producing now; this guard is what
+    // keeps a programming error in a future task from becoming a buffered lie.
     CHECK_FALSE(controller.translationStreamer());
     controller.onTranslatedAudio(audio.data(), kFrames, kRate);
-    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
+    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 0);
     CHECK(controller.diagnostics().snapshot().translatedAudioFrames == static_cast<std::uint64_t>(kFrames));
 
-    // Malformed deliveries are counted as rejected too, separately from rates.
+    // Malformed deliveries are refused before the gate question even: they are
+    // broken INPUT, counted as rejections, separately from any lifecycle fact.
     controller.onTranslatedAudio(nullptr, 480, kRate);
     controller.onTranslatedAudio(audio.data(), 0, kRate);
-    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == static_cast<std::uint64_t>(2 * kFrames + 480));
+    CHECK(controller.diagnostics().snapshot().rejectedAudioFrames == 480);
+    CHECK(controller.diagnostics().snapshot().lateAudioFrames == static_cast<std::uint64_t>(2 * kFrames));
 }
 
 TEST_CASE("End to end: restart brings a fresh session with the same wiring",

@@ -280,7 +280,22 @@ TEST_CASE("UiModel: meters and counters read the running pipeline", "[app][ui][m
     CHECK(panel.outputMeter.peakDb <= -100.0f);
 
     CHECK(counterValue(controller, "audio blocks") == "2");
-    CHECK(std::stoull(counterValue(controller, "underruns")) >= 2);   // silence is played, counted
+
+    // Pre-roll silence is the operator-requested delay, not an incident: the
+    // row counts only a PRIMED buffer running dry (the silence and prime
+    // counters tell the rest of the story). Before the stop/underrun fix this
+    // line read ">= 2" for two blocks of honest priming - which is precisely
+    // the alarm that made the venue report underruns that had not happened.
+    CHECK(std::stoull(counterValue(controller, "underruns")) == 0);
+
+    // Earn a real one: feed exactly one pre-roll (250 ms at the 48 kHz device
+    // rate, the settings default), play it out, starve the next block.
+    std::vector<float> prime(static_cast<std::size_t>(48000) / 4, 0.25f);   // 12000 frames = 250 ms
+    controller.onTranslatedAudio(prime.data(), static_cast<int>(prime.size()), 48000);
+    for (int block = 0; block < 30; ++block)
+        feedBlock(controller.engine(), 0.0f);
+
+    CHECK(std::stoull(counterValue(controller, "underruns")) >= 1);
 
     // The clip latch is consumed by the build that shows it: one panel sees the
     // clip, the next (without a new one) shows the lamp dark - no stale red.

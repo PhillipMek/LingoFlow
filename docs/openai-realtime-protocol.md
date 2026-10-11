@@ -336,6 +336,11 @@ but stays aligned with "now") - the docs do not choose it for us.
 - **`closeSession()` is a full stop:** the recovery loop is joined inside it, and no
   callback reaches the application after it returns (contract rule 5). This is what lets
   the controller close the session before the device during shutdown.
+- **Operator STOP uses the second close verb (`abandonSession()`):** same rule 5/6 contract,
+  no drain - unheard translated audio is discarded and the socket is cancelled; the open
+  text line still flushes (history keeps its tail). The rotation close above is the
+  draining one: during recovery the audience is still there, so the service's tail is
+  waited for (bounded by `closeDrainTimeoutMs`, ~5.5 s live-measured 2026-10-02).
 
 ## 11. Model identity and operating envelope
 

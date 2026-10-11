@@ -70,12 +70,25 @@ std::size_t AudioJitterBuffer::readOrSilence(float* data, std::size_t frames) no
     return taken;
 }
 
+std::size_t AudioJitterBuffer::discard() noexcept
+{
+    // Consumer side of the SPSC pair (see AudioRingBuffer::discardAll): safe to
+    // run from the callback; what the producer writes after this instant is
+    // simply the next session's problem, and pre-rolling again means a resumed
+    // pipeline waits for a real pre-roll instead of dribbling.
+    const std::size_t dropped = ring_.discardAll();
+    discarded_.fetch_add(dropped, std::memory_order_relaxed);
+    primed_.store(false, std::memory_order_relaxed);
+    return dropped;
+}
+
 void AudioJitterBuffer::reset() noexcept
 {
     ring_.reset();
     primed_.store(false, std::memory_order_relaxed);
     underrunEvents_.store(0, std::memory_order_relaxed);
     primingFrames_.store(0, std::memory_order_relaxed);
+    discarded_.store(0, std::memory_order_relaxed);
 }
 
 } // namespace audio

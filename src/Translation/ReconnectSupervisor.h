@@ -120,6 +120,11 @@ public:
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
+    /// Forwards the ABANDON to the wrapped backend (no drain seconds spent on
+    /// a show the operator stopped); the recovery bookkeeping is identical to
+    /// closeSession's, because an operator stop must equally end recovery.
+    void abandonSession() noexcept override;
+
     /// Delegation, so a consumer of the mounted chain learns what the provider
     /// really announced rather than what a generic wrapper defaults to.
     bool serverSessionExpiryRemainingMs(long long& remainingMsOut) const noexcept override;
@@ -152,6 +157,11 @@ private:
     void workerLoop();
     /// One close→open replay of the stored request. Runs with the lock released.
     void runAttempt();
+    /// The shared body of both close verbs (see the public pair): stop
+    /// recovery's intent, join an in-flight attempt, hand the wrapped backend
+    /// the graceful or the abandoning close, and synthesize the closed
+    /// transition if the backend had already gone quiet.
+    void doClose(bool abandon);
     /// Enter the recovering mode and schedule the first attempt. Lock must be held.
     void enterRecoveringLocked(bool proactive);
     /// Arm ageDeadline_ from both voices about the session's end: the policy

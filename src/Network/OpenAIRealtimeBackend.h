@@ -149,6 +149,15 @@ public:
     bool submitAudio(const float* samples, int frameCount, std::string& error) override;
     void closeSession() noexcept override;
 
+    /// The operator-stop close: immediate, audio-losing. deliverAudio_ drops
+    /// before anything is scheduled, so a delta that was already in the
+    /// receiver's hands is counted and dropped instead of reaching the
+    /// audience; the socket is cancelled rather than waited on (the measured
+    /// graceful drain runs to seconds - that is time the stopped show is not
+    /// supposed to spend); the open text line still flushes once, then rule 5
+    /// and rule 6 finish the job exactly as the graceful close does.
+    void abandonSession() noexcept override;
+
     /// The server's own words about when this session ends, recorded from
     /// session.created/session.updated (protocol docs section 4bis). Read by the
     /// reconnect supervisor when it arms its session deadline.
@@ -165,6 +174,12 @@ private:
     // ---- receiver thread ----
     void receiverLoop();
     bool handshake(); ///< created -> update -> updated; reports its own failures
+
+    /// The shared tail of both close verbs: reap the threads, flush the open
+    /// TEXT line once (history keeps its tail even across a stop; audio is
+    /// what abandons), report the closed transition and run the rule-6
+    /// per-session resets. `abandoned` only colors the log line truthfully.
+    void finishClose(bool abandoned);
 
     // ---- sender thread ----
     void senderLoop();
@@ -220,6 +235,14 @@ private:
     std::atomic<bool> closeSent_ { false };   ///< sender delivered session.close
     std::atomic<bool> drainForced_ { false }; ///< last socket close was our cancel
     std::atomic<std::uint64_t> eventCounter_ { 0 };
+
+    /// The abandon gate (abandonSession): once false, no translated audio block
+    /// reaches the sink again - the receiver may still be draining bytes it
+    /// will now discard, and the sender's error path stays quiet. Set true by
+    /// every openSession. lateAudioDropped_ counts what gate ate.
+    std::atomic<bool> deliverAudio_ { true };
+    std::atomic<bool> abandoning_ { false };
+    std::atomic<std::uint64_t> lateAudioDropped_ { 0 };
 
     /// Server-announced session expiry (protocol docs section 4bis): deadline in
     /// steady-clock milliseconds, valid only while expiryAnnounced_ is true. The

@@ -130,6 +130,30 @@ std::size_t AudioRingBuffer::readOrSilence(float* data, std::size_t frames) noex
     return taken;
 }
 
+std::size_t AudioRingBuffer::discardAll() noexcept
+{
+    if (capacity_ == 0)
+        return 0;
+
+    // Consumer side only, so only the read position moves: this is the same
+    // operation a read has, minus the memcpy - the producer cannot observe a
+    // corrupted relation because there is none to corrupt. The release publish
+    // tells the producer the freed space is real (next writable() sees it).
+    const auto write = writePos_.load(std::memory_order_acquire);
+    const auto read = readPos_.load(std::memory_order_relaxed);
+
+    const std::size_t dropped = static_cast<std::size_t>(write - read);
+
+    if (dropped > 0)
+    {
+        readPos_.store(write, std::memory_order_release);
+        // Deliberately NOT counted as underrun_ frames: nobody asked for audio
+        // and got silence - the consumer chose to throw the backlog away.
+    }
+
+    return dropped;
+}
+
 void AudioRingBuffer::reset() noexcept
 {
     writePos_.store(0, std::memory_order_relaxed);

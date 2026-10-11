@@ -732,8 +732,55 @@ TEST_CASE("OpenAI backend: double open is refused while a session is open", "[op
     s.sink.armAfterCloseExpectation();
 }
 
-TEST_CASE("OpenAI backend: submitAudio is accepted only while connected (rule 4)",
-          "[openai][contract]")
+TEST_CASE("OpenAI backend: abandonSession is the close that stops delivering",
+          "[openai][contract][stop]")
+{
+    // The operator-stop verb, pinned against the same scripted transport the
+    // graceful-drain tests use. Three facts matter and all three are asserted:
+    // the courtesy session.close still goes out (the service deserves the
+    // goodbye); audio that has not been delivered when the abandon begins is
+    // NEVER delivered after (that audio belongs to an audience that left);
+    // and the reopened session inherits neither the silence nor the state.
+    Scenario s;
+    REQUIRE(s.openDefault());
+
+    test::FakeWebSocketTransport* oldFake = s.fake;   // the transport this session reads
+
+    // Park a delta behind the gate: queued, not yet read by the receiver. The
+    // graceful close would drain exactly this audio to the sink; the abandon
+    // must not.
+    oldFake->queueMessage(audioDeltaEvent({ 100, 200, 300, 400 }));
+    oldFake->gate(true);
+
+    const std::size_t audioBefore = s.sink.audio().size();
+
+    s.backend->abandonSession();
+
+    CHECK(s.backend->state() == SessionState::closed);
+    CHECK(s.sink.audio().size() == audioBefore);   // the parked delta stayed parked
+
+    bool sawClose = false;
+    for (const std::string& frame : oldFake->sent())
+        sawClose = sawClose || frame.find("\"session.close\"") != std::string::npos;
+    CHECK(sawClose);                                // the courtesy goodbye was attempted
+
+    // Rule 5 for the abandoning verb: the threads joined inside the call, so
+    // un-gating the parked delta afterwards must still change nothing.
+    oldFake->gate(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds (50));
+    CHECK(s.sink.audio().size() == audioBefore);
+
+    // A reopened session must not inherit the abandon: it connects on a fresh
+    // transport and its audio delivers again.
+    REQUIRE(s.openDefault());
+    s.fake->queueMessage(audioDeltaEvent({ 500, 600, 700, 800 }));
+    CHECK(Scenario::waitFor([&] { return s.sink.audio().size() > audioBefore; }, 3000));
+
+    s.sink.armAfterCloseExpectation();
+    s.backend->closeSession();
+}
+
+TEST_CASE("OpenAI backend: submitAudio is accepted only while connected (rule 4)", "[openai][contract]")
 {
     Scenario s;
     std::string error;

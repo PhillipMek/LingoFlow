@@ -156,6 +156,19 @@ bool ReconnectSupervisor::submitAudio(const float* samples, int frameCount, std:
 
 void ReconnectSupervisor::closeSession() noexcept
 {
+    doClose(false);
+}
+
+void ReconnectSupervisor::abandonSession() noexcept
+{
+    // Same bookkeeping as the graceful close - recovery must NOT see an
+    // operator stop as a session loss - but the wrapped backend gets the
+    // abandoning verb, so no drain seconds are spent on a stopped show.
+    doClose(true);
+}
+
+void ReconnectSupervisor::doClose(bool abandon)
+{
     // The wrapped backend reports `closed` only when it actually had a
     // session; if recovery had already closed it, the application would miss
     // the transition. Remember the truth so the state can be synthesized.
@@ -181,7 +194,10 @@ void ReconnectSupervisor::closeSession() noexcept
         // backend's open/close bounds) is joined here, not fought.
         attemptIdleCv_.wait(lock, [this] { return !attemptRunning_; });
     }
-    backend_->closeSession();
+    if (abandon)
+        backend_->abandonSession();
+    else
+        backend_->closeSession();
 
     if (wasRunning && alreadyClosed)
     {

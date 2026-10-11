@@ -256,6 +256,31 @@ public:
     /// after it returns (rule 5).
     virtual void closeSession() noexcept = 0;
 
+    /// Ends the session the way an operator's STOP means it: immediately, with
+    /// the unheard remainder discarded rather than drained.
+    ///
+    /// The two close verbs exist because the two intents are different shows.
+    /// closeSession() is the graceful one: it asks the service to finish its
+    /// sentence and lets the late events arrive - the audience of a still
+    /// running show is owed those last words, and the session-rotation path of
+    /// the reconnect supervisor relies on exactly that (protocol docs section
+    /// 15: most late deltas come after session.close). abandonSession() is the
+    /// operator saying STOP: translated audio that has not been heard is
+    /// dropped, never played, and the call returns bounded by the transport's
+    /// own cancel, not by the service's politeness. The open subtitle TEXT
+    /// line still flushes once before the return (the archive keeps its tail,
+    /// and history survives a stop by design) - it is audio that abandons.
+    ///
+    /// Rule 5 applies unchanged: no sink callback after it returns. Rule 6
+    /// applies unchanged: the next openSession() is a fresh session, with no
+    /// queue, resampler or timestamp state of the abandoned one left behind.
+    ///
+    /// The default routes to closeSession(): a backend whose close is already
+    /// immediate (the mock drops its queue; the Null has none) has nothing to
+    /// abandon differently, and a future backend inherits the right behavior
+    /// until it can do better.
+    virtual void abandonSession() noexcept { closeSession(); }
+
     /// Does the provider know when this session actually ends? True with
     /// `remainingMsOut` = milliseconds until the server-announced expiry,
     /// measured on this machine's steady clock from the moment the announcement

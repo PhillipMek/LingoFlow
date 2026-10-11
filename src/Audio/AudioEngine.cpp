@@ -91,7 +91,22 @@ std::size_t AudioEngine::jitterCapacity(int sampleRate, int jitterBufferMs, int 
     // producer is never the reason a block is dropped.
     const std::size_t byTarget = target * 2 + block * 2;
 
-    return std::max(byTarget, block * kMinBlocksBuffered);
+    // ...and room for ONE legitimate translated delivery arriving whole. The
+    // audio-delta budget of the transport (Network/NetworkLimits.h: 256 KiB of
+    // PCM16, restated here in time rather than as an include the Audio module
+    // may not reach across) is ~5.3 s of audio - and a translation service
+    // delivers a finished sentence faster than its playback time as a matter of
+    // course. A capacity that cannot hold one such block does not protect
+    // latency, it just loses words: the venue report's "underruns and
+    // interruptions" had this overflow as one of its mechanisms. Six seconds is
+    // the bound with margin, per channel, at 48 kHz: ~1.2 MB, paid at
+    // activate(), never touched by the callback beyond normal ring math.
+    // Latency is still the pre-roll (the target), not this capacity - the
+    // buffer only stops throwing legitimate audio away.
+    const std::size_t framesPerSecond = sampleRate > 0 ? static_cast<std::size_t>(sampleRate) : 48000;
+    const std::size_t burstHeadroom = 6 * framesPerSecond;
+
+    return std::max(byTarget + burstHeadroom, block * kMinBlocksBuffered);
 }
 
 // ------------------------------------------------------------------------- lifecycle
@@ -160,6 +175,10 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
     outputJitters_ = std::move(jitters);
     inputMeters_ = std::move(inMeters);
     outputMeters_ = std::move(outMeters);
+
+    // The underrun classification baselines start fresh with every pipeline:
+    // the buffers themselves are new objects, their event counters start at 0.
+    jitterUnderrunSeen_.assign(outputJitters_.size(), 0);
 
     // Land the gain stages on the operator's current levels before the device runs: the
     // first block must already play the level the UI shows, not glide into it.
@@ -648,21 +667,60 @@ void AudioEngine::processAudio(const float* const* input,
     // ------------------------------------------------------------ output side
     if (ready)
     {
+        // A requested discard runs BEFORE any reading: the Stop said the
+        // queued backlog is not the audience's any more. One exchange serves
+        // every channel (one decision, one flag), and the block that carries
+        // the decision is silence - which is exactly what a stopped show owes.
+        const bool discard = outputDiscardPending_.exchange(false, std::memory_order_relaxed);
+
         for (int channel = 0; channel < outChannels; ++channel)
         {
             float* destination = output[channel]; // non-null: the pre-scan enforced it
 
+            audio::AudioJitterBuffer* jitter = outputJitters_[static_cast<std::size_t>(channel)].get();
+
+            if (discard && jitter != nullptr)
+            {
+                const std::size_t gone = jitter->discard();
+                if (gone != 0)
+                    outputDiscardedFrames_.fetch_add(static_cast<std::uint64_t>(gone),
+                                                     std::memory_order_relaxed);
+            }
+
             // The jitter buffer is the ONLY source of output audio, which is what makes
             // it impossible for the microphone to reach the audience by accident.
-            const std::size_t taken = outputJitters_[static_cast<std::size_t>(channel)]->readOrSilence(destination, frames);
+            const std::size_t taken = jitter != nullptr
+                                          ? jitter->readOrSilence(destination, frames)
+                                          : (std::memset(destination, 0, frames * sizeof(float)), 0);
 
+            // Silence is a fact and an underrun is a fact, and since the venue
+            // report they were NOT the same fact: pre-roll silence (the
+            // operator-requested delay, and the re-priming after an explicit
+            // discard) is normal operation, while a PRIMED buffer running dry
+            // mid-playback is the hiccup the "Underruns" row is for. The
+            // jitter buffer keeps those apart internally; the engine reports
+            // its underruns_ from the jitter's own event count, so a block of
+            // honest priming no longer inflates the alarm counter.
             if (taken != frames)
-            {
-                outputSilenceSamples_.fetch_add(static_cast<std::uint64_t>(frames - taken), std::memory_order_relaxed);
-                underruns_.fetch_add(1, std::memory_order_relaxed);
+                outputSilenceSamples_.fetch_add(static_cast<std::uint64_t>(frames - taken),
+                                                std::memory_order_relaxed);
 
-                if (diagnostics_ != nullptr)
-                    diagnostics_->countUnderrun();
+            if (jitter != nullptr)
+            {
+                const std::uint64_t events = jitter->underrunEvents();
+                const std::uint64_t seen = jitterUnderrunSeen_[static_cast<std::size_t>(channel)];
+                if (events != seen)
+                {
+                    jitterUnderrunSeen_[static_cast<std::size_t>(channel)] = events;
+                    const std::uint64_t fresh = events - seen;   // monotone, so this cannot underflow
+                    underruns_.fetch_add(fresh, std::memory_order_relaxed);
+
+                    for (std::uint64_t i = 0; i < fresh; ++i)
+                    {
+                        if (diagnostics_ != nullptr)
+                            diagnostics_->countUnderrun();
+                    }
+                }
             }
 
             // spec "Audio Pipeline" puts Output Gain after the jitter buffer and before

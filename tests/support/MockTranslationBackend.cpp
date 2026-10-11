@@ -213,6 +213,11 @@ bool MockTranslationBackend::submitAudio(const float* samples, int frameCount, s
 
 void MockTranslationBackend::closeSession() noexcept
 {
+    {
+        std::lock_guard lock(mutex_);
+        ++sessionsClosedCalls_;
+    }
+
     Emit emit;
     {
         std::lock_guard lock(mutex_);
@@ -228,6 +233,16 @@ void MockTranslationBackend::closeSession() noexcept
         transition(SessionState::closed, emit);
     }
     drain(emit);
+}
+
+void MockTranslationBackend::abandonSession() noexcept
+{
+    {
+        std::lock_guard lock(mutex_);
+        ++sessionsAbandoned_;
+    }
+    closeSession();   // the mock's close was always the immediate kind - the
+                      // verb is what a test can distinguish here
 }
 
 void MockTranslationBackend::injectError(translation::TranslationErrorCategory category,
@@ -322,6 +337,18 @@ int MockTranslationBackend::sessionsOpened()
 {
     std::lock_guard lock(mutex_);
     return sessionsOpened_;
+}
+
+int MockTranslationBackend::sessionsClosed()
+{
+    std::lock_guard lock(mutex_);
+    return sessionsClosedCalls_;
+}
+
+int MockTranslationBackend::sessionsAbandoned()
+{
+    std::lock_guard lock(mutex_);
+    return sessionsAbandoned_;
 }
 
 int MockTranslationBackend::sessionSubmits()

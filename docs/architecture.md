@@ -295,6 +295,15 @@ new code is written against behaviour that already has proof, not against commen
   destroyed pipeline. The controller's own guards (checked drop into `outputJitter`,
   counted in `rejectedAudioFrames`) are the second layer, for the callbacks the backend adds
   will one day race against a restart.
+* **Two close verbs, two intents.** `closeSession()` is the graceful, draining close
+  the reconnect-rotation path uses: the service's last words still reach a listening
+  audience (`closeDrainTimeoutMs` bounds it). `abandonSession()` is the operator's
+  STOP: audio the audience has not heard is discarded and the socket is cancelled, so
+  no unplayed queue plays out at speed and no drain seconds hang the interface; the
+  open subtitle TEXT line still flushes once (history keeps its tail), but audio never
+  does. Both honour rules 5 and 6 identically. The engine's `requestOutputDiscard()`
+  (executed in the callback, counted in `outputDiscardedFrames`) is what makes the
+  silence immediate even while the abandoning close is still joining its threads.
 * **Translated audio has exactly one delivery route.** The controller writes accepted
   blocks into the engine's output jitter buffer - the one source of audible audio from
   Wrong-rate blocks are rejected and counted, never silently resampled or

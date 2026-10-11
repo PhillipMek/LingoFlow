@@ -101,12 +101,108 @@ ApplicationController::ApplicationController()
 
 ApplicationController::~ApplicationController()
 {
+    // The lifecycle worker may hold queued actions that reference this
+    // object: drain and join it BEFORE anything else unwinds - a queued Stop
+    // dropped at shutdown would leave a device open and a session live.
+    shutdownLifecycleWorker();
+
+    // Whatever state the worker left us in, the object must die stopped: the
+    // quit path that never pressed Stop lands here.
+    if (state_.load(std::memory_order_relaxed) != ApplicationState::stopped)
+        stop();
+
     // The text dispatch worker publishes through this controller, so it must
     // be gone - drained and joined - before member destruction starts taking
     // the objects it references apart. The pipeline's own destructor would
     // also do it, but at a point where the member order alone decides whether
     // what the listener touches is still alive; here the whole object is.
     textPipeline_.stopDispatch();
+}
+
+// ---------------------------------------------------------------- lifecycle worker
+
+void ApplicationController::requestStart()
+{
+    scheduleLifecycle([this] { start(); });
+}
+
+void ApplicationController::requestStop()
+{
+    scheduleLifecycle([this] { stop(); });
+}
+
+void ApplicationController::scheduleLifecycle(std::function<void()> action)
+{
+    {
+        const std::lock_guard<std::mutex> lock(lifecycleMutex_);
+
+        if (!lifecycleWorkerLive_)
+        {
+            try
+            {
+                lifecycleWorker_ = std::thread([this] { runLifecycleWorker(); });
+                lifecycleWorkerLive_ = true;
+            }
+            catch (const std::system_error&)
+            {
+                // An OS that refuses the one helper thread refuses the network
+                // chain just as much - but the operator's Start/Stop click must
+                // still DO something, so the action runs inline, as it always
+                // did before this thread existed. The refusal is the log's line.
+                log::warning(kComponent,
+                             "lifecycle worker could not start; running the action inline");
+                action();
+                return;
+            }
+        }
+
+        lifecycleQueue_.push_back(std::move(action));
+    }
+    lifecycleCv_.notify_one();
+}
+
+void ApplicationController::runLifecycleWorker()
+{
+    for (;;)
+    {
+        std::function<void()> action;
+        {
+            std::unique_lock<std::mutex> lock(lifecycleMutex_);
+            lifecycleCv_.wait(lock, [this] { return lifecycleExit_ || !lifecycleQueue_.empty(); });
+
+            // Drain first, exit after: the exit flag never drops queued work,
+            // it only ends the loop once the queue is finally empty.
+            if (lifecycleQueue_.empty())
+            {
+                if (lifecycleExit_)
+                    return;
+                continue;
+            }
+
+            action = std::move(lifecycleQueue_.front());
+            lifecycleQueue_.pop_front();
+        }
+
+        action();   // start()/stop() bodies; serialized among themselves by
+                    // lifecycleRunMutex_ even against an inline caller
+    }
+}
+
+void ApplicationController::shutdownLifecycleWorker()
+{
+    std::thread worker;
+    {
+        const std::lock_guard<std::mutex> lock(lifecycleMutex_);
+        if (!lifecycleWorkerLive_)
+            return;
+        lifecycleExit_ = true;
+        worker = std::move(lifecycleWorker_);   // take it out so a re-entry of this
+                                                // function (dtor + fallback) cannot double-join
+    }
+    lifecycleCv_.notify_all();
+
+    if (worker.joinable())
+        worker.join();   // bounded by the last action's own bounds (an abandoning close is seconds, not hangs)
 }
 
 void ApplicationController::setAudioBackend(std::unique_ptr<audio::IAudioBackend> backend)
@@ -176,11 +272,13 @@ void ApplicationController::setDeveloperPlan(DeveloperPlan plan)
 
 bool ApplicationController::loopbackActive() const noexcept
 {
+    const std::lock_guard lock(loopbackMutex_);
     return loopback_ != nullptr && loopback_->running();
 }
 
 std::uint64_t ApplicationController::loopbackTransferredFrames() const noexcept
 {
+    const std::lock_guard lock(loopbackMutex_);
     return loopback_ != nullptr ? loopback_->transferredFrames() : 0;
 }
 
@@ -204,6 +302,10 @@ int ApplicationController::refreshDevices()
 
 void ApplicationController::clearFault() noexcept
 {
+    // Same serialization as start()/stop(): clearing while an action runs
+    // would race the very state line the operator is watching.
+    const std::lock_guard<std::mutex> run(lifecycleRunMutex_);
+
     if (state_ != ApplicationState::faulted)
     {
         log::debug(kComponent, "clearFault() ignored: state is " + std::string(nameOf(state_)));
@@ -213,10 +315,15 @@ void ApplicationController::clearFault() noexcept
     // The fault is history (counters keep it, the log said it when it happened);
     // clearing is the operator saying "I fixed the cause, let me try again".
     // What the retry does or does not achieve is the next start()'s truth to tell.
-    log::info(kComponent, "fault cleared by operator: '" + faultReason_ + "' - ready to start again");
-    diagnostics_.noteEvent("app", "fault cleared by operator: '" + faultReason_ + "'");
-    faultReason_.clear();
-    lastAudioError_.clear();
+    std::string remembered;
+    {
+        const std::lock_guard lock(subsystemMutex_);
+        remembered = faultReason_;
+        faultReason_.clear();
+        lastAudioError_.clear();
+    }
+    log::info(kComponent, "fault cleared by operator: '" + remembered + "' - ready to start again");
+    diagnostics_.noteEvent("app", "fault cleared by operator: '" + remembered + "'");
     state_ = ApplicationState::stopped;
 }
 
@@ -450,6 +557,8 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     audioRows.emplace_back("nonfinite_input_samples", std::to_string(engine.nonFiniteInputSamples()));
     audioRows.emplace_back("malformed_callbacks", std::to_string(engine.malformedCallbacks()));
     audioRows.emplace_back("oversized_callbacks", std::to_string(engine.oversizedCallbacks()));
+    audioRows.emplace_back("output_discarded_frames_at_stop",
+                           std::to_string(engine.outputDiscardedFrames()));
     audioRows.emplace_back("input_level", meterText(engine.inputMeter(0)));
     audioRows.emplace_back("output_level", meterText(engine.outputMeter(0)));
     audioRows.emplace_back("input_gain_db", std::format("{:.1f}", engine.inputGainDb()));
@@ -587,6 +696,10 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     translationRows.emplace_back("rejected_audio_frames", std::to_string(diag.rejectedAudioFrames));
     translationRows.emplace_back("dropped_audio_frames",
                                  std::to_string(diag.translatedAudioDroppedFrames));
+    // Audio that reached the sink only after the operator's Stop had already
+    // silenced the audience: discarded, never buffered (stop lifecycle test
+    // pins the behavior; this row is its visible trace in a venue post-mortem).
+    translationRows.emplace_back("late_audio_frames_after_stop", std::to_string(diag.lateAudioFrames));
     translationRows.emplace_back("text_partial_events", std::to_string(diag.partialTextEvents));
     translationRows.emplace_back("text_final_events", std::to_string(diag.finalTextEvents));
     translationRows.emplace_back("text_line_evictions", std::to_string(textPipeline_.evictedLines()));
@@ -735,6 +848,10 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
 
 bool ApplicationController::start()
 {
+    // One lifecycle action at a time, whoever calls: the worker (via
+    // requestStart) or an inline caller (smoke run, quit path, tests).
+    const std::lock_guard<std::mutex> run(lifecycleRunMutex_);
+
     if (state_ == ApplicationState::running || state_ == ApplicationState::starting)
     {
         log::warning(kComponent, std::string("start() ignored: already ").append(nameOf(state_)));
@@ -743,6 +860,7 @@ bool ApplicationController::start()
 
     if (state_ == ApplicationState::faulted)
     {
+        const std::lock_guard lock(subsystemMutex_);
         log::error(kComponent, "start() refused from faulted state: " + faultReason_);
         return false;
     }
@@ -760,6 +878,7 @@ bool ApplicationController::start()
     warnedRateMismatch_.store(false, std::memory_order_relaxed);
     warnedNoBuffer_.store(false, std::memory_order_relaxed);
     warnedBadBlock_.store(false, std::memory_order_relaxed);
+    warnedStoppedDelivery_.store(false, std::memory_order_relaxed);
 
     std::string error;
     if (!startAudio(error))
@@ -771,6 +890,14 @@ bool ApplicationController::start()
         diagnostics_.noteError("audio", error);
         return false;
     }
+
+    // The audience-audio gate opens with a running device, and the first act
+    // on the new pipeline is to discard anything an earlier teardown could
+    // have left in the output buffers: a Start begins from silence, full stop
+    // (belt to Stop's brace; the callback executes it in place of a reset the
+    // buffers are not allowed to take while live).
+    engine_.requestOutputDiscard();
+    audienceAudioOn_.store(true, std::memory_order_relaxed);
 
     // Translation and NDI are best-effort at this level: a failure is recorded
     // and stays recoverable, it must not take the audio path down.
@@ -803,11 +930,31 @@ bool ApplicationController::start()
 
 void ApplicationController::stop()
 {
+    // One lifecycle action at a time - see start(). The stop a quit path runs
+    // inline and the stop a button queued on the worker cannot overlap, and
+    // either one waits for the other rather than racing the device.
+    const std::lock_guard<std::mutex> run(lifecycleRunMutex_);
+
     if (state_ == ApplicationState::stopped)
         return;
 
     state_ = ApplicationState::stopping;
     log::info(kComponent, "stopping");
+
+    // Stop means silence, in this order and for a reason each:
+    //   (1) close the delivery gate first - any sink callback already running
+    //       or about to run counts as late audio instead of buffering;
+    //   (2) ask the callback to discard the audible backlog BEFORE the session
+    //       teardown starts spending its bounded time - the audience loses
+    //       the old queue now, not when closeSession returns;
+    //   (3) the abandoning session close (below) joins the network threads,
+    //       after which nothing can deliver at all (rule 5);
+    //   (4) a second discard after the joins sweeps the one race window a
+    //       callback can legally be standing in while the gate flips.
+    // ASIO itself stays open through all four and keeps playing silence: the
+    // device is stopped once, by stopAudio, as always.
+    audienceAudioOn_.store(false, std::memory_order_relaxed);
+    engine_.requestOutputDiscard();
 
     // Session first, NDI after: closeSession() may flush the trailing translated
     // line through the sink, and that text still has an audience only
@@ -815,6 +962,12 @@ void ApplicationController::stop()
     // session teardown joins the streaming worker before the device dies.
     stopSession();
     stopLoopback();
+
+    // The second discard: between the gate flip and the completion of the
+    // backend's joins, one already-in-flight audio block could have entered
+    // the jitter buffer. After this line and before deactivate(), nothing can:
+    // the producers are joined and the gate is shut.
+    engine_.requestOutputDiscard();
 
     // An earlier review: delivery to the listener became async when
     // the pipeline grew its dispatch worker, so the guarantee above is no
@@ -828,7 +981,10 @@ void ApplicationController::stop()
     stopNdi();
     stopAudio();
 
-    faultReason_.clear();
+    {
+        const std::lock_guard lock(subsystemMutex_);
+        faultReason_.clear();
+    }
     state_ = ApplicationState::stopped;
     log::info(kComponent, "stopped");
     diagnostics_.noteEvent("app", "stopped");
@@ -954,7 +1110,10 @@ bool ApplicationController::startAudio(std::string& error)
     if (devPlan_.loopback)
         startLoopbackIfNeeded();
 
-    lastAudioError_.clear();
+    {
+        const std::lock_guard lock(subsystemMutex_);
+        lastAudioError_.clear();
+    }
     return true;
 }
 
@@ -1018,8 +1177,15 @@ void ApplicationController::stopSession() noexcept
     // built for, applied on the capture side.
     stopStreaming();
 
+    // The ABANDONING close, not the graceful one: this is the operator's Stop,
+    // and seconds of draining the service's post-close audio tail into an
+    // audience that already left is exactly the "leftover plays out after
+    // Stop" the venue reported. The text tail still flushes (rule 5 permits
+    // it, history keeps its end); only audio abandons. Session ROTATION
+    // inside the reconnect supervisor keeps calling the draining closeSession
+    // - there the audience is still listening.
     if (translationBackend_ != nullptr)
-        translationBackend_->closeSession();
+        translationBackend_->abandonSession();
 }
 
 void ApplicationController::startStreaming()
@@ -1085,11 +1251,20 @@ void ApplicationController::stopStreaming() noexcept
 
 void ApplicationController::startLoopbackIfNeeded()
 {
-    loopback_ = std::make_unique<audio::AudioLoopback>(engine_);
+    {
+        const std::lock_guard lock(loopbackMutex_);
+        loopback_ = std::make_unique<audio::AudioLoopback>(engine_);
+    }
 
     std::string error;
 
-    if (!loopback_->start(error))
+    audio::AudioLoopback* lb = nullptr;
+    {
+        const std::lock_guard lock(loopbackMutex_);
+        lb = loopback_.get();
+    }
+
+    if (!lb->start(error))
     {
         // The plan asked for loopback and the worker refused: say it loudly and
         // fall back to the normal streaming (which startStreaming will then
@@ -1098,6 +1273,7 @@ void ApplicationController::startLoopbackIfNeeded()
         log::error(kComponent, "developer loopback refused to start: " + error
                                + " - capture streaming will feed the translator instead");
         diagnostics_.noteError("developer", "loopback not started: " + error);
+        const std::lock_guard lock(loopbackMutex_);
         loopback_.reset();
         return;
     }
@@ -1110,15 +1286,15 @@ void ApplicationController::startLoopbackIfNeeded()
 
 void ApplicationController::stopLoopback() noexcept
 {
+    const std::lock_guard lock(loopbackMutex_);
     if (loopback_ == nullptr)
         return;
 
+    const std::uint64_t moved = loopback_->transferredFrames();
     log::info(kComponent, "developer loopback stopped after moving "
-                              + std::to_string(loopback_->transferredFrames())
-                              + " frames from capture to output");
+                              + std::to_string(moved) + " frames from capture to output");
     diagnostics_.noteEvent("developer",
-                           "loopback stopped: " + std::to_string(loopback_->transferredFrames())
-                               + " frames transferred");
+                           "loopback stopped: " + std::to_string(moved) + " frames transferred");
 
     loopback_->stop();
     loopback_.reset();
@@ -1187,38 +1363,51 @@ void ApplicationController::publishToNdi(const translation::TranslationTextEvent
 
 void ApplicationController::fault(std::string reason)
 {
-    faultReason_ = std::move(reason);
+    std::string remembered;
+    {
+        const std::lock_guard lock(subsystemMutex_);
+        faultReason_ = std::move(reason);
+        remembered = faultReason_;
+    }
+
     state_ = ApplicationState::faulted;
 
     // The event ring narrates transitions; the audio/translation noteError calls
     // already recorded the technical cause. This line is the moment the show
     // stopped, which is what a replay asks first.
-    diagnostics_.noteEvent("app", "FAULTED: " + faultReason_);
+    diagnostics_.noteEvent("app", "FAULTED: " + remembered);
 }
 
 AppStatus ApplicationController::status() const
 {
     AppStatus s;
-    s.application = state_;
+    s.application = state_.load(std::memory_order_relaxed);
     s.audio = audioBackend_ != nullptr ? audioBackend_->state() : audio::BackendState::closed;
     s.session = sessionState();
     s.ndi = ndiOutput_ != nullptr ? ndiOutput_->state() : ndi::OutputState::disabled;
     s.audioBackendName = audioBackend_ != nullptr ? std::string(audioBackend_->name()) : std::string();
 
-    if (!faultReason_.empty())
-        s.detail = faultReason_;
-    else if (!lastAudioError_.empty())
-        s.detail = lastAudioError_;
-    else
     {
-        // The freshest translation failure, when nothing bigger is wrong: the
-        // session can be faulted while the application runs fine, and the
-        // operator still has to be able to ask "why".
-        std::lock_guard lock(subsystemMutex_);
-        s.detail = lastTranslationError_;
+        // One lock, three candidates: the detail line reads fault > audio >
+        // translation, and with the lifecycle actions now living on their own
+        // thread all three strings can change while the UI polls this.
+        const std::lock_guard lock(subsystemMutex_);
+
+        if (!faultReason_.empty())
+            s.detail = faultReason_;
+        else if (!lastAudioError_.empty())
+            s.detail = lastAudioError_;
+        else
+            s.detail = lastTranslationError_;
     }
 
     return s;
+}
+
+std::string ApplicationController::faultReason() const
+{
+    const std::lock_guard lock(subsystemMutex_);
+    return faultReason_;
 }
 
 translation::SessionState ApplicationController::sessionState() const noexcept
@@ -1281,6 +1470,23 @@ void ApplicationController::onTranslatedAudio(const float* samples, int frameCou
     }
 
     const std::uint64_t frames = static_cast<std::uint64_t>(frameCount);
+
+    // The Stop gate, first door: once the operator has stopped, no translated
+    // audio is the audience's any more - whatever arrives from here (a session
+    // mid-abandon, a callback that started before the gate flipped) is counted
+    // and dropped, never buffered. The name says which post-mortem question
+    // this answers: "did old audio leak past a Stop" has its own counter,
+    // distinct from wrong-rate refusals and from buffer-full drops.
+    if (!audienceAudioOn_.load(std::memory_order_relaxed))
+    {
+        diagnostics_.countLateAudioFrames(frames);
+
+        if (!warnedStoppedDelivery_.exchange(true, std::memory_order_relaxed))
+            log::warning(kComponent,
+                         "translated audio arrived after the operator stopped the session: "
+                         "discarded, counted as late audio (further blocks counted, not logged)");
+        return;
+    }
 
     // The device must be running to play anything, and channel 0 is the
     // translation output channel (spec "Output Channel"). No buffer means the

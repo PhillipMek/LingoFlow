@@ -330,6 +330,9 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
                                       + " / " + formatCount(engine.outputGainClippedSamples()) },
         { "malformed callbacks", formatCount(engine.malformedCallbacks()) },
         { "oversized callbacks", formatCount(engine.oversizedCallbacks()) },
+        // what the operator's Stop threw away before it could be heard (the
+        // discard the stop lifecycle enforces; see AudioEngine::requestOutputDiscard)
+        { "output discarded at Stop", formatCount(engine.outputDiscardedFrames()) },
         { "jitter fill", std::format("{:.0f} ms",
                                      engine.sampleRate() > 0
                                          ? static_cast<double>(engine.jitterFillFrames()) * 1000.0
@@ -350,6 +353,7 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
         { "translated audio frames", formatCount(diag.translatedAudioFrames) },
         { "rejected (wrong rate)", formatCount(diag.rejectedAudioFrames) },
         { "dropped (buffer full)", formatCount(diag.translatedAudioDroppedFrames) },
+        { "discarded after Stop", formatCount(diag.lateAudioFrames) },
         { "translation errors (fatal)", formatCount(diag.translationErrors)
                                             + " (" + formatCount(diag.translationFatalErrors) + ")" },
         { "reconnects", formatCount(diag.reconnects) },

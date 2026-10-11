@@ -63,6 +63,13 @@ public:
     /// translated frames used, 0 when the block was silence.
     std::size_t readOrSilence(float* data, std::size_t frames) noexcept;
 
+    /// Consumer role, realtime-safe: throw the buffered backlog away and go back
+    /// to pre-rolling - the Stop means "nothing already queued is owed to the
+    /// audience". Returns the frames discarded. Deliberately not an underrun
+    /// event: running dry is a failure, deciding to drop is a decision (the
+    /// discardedFrames() counter tells the truth instead).
+    std::size_t discard() noexcept;
+
     /// Current stored frames = the delay this buffer is adding right now.
     std::size_t available() const noexcept { return ring_.readable(); }
 
@@ -74,6 +81,10 @@ public:
 
     /// Frames dropped by the producer because the buffer was full.
     std::uint64_t droppedFrames() const noexcept { return ring_.droppedFrames(); }
+
+    /// Frames thrown away by an explicit discard (the stop path), as opposed to
+    /// lost to overflow or starvation - a post-mortem reads those differently.
+    std::uint64_t discardedFrames() const noexcept { return discarded_.load(std::memory_order_relaxed); }
 
     /// Frames played as silence while pre-rolling (startup and post-stall).
     std::uint64_t primingFrames() const noexcept { return primingFrames_.load(std::memory_order_relaxed); }
@@ -87,6 +98,7 @@ private:
     std::atomic<bool> primed_{ false };
     std::atomic<std::uint64_t> underrunEvents_{ 0 };
     std::atomic<std::uint64_t> primingFrames_{ 0 };
+    std::atomic<std::uint64_t> discarded_{ 0 };
 };
 
 } // namespace audio

@@ -21,13 +21,16 @@
 // tests and developer mode swap it without touching this file.
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "App/DeveloperMode.h"
 #include "App/TranslationStreamer.h"
@@ -195,14 +198,32 @@ public:
     /// faulted state when a subsystem refuses. A translation/NDI failure does not
     /// abort the audio path - the call still succeeds with the
     /// failure recorded.
+    ///
+    /// Callable from any thread: the whole body is serialized on the lifecycle
+    /// run-mutex, so it is safe to call while a requestStart()/requestStop()
+    /// action is executing on the lifecycle worker - it waits, off the audio
+    /// path, which is exactly what the smoke run and the quit path do.
     bool start();
 
-    /// Stops in reverse order. Always safe to call.
+    /// Stops in reverse order, with the Stop semantics the venue report asked
+    /// for: the unheard translated audio is discarded, not played out, and the
+    /// session is closed with the abandoning verb (no drain seconds spent on a
+    /// show nobody is hearing). Always safe to call. Serialized like start().
     void stop();
 
-    ApplicationState state() const noexcept { return state_; }
-    bool isRunning() const noexcept { return state_ == ApplicationState::running; }
-    std::string_view faultReason() const noexcept { return faultReason_; }
+    /// The operator-button front of start()/stop(): queue the action on the
+    /// lifecycle worker and RETURN. The GUI freeze these replaced was the
+    /// handshake, the ASIO open and the session teardown waiting on a network
+    /// thread with the window frozen; the state chip (100 ms refresh) carries
+    /// starting/running/stopping/stopped instead of a blocking button press.
+    /// Ordering is preserved: actions run FIFO, one Start behind a Stop is a
+    /// Stop-then-Start, never an interleave.
+    void requestStart();
+    void requestStop();
+
+    ApplicationState state() const noexcept { return state_.load(std::memory_order_relaxed); }
+    bool isRunning() const noexcept { return state_.load(std::memory_order_relaxed) == ApplicationState::running; }
+    std::string faultReason() const;
 
     AppStatus status() const;
 
@@ -364,6 +385,11 @@ private:
     /// gets fed at all - two consumers of one ring is not a configuration,
     /// it is a bug, and the plan makes the choice explicit.
     DeveloperPlan devPlan_;
+    /// The loopback worker lives on the lifecycle thread (start/stop bodies)
+    /// but the operator panel polls it from the UI - the pointer is therefore
+    /// read under this small mutex. The worker's own methods are atomic
+    /// counters, no lock is held across them.
+    mutable std::mutex loopbackMutex_;
     std::unique_ptr<audio::AudioLoopback> loopback_;
 
     AudioBackendFactory audioBackendFactory_;
@@ -383,11 +409,41 @@ private:
     /// configured in settings is never quietly served by the null backend.
     bool audioBackendOverridden_ = false;
 
-    ApplicationState state_ = ApplicationState::stopped;
-    std::string faultReason_;
-    std::string lastAudioError_;
+    std::atomic<ApplicationState> state_ { ApplicationState::stopped };
+    /// The audience-audio gate: false from the moment Stop begins until the
+    /// next Start brings the device up. onTranslatedAudio obeys it, so any
+    /// delivery from a session the operator already stopped is counted and
+    /// dropped instead of buffered - the belt to the backend's abandon-brace
+    /// (join => rule 5) and the engine's discard braces (belt and braces is
+    /// the correct number of braces when a callback is in flight during a
+    /// stop, which it legally can be until the join completes).
+    std::atomic<bool> audienceAudioOn_{ false };
+    std::string faultReason_;      ///< guarded by subsystemMutex_ (UI reads, lifecycle writes)
+    std::string lastAudioError_;   ///< guarded by subsystemMutex_; the vestigial clear-only
+                                   ///  reader stays because the status line contract
+                                   ///  promises SOME detail slot, and deleting it here
+                                   ///  is the kind of "while I am in here" edit this
+                                   ///  project keeps out of focused commits.
     /// Build metadata for the export header; only the composition root knows it.
     std::string appVersion_ = "unknown";
+
+    /// The lifecycle worker: the one thread requestStart()/requestStop()
+    /// actions run on. Lazily spawned, drained before its join (a queued Stop
+    /// is never dropped - the destructor's drain is why the thread may exist
+    /// at all), and every action re-enters the synchronous start()/stop()
+    /// bodies, which carry the run-mutex, so an inline call from the smoke
+    /// run or the quit path serializes with worker actions by the same lock.
+    void scheduleLifecycle(std::function<void()> action);
+    void runLifecycleWorker();
+    void shutdownLifecycleWorker();
+
+    std::mutex lifecycleRunMutex_;   ///< serializes the start()/stop() bodies across threads
+    std::mutex lifecycleMutex_;      ///< guards the queue and the exit flag
+    std::condition_variable lifecycleCv_;
+    std::deque<std::function<void()>> lifecycleQueue_;
+    bool lifecycleExit_ = false;
+    std::thread lifecycleWorker_;
+    bool lifecycleWorkerLive_ = false;  ///< guarded by lifecycleMutex_
     // (ndiSequence_ retired by the text pipeline: subtitle frames carry the typed event's
     // own pipeline sequence now - one monotonic identity for text, not a
     // per-publisher counter.)
@@ -397,6 +453,7 @@ private:
     std::atomic<bool> warnedRateMismatch_{ false };
     std::atomic<bool> warnedNoBuffer_{ false };
     std::atomic<bool> warnedBadBlock_{ false };
+    std::atomic<bool> warnedStoppedDelivery_{ false };  ///< the after-Stop discard, said once per Start
 
     /// The session's last reported state, for the reconnect count:
     /// a `connected` that follows a `reconnecting` is the recovery, and nothing
@@ -404,8 +461,10 @@ private:
     /// transition exchanges it.
     std::atomic<translation::SessionState> lastSessionState_{ translation::SessionState::closed };
     std::string lastTranslationError_;  ///< guarded by subsystemMutex_
-    mutable std::mutex subsystemMutex_; ///< protects lastTranslationError_ only; mutable
-                                        ///< because status() is a const read of it
+    mutable std::mutex subsystemMutex_; ///< protects lastTranslationError_, faultReason_ and
+                                        ///< lastAudioError_: the lifecycle worker writes them,
+                                        ///< the UI thread reads them; mutable because status()
+                                        ///< is a const read
 
     /// Records a translation error for AppStatus.detail and logs it: the first
     /// occurrence of a message is a warning, repeats are debug-level, because a

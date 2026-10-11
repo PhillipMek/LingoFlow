@@ -63,6 +63,16 @@ public:
         translatedAudioDroppedFrames_.fetch_add(frames, std::memory_order_relaxed);
     }
 
+    /// Translated audio that arrived from a session the operator had already
+    /// stopped. Its own number, because it answers its own post-mortem
+    /// question ("did old audio leak past a Stop?" - no, and here is what was
+    /// discarded instead); wrong-rate refusals and buffer-full drops are
+    /// different failures with different fixes and must not share a total.
+    void countLateAudioFrames(std::uint64_t frames) noexcept
+    {
+        lateAudioFrames_.fetch_add(frames, std::memory_order_relaxed);
+    }
+
     /// Capture throughput. Two numbers because they answer two
     /// different questions: did the translator get fed, and how much live speech
     /// did the gap policy drop while the session was reconnecting.
@@ -151,6 +161,7 @@ public:
         std::uint64_t translatedAudioFrames = 0;
         std::uint64_t rejectedAudioFrames = 0;
         std::uint64_t translatedAudioDroppedFrames = 0;
+        std::uint64_t lateAudioFrames = 0;
         std::uint64_t translationSubmittedFrames = 0;
         std::uint64_t translationGapFrames = 0;
         std::uint64_t translationErrors = 0;
@@ -198,6 +209,7 @@ private:
     std::atomic<std::uint64_t> translatedAudioFrames_{ 0 };
     std::atomic<std::uint64_t> rejectedAudioFrames_{ 0 };
     std::atomic<std::uint64_t> translatedAudioDroppedFrames_{ 0 };
+    std::atomic<std::uint64_t> lateAudioFrames_{ 0 };
     std::atomic<std::uint64_t> translationSubmittedFrames_{ 0 };
     std::atomic<std::uint64_t> translationGapFrames_{ 0 };
     std::atomic<std::uint64_t> translationErrors_{ 0 };
