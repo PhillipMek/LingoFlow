@@ -39,6 +39,12 @@ experiments. Provenance and the exact file subsets: `third_party/README.md`.
 | NDI runtime (`Processing.NDI.Lib.x64.dll`) | subtitle output over NDI only | NDI Tools/Runtime install (NewTek EULA). Optional: without it the feature reports "unavailable" and translation audio is unaffected. | Dynamic load at run time (`LoadLibrary` + `GetProcAddress`) behind `INdiOutput`; never statically linked (AGPL-compatibility rule in `docs/licensing.md`). |
 | NDI SDK (headers only) | rebuilding the optional NDI target | NDI SDK install | `-DLINGOFLOW_NDI_SDK_INCLUDE=<SDK>/Include` or the `NDI_SDK_DIR` environment variable; if neither is set the NDI real output is not compiled and the Null output remains, with tests adapting to the machine's runtime. |
 
+Windows OS components the product calls (nothing to install, nothing to
+redistribute, no licence question): `advapi32` (credential store), `winhttp`
+(transport), `gdiplus` (the subtitle rasterizer behind the NDI video output -
+part of Windows since XP; the release-imports list in docs/release.md records
+the fact).
+
 ## 4. Cloud service (talked to over TLS, nothing bundled)
 
 | Service | Role | Access |

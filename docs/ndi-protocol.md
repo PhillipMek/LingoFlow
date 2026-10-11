@@ -9,17 +9,20 @@ compilation against these headers - nothing in this file is from memory.
 
 SPEC 35-39: NDI subtitle output for production receivers (OBS, vMix, graphics
 systems), as a separate module behind `INdiOutput`, never in the audio path.
-SPEC 38 defines two modes:
+SPEC 38 defines two modes - both are now implemented, on one sender:
 
-* **Mode A - timed-text metadata** (this task): the caption text travels as NDI
-  metadata frames.
-* **Mode B - rendered subtitle video** (future, per SPEC: "can be implemented
-  after the metadata mode"): our app renders text into a video source. Not
-  built; the project rules (build the current task, not the future one).
+* **Mode A - timed-text metadata** (delivered 2026-10-04): the caption text travels
+  as NDI metadata frames. Kept as the `metadata` mode (and as the metadata half of
+  `both`); the wire semantics are unchanged, including the empty-caption no-op.
+* **Mode B - rendered subtitle video** (delivered 2026-10-11): the app renders the
+  caption into BGRA frames and sends real NDI video, transparent background and
+  all - a plain NDI Video Source for OBS. `video` is the default mode because it
+  is the one a normal receiver shows without cooperation from the viewer software.
 
-SPEC 38's own warning is carried into our docs and UI: NDI metadata transmission
-does not guarantee that every NDI receiver renders captions - which is exactly
-why this task ends in a REQUIRED real-receiver checkpoint, not a claim.
+SPEC 38's own warning is carried into our docs and UI: neither mode's transmission
+guarantees that every NDI receiver renders captions - which is exactly why the
+real-receiver checkpoint (docs/ndi-obs.md, docs/rig-checklist.md) stays REQUIRED:
+green tests prove we SENT pixels, never that a screen displayed them.
 
 ## SDK facts (read from C:\Program Files\NDI\NDI 6 SDK\Include, SDK 6.3.2.0, 2026-10-04)
 
@@ -52,6 +55,53 @@ why this task ends in a REQUIRED real-receiver checkpoint, not a claim.
   discovery as fallback, and reports the fact.
 * Receiving bandwidth: `NDIlib_recv_bandwidth_metadata_only = -10` (structs.h) -
   what the probe's receiver uses: captions, no video.
+
+## Video facts (verified 2026-10-11 for the rendered-subtitle mode)
+
+* `NDIlib_video_frame_v2_t` (structs.h, read in full): `xres, yres; FourCC;
+  frame_rate_N, frame_rate_D; picture_aspect_ratio; frame_format_type; timecode;
+  p_data; line_stride_in_bytes (union with data_size_in_bytes); p_metadata;
+  timestamp`. `picture_aspect_ratio = 0` means square pixels; `line_stride_in_bytes`
+  is BYTES per line; `p_metadata = nullptr` when the frame carries none.
+* **fourcc_BGRA is straight (NOT pre-multiplied) alpha**, memory order B,G,R,A:
+  the official frame-type page states it verbatim - "NDIlib_FourCC_type_BGRA:
+  A 4:4:4:4, 8-bit image ... in memory order blue, green, red, alpha. This data
+  is not pre-multiplied." (https://docs.ndi.video/all/developing-with-ndi/sdk/frame-types,
+  accessed 2026-10-11; the installed structs.h comment says the same ordering,
+  and only the web page states the multiply convention). The product's renderer
+  therefore keeps the GDI+ buffer exactly as painted - GDI+ 32bppARGB is
+  non-premultiplied too, so no conversion happens, and the roundtrip test asserts
+  the alpha convention structurally (a channel value above a partial alpha -
+  impossible in a pre-multiplied buffer - must exist at anti-aliased edges).
+* Widths divisible by two: the same documentation page - "because data is
+  internally all considered in 4:2:2 formats, image width values should be
+  divisible by two". Enforced by the config schema (even videoWidth) and by the
+  probe (`width & ~1`).
+* Async send copy semantics (Send.h, read verbatim): "The memory accessed by
+  NDIlib_video_frame_t cannot be freed or re-used by the caller until a
+  synchronizing event has occurred. ... Synchronizing events are: a call to
+  NDIlib_send_send_video, a call to NDIlib_send_send_video_async **with another
+  frame to be sent**, a call to NDIlib_send_send_video with p_video_data=NULL,
+  a call to NDIlib_send_destroy." The render thread therefore alternates TWO
+  buffers: each new async submission synchronizes the PREVIOUS one, and only
+  that one is ever redrawn. The same header calls async "particularly beneficial
+  when processing BGRA video".
+* Clocking (Send.h): "if you are submitting video and audio off a single thread
+  then you should only clock one of them (video is probably the better...)".
+  The subtitle source carries no audio at all, so `clock_video = true,
+  clock_audio = false`.
+* Both media from one source: the same sender takes `send_send_video_async_v2`
+  frames and `send_send_metadata` frames - that is how the `both` mode avoids a
+  name-colliding second sender.
+* Receiver format selection (`NDIlib_recv_color_format_BGRX_BGRA`, Recv.h): the
+  documented family that delivers BGRA when the source carries alpha; the
+  loopback test picks it and then verifies FourCC + alpha byte-by-byte.
+* The function table needs NO extension for video (the task's loader requirement
+  was checked against the installed header, not assumed): `NDIlib_v6` already
+  carries `send_send_video_v2` and `send_send_video_async_v2`
+  (Processing.NDI.DynamicLoad.h) - the dynamic-load contract exposes the whole
+  API precisely so nothing must be linked; the product only gained CALLS of
+  table entries it already had.
 
 ## Dynamic loading (the license rule made concrete)
 
@@ -137,8 +187,9 @@ human checkpoint below, not in the code.
 
 | Fact | Implementation |
 |---|---|
-| sender lifecycle, NULL on failure | `NDI/Real/NdiTimedTextOutput.cpp::start` |
+| sender lifecycle, NULL on failure | `NDI/Real/NdiSubtitleVideoOutput.cpp::start` |
 | metadata frame shape, length incl. NUL, synthesized timecode | same file `publish` |
+| video frame shape (stride, fps N/D, BGRA, synthesized timecode) | same file `renderLoop` + the loopback test |
 | TTML1 document + escaping | `NDI/NdiTimedText.cpp` (unit-tested shape) |
 | consumer poll (ready vs publishing) | `publish` + `send_get_no_connections(timeout 0)` |
 | dynamic load per license | `NDI/Real/NdiRuntime.cpp` |

@@ -31,7 +31,8 @@ anything not listed is forbidden and is rejected by
 
 ```text
 Utils          -> (nothing)                       logging, no JUCE
-Config         -> Utils                           settings: schema, validation, atomic file I/O
+Config         -> Utils, Subtitles              settings: schema, validation, atomic file I/O
+                                                (the subtitle style is Subtitles' data, persisted here)
 Security       -> Utils                           credential store boundary, no config access
 Diagnostics    -> Utils                           atomic counters + snapshot + bounded event
                                                    ring + key=value export renderer/writer
@@ -39,10 +40,13 @@ Audio          -> Utils, Diagnostics              engine, ring/jitter buffers, g
                                                   meters, loopback, IAudioBackend,
                                                   ASIO model/policy, Null backend
 Translation    -> Utils, Diagnostics              ITranslationBackend contract, Null backend
-NDI            -> Utils, Diagnostics              INdiOutput contract, NdiTimedText (TTML1),
+NDI            -> Utils, Diagnostics, Subtitles   INdiOutput contract, NdiTimedText (TTML1),
                                                    Null output; Real/ sender + probe compile
                                                    against SDK headers but link nothing from
                                                    the SDK (dynamic load only, docs/licensing.md)
+Subtitles      -> (nothing)                       caption style/layout/raster: the appearance
+                                                   data Config persists, the transport renders
+                                                   through, the UI previews (GDI+ inside)
 Platform       -> Audio, Utils, Diagnostics       JUCE adapters (ASIO device discovery/lifecycle)
 App            -> all of the above                ApplicationController (composition root)
 App/Main.cpp   -> App, Platform, Utils, JUCE      UI + installation of the device backend factory
@@ -70,7 +74,7 @@ The NDI boundary has a second, licensing kind: the SDK's **headers** may be
 used only by `src/NDI/Real/` (a separate CMake target whose SDK include path is PRIVATE),
 and the SDK's **import library is never linked anywhere** - the product reaches NDI by
 loading the installed runtime DLL at run time through the SDK's dynamic-load entry
-point. No header outside `src/NDI/Real/` names an NDIlib type: `NdiTimedTextOutput.h`
+point. No header outside `src/NDI/Real/` names an NDIlib type: `NdiSubtitleVideoOutput.h`
 holds the sender handle as `void*`, so even the app composition root includes only the
 contract, not the SDK.
 

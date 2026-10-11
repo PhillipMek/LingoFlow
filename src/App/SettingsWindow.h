@@ -43,6 +43,7 @@
 
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
+#include "Subtitles/SubtitleStyle.h"
 
 namespace liveai {
 
@@ -69,6 +70,26 @@ private:
     void exportPressed();
     void showNote();
     void loopbackVisuals();   ///< the red sentence while loopback is checked
+
+    /// The R/G/B sliders edit whichever of the two colours the swatch buttons
+    /// last aimed at (editingTextColour_); no new JUCE module is spent on a
+    /// colour wheel - three sliders and two swatches are the same service,
+    /// and the hex precision the venue operator actually wants.
+    void applyColourEdit();
+    void aimColourSelector(bool forText);
+
+    /// Loads the schema defaults into the appearance widgets (still a draft -
+    /// Apply commits it, exactly as every other field on this dialog).
+    void resetAppearancePressed();
+
+    /// The subtitles draft as the widgets currently carry it. A combo with no
+    /// selection (a hand-edited config value outside the presets) keeps the
+    /// committed value instead of silently rewriting it to a preset.
+    subtitles::SubtitleSettings readSubtitleDraft() const;
+
+    /// Loads one settings object into all subtitles-tab widgets (refresh and
+    /// reset share this single writer).
+    void fillSubtitleWidgets(const subtitles::SubtitleSettings&);
 
     // One layout function per tab; resized() calls them all (JUCE lays out
     // hidden tab pages too, and they are cheap).
@@ -116,6 +137,52 @@ private:
     juce::ToggleButton ndiToggle_ { "Publish NDI output" };
     juce::Label streamNameCaption_, ndiStateLabel_, ndiHintLabel_;
     juce::TextEditor streamNameEditor_;
+
+    /// Transport draft selections: output mode and the video geometry. Lists
+    /// are fixed presets (docs/ndi-protocol.md facts); a hand-edited config
+    /// value that misses every preset arrives as one extra "custom" entry, so
+    /// Apply never silently rewrites what the operator did not touch.
+    juce::ComboBox ndiModeChoice_;
+    juce::ComboBox ndiResolutionChoice_;
+    juce::ComboBox ndiFpsChoice_;
+
+    /// Appearance draft: the fields of subtitles::SubtitleStyle, edited
+    /// against a live preview. Colors travel as "#RRGGBB" values picked in a
+    /// modal ColourSelector (OK/Cancel - the draft changes only on OK).
+    juce::Label fontFamilyCaption_, fontSizeCaption_, outlineWidthCaption_,
+                shadowOffsetCaption_, shadowOpacityCaption_, alignCaption_,
+                marginCaption_, blockWidthCaption_, maxLinesCaption_,
+                lineSpacingCaption_, previewCaption_, ndiModeCaption_,
+                ndiResolutionCaption_, ndiFpsCaption_;
+    juce::TextEditor fontFamilyEditor_;
+    juce::Slider fontSizeSlider_, outlineWidthSlider_, shadowOffsetSlider_,
+                 shadowOpacitySlider_, marginSlider_, blockWidthSlider_,
+                 maxLinesSlider_, lineSpacingSlider_;
+    juce::ToggleButton shadowToggle_ { "Drop shadow" };
+    juce::ToggleButton backgroundToggle_ { "Background box behind the text" };
+    juce::ComboBox hAlignChoice_;
+    juce::ComboBox vAnchorChoice_;
+    juce::TextButton textColorButton_ { "Text colour" };
+    juce::TextButton outlineColorButton_ { "Outline colour" };
+    juce::TextButton resetAppearanceButton_ { "Reset appearance to defaults" };
+
+    /// The full subtitle draft the widgets currently carry (mode + geometry +
+    /// appearance), committed only at Apply. The preview and the colour
+    /// selector read and write it; applyPressed copies it into the candidate,
+    /// so the three always agree. editingTextColour_ says which colour the
+    /// shared selector is aimed at.
+    subtitles::SubtitleSettings subtitleDraft_;
+    bool editingTextColour_ = true;   ///< which colour the R/G/B sliders edit
+
+    /// The colour editor: three RGB sliders write the aimed colour (text or
+    /// outline) into the draft; the swatch shows the live result and the two
+    /// buttons aim the sliders at the chosen colour. Built on juce_gui_basics
+    /// only - no juce_gui_extra / ColourSelector dependency.
+    juce::Slider colourRSlider_, colourGSlider_, colourBSlider_;
+    juce::Label colourSwatch_, colourEditorCaption_;
+
+    class SubtitlePreview;
+    std::unique_ptr<SubtitlePreview> subtitlePreview_;   ///< checkerboard + live render of the draft
 
     // ------------------------------------------------------------ credentials
     juce::Label credStatusLabel_, keyHintLabel_;

@@ -28,10 +28,14 @@ to the executable; `uninstall.ps1` removes it with the folder.
 `dumpbin /DEPENDENTS` of the shipping exe, recorded by the packaging script,
 which FAILS the package if a non-system import ever appears:
 
-    advapi32, winhttp, kernel32, user32, gdi32, shell32, ole32, oleaut32,
+    advapi32, winhttp, gdiplus, kernel32, user32, gdi32, shell32, ole32, oleaut32,
     comdlg32, wininet, ws2_32, version, shlwapi, winmm, cfgmgr32, dbghelp,
     api-ms-win-shcore-scaling-l1-1-1, imm32, comctl32, dwmapi, dwrite, d2d1,
     dxgi, d3d11, dcomp
+
+(`gdiplus` joined the list with the subtitle video output - it is the Windows
+OS rasterizer (`C:\Windows\System32\gdiplus.dll`), not a redistributable; the
+re-check above ran on the rebuilt package, dated 2026-10-11.)
 
 - **The Microsoft Visual C++ redistributable is NOT required.** The first
   dependency scan of this task measured imports of `MSVCP140.dll`,
@@ -82,8 +86,8 @@ untouched).
 
 ## Build configurations (the task's "Release/RelWithDebInfo")
 
-- **Release** - ships (`ctest -C Release`: 359/359).
-- **RelWithDebInfo** - builds clean, `ctest -C RelWithDebInfo`: 359/359; its pdb
+- **Release** - ships (`ctest -C Release`: 386/386).
+- **RelWithDebInfo** - builds clean, `ctest -C RelWithDebInfo`: 386/386; its pdb
   is the crash-analysis artifact in the package.
 - Debug - development and the pessimistic performance budget (docs/performance.md).
 

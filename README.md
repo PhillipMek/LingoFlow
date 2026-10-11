@@ -34,8 +34,11 @@ FOH/Console -> Waves SoundGrid -> ASIO -> LingoFlow -> OpenAI Realtime Translati
   network failures never stop the audio device; automatic session reconnect with
   exponential backoff and provider-ceiling rotation; every degradation is counted
   and visible.
-* **Subtitles over NDI** - typed partial/final text pipeline, TTML documents,
-  optional output; NDI failure never affects audio.
+* **Subtitles over NDI** - a real NDI video source with burned-in captions on a
+  transparent background (OBS-ready as a plain NDI Video Source), plus the
+  original TTML timed-text mode, or both on one sender; live-editable appearance
+  with a transparency preview; typed partial/final text pipeline; NDI failure
+  never affects audio. Setup and honest limits: `docs/ndi-obs.md`.
 * **Secure credentials by design** - API key in Windows Credential Manager
   (masked UI), environment fallback for development only; settings, logs and
   diagnostics exports are secret-free by construction and tested with canaries.
@@ -55,7 +58,9 @@ Production machine:
   you interpret through.
 * OpenAI account with access to the Realtime Translation API; key entered in
   Settings.
-* NDI runtime only when subtitle output is used.
+* NDI runtime only when subtitle output is used; captions are rastered with
+  GDI+ (part of Windows since XP - nothing to install), and OBS-side display is
+  a venue check, not a CI claim (`docs/ndi-obs.md`).
 
 Developer machine additionally: Visual Studio 2022 (MSVC), CMake >= 3.25, Git.
 JUCE and the ASIO SDK are vendored; nlohmann/json and Catch2 are fetched by CMake.
@@ -100,16 +105,22 @@ The suite covers the realtime audio pipeline (ring/jitter/gain/meters, an
 allocation-counting callback gate, a lexical realtime-safety audit with an
 injection self-test), the OpenAI protocol surface against a scripted transport
 (handshake, events, malformed frames, expiry announcements, reconnect policy),
-the typed text pipeline and NDI dispatch, configuration persistence/corruption,
-language capabilities, security credential handling (real Credential Manager
-round-trips, canary-key export proofs), fault-injection scenarios and measured
-callback-budget headroom bounds. Everything runs without hardware, network or
-secrets.
+the typed text pipeline and NDI dispatch, caption layout (pure wrapping/shrink/
+ellipsis rules under a fake font), real GDI+ rendering asserted pixel-wise
+(transparent background, straight-alpha edges, outline and shadow), configuration
+persistence/corruption, language capabilities, security credential handling
+(real Credential Manager round-trips, canary-key export proofs), fault-injection
+scenarios and measured callback-budget headroom bounds. Everything runs without
+hardware, network or secrets; the NDI-runtime-gated cases (a live sender
+lifecycle, plus an SDK loopback roundtrip that reads the BGRA alpha back off the
+wire) run only where the runtime is installed and say so loudly where it is not.
 
 ## Configuration
 
 Single Settings area: audio device and channels, sample rate, buffer, gains,
-language pair, model hint, jitter buffer, NDI, diagnostics, developer mode.
+language pair, model hint, jitter buffer, NDI (mode, resolution, fps and the
+whole subtitle appearance, with a live transparency preview), diagnostics,
+developer mode.
 Settings persist atomically with schema versioning, field-by-field repair and
 corruption quarantine; a credential-shaped field in the config file is refused by
 definition (`config.json` can never express a secret). The API key lives in the

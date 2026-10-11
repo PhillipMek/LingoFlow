@@ -1,6 +1,6 @@
 #pragma once
 //
-// INdiOutput - subtitle transport boundary (the real output implements it).
+// INdiOutput - subtitle transport boundary (the real outputs implement it).
 //
 // Boundary rules:
 //   * Publishing is called from a worker/network thread, never from the audio
@@ -13,11 +13,18 @@
 //     real output behind NdiDispatch, and the drop-on-pressure rule
 //     (a stalled consumer costs the oldest queued caption, never the
 //     producer's time) is enforced by that structure, not by good intentions.
-//   * No NDI SDK type appears in this interface.
+//   * No NDI SDK type appears in this interface. The subtitle appearance types
+//     (Subtitles/) are NOT SDK types and ARE part of the contract: the video
+//     transport renders captions from them, and settings changes reach a
+//     running transport only through this seam (applySubtitleSettings) - the
+//     alternative, a cast to a concrete output, is exactly the coupling the
+//     boundary exists to prevent.
 
 #include <cstdint>
 #include <string>
 #include <string_view>
+
+#include "Subtitles/SubtitleStyle.h"
 
 namespace liveai {
 namespace ndi {
@@ -78,6 +85,53 @@ public:
     /// error was the transport failing - a venue post-mortem reads them
     /// differently.
     virtual std::uint64_t publishErrors() const noexcept { return 0; }
+
+    // ------------------------------------------------------------------ video
+    // Burned-in subtitle video. Every accessor here has an honest default so
+    // the metadata-only and Null outputs answer without knowing anything about
+    // pixels: a transport that renders nothing "sent no video frames, had no
+    // render errors, knows nothing of receivers". Adding them to the contract
+    // (rather than casting to a concrete output in the diagnostics/UI) is what
+    // keeps App free of transport types.
+
+    /// Appearance + geometry for a running transport. The video output applies
+    /// this live (the next rendered frame uses it; the NDI sender is per-frame
+    /// sized, so no restart); transports that draw no text ignore it, which is
+    /// the truthful answer, not a silent one - the operator sees the effect (or
+    /// its absence) in the preview and the diagnostics. The default no-op is
+    /// for outputs that never read settings; the real video output overrides.
+    virtual void applySubtitleSettings(const subtitles::SubtitleSettings& settings)
+    {
+        static_cast<void>(settings);
+    }
+
+    /// Video frames handed to the SDK since the current start (resets on
+    /// start(), kept as history after stop() - the same lifecycle rule as
+    /// publishedFrames()).
+    virtual std::uint64_t videoFramesSent() const noexcept { return 0; }
+
+    /// Frames the renderer could not draw (font engine refusal, buffer
+    /// failure) since the current start. Kept distinct from publishErrors():
+    /// "the subtitle pixels never formed" reads differently from "the network
+    /// refused the frame".
+    virtual std::uint64_t renderErrors() const noexcept { return 0; }
+
+    /// Receivers currently consuming this source, as the SDK reports it
+    /// (send_get_no_connections polled at frame time), or -1 when the transport
+    /// cannot know. Never proof a caption was DISPLAYED - only that a receiver
+    /// is connected to the source; the venue checkpoint is where "the audience
+    /// sees it" is actually established.
+    virtual int receivers() const noexcept { return -1; }
+
+    /// A one-line, operator-actionable description of the NDI runtime as this
+    /// output sees it ("NDI runtime 6.3.2.0 loaded" / "runtime not found -
+    /// install NDI 6"), or empty when the transport does not speak NDI.
+    virtual std::string runtimeDescription() const { return {}; }
+
+    /// The most recent init/render/send refusal this transport is standing
+    /// under, as an actionable sentence, or empty while all is well. A count
+    /// says something broke; this says what to do about it.
+    virtual std::string lastFailure() const { return {}; }
 };
 
 } // namespace ndi

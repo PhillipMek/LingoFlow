@@ -361,14 +361,33 @@ DiagnosticsPanel buildDiagnosticsPanel(ApplicationController& controller)
     panel.subtitles = {
         { "NDI state", std::string(ndi::nameOf(status.ndi)) },
         { "stream name", cfg.ndi.streamName.empty() ? "(not set)" : cfg.ndi.streamName },
+        // the subtitle transport, told per media: the mode the operator chose,
+        // the geometry the video frames carry, and two honest counters -
+        // "metadata frames" and "video frames" - never merged into one number
+        // that could be misread as "the audience saw this". "Publishing" is
+        // the SDK's connection poll, NOT proof of display; the venue
+        // checkpoint is where display is proven (docs/rig-checklist.md).
+        { "output mode", std::string(subtitles::nameOf(cfg.ndi.subtitles.mode)) },
+        { "video geometry", std::format("{0}x{1} @ {2} fps BGRA", cfg.ndi.subtitles.video.width,
+                                        cfg.ndi.subtitles.video.height, cfg.ndi.subtitles.video.fps) },
+        { "font", cfg.ndi.subtitles.style.fontFamily },
+        { "receivers", ndi != nullptr && ndi->receivers() >= 0
+                           ? std::format("{}", ndi->receivers())
+                           : std::string("unknown") },
+        { "runtime", ndi != nullptr ? ndi->runtimeDescription() : std::string("no output mounted") },
         // the UI redesign, section 12: when NDI fails the operator must see at a glance that
         // audio was not dragged down with it - the audio state therefore lives
         // inside this card, from the same status struct.
         { "audio (independent path)", std::string(audio::nameOf(status.audio)) },
-        { "NDI published", formatCount(ndi != nullptr ? ndi->publishedFrames() : 0) },
+        { "NDI metadata frames", formatCount(ndi != nullptr ? ndi->publishedFrames() : 0) },
+        { "NDI video frames", formatCount(ndi != nullptr ? ndi->videoFramesSent() : 0) },
+        { "NDI render errors", formatCount(ndi != nullptr ? ndi->renderErrors() : 0) },
         { "NDI dropped", formatCount(ndi != nullptr ? ndi->droppedFrames() : 0) },
         { "NDI transport errors", formatCount(ndi != nullptr ? ndi->publishErrors() : 0) },
         { "NDI errors (counted)", formatCount(diag.ndiErrors) },
+        { "NDI last failure", ndi != nullptr && !ndi->lastFailure().empty()
+                                  ? ndi->lastFailure()
+                                  : std::string("(none)") },
         { "text partial/final/evicted/duplicates",
           std::format("{} / {} / {} / {}", text.partialEvents(), text.finalEvents(),
                       text.evictedLines(), text.ignoredDuplicates()) },

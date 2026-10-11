@@ -14,11 +14,17 @@
 #include <string>
 #include <vector>
 
+#include "Subtitles/SubtitleStyle.h"
+
 namespace liveai {
 
 /// Persistent schema version. Bump it when the file layout changes and add a
 /// migration step in ConfigSchema; the loader refuses files from the future.
-inline constexpr std::uint32_t kConfigSchemaVersion = 1;
+/// v2 (2026-10-10): the ndi section learned the subtitle video output - mode,
+/// geometry and appearance. A v1 file still loads (its two ndi keys survive,
+/// everything new takes its default: video mode, 1920x1080@25, the task's
+/// style numbers), and the loader still refuses anything from the future.
+inline constexpr std::uint32_t kConfigSchemaVersion = 2;
 
 struct AudioSettings
 {
@@ -103,6 +109,15 @@ struct NdiSettings
 {
     bool enabled = false;
     std::string streamName = "LingoFlow";
+
+    /// The subtitle output as a whole: mode (video/metadata/both), video
+    /// geometry, and the caption appearance. Owned by the Subtitles module as
+    /// pure data (one definition for persistence, rendering and diagnostics),
+    /// validated field-by-field by the schema; a video stream name is the only
+    /// NDI sender property, so geometry and style changes apply to a running
+    /// transport while enabled/streamName wait for Stop + Start (the
+    /// controller's update note says so in the UI).
+    subtitles::SubtitleSettings subtitles;
 
     friend constexpr bool operator==(const NdiSettings&, const NdiSettings&) = default;
 };

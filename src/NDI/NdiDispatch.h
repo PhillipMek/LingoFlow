@@ -87,6 +87,43 @@ public:
     std::uint64_t droppedFrames() const noexcept override { return dropped_.load(std::memory_order_relaxed); }
     std::uint64_t publishErrors() const noexcept override { return workerErrors_.load(std::memory_order_relaxed); }
 
+    /// Settings changes bypass the caption queue on purpose. Queuing a style
+    /// change would order it against frames that no longer matter (the
+    /// audience has moved on), and the video transport applies settings under
+    /// its own state lock anyway - this is the same pass-through the control
+    /// operations (start/stop) already use: bounded, off the audio path, and
+    /// reaching the transport while captions are still flowing.
+    void applySubtitleSettings(const subtitles::SubtitleSettings& settings) override
+    {
+        if (downstream_ != nullptr)
+            downstream_->applySubtitleSettings(settings);
+    }
+
+    std::uint64_t videoFramesSent() const noexcept override
+    {
+        return downstream_ != nullptr ? downstream_->videoFramesSent() : 0;
+    }
+
+    std::uint64_t renderErrors() const noexcept override
+    {
+        return downstream_ != nullptr ? downstream_->renderErrors() : 0;
+    }
+
+    int receivers() const noexcept override
+    {
+        return downstream_ != nullptr ? downstream_->receivers() : -1;
+    }
+
+    std::string runtimeDescription() const override
+    {
+        return downstream_ != nullptr ? downstream_->runtimeDescription() : std::string();
+    }
+
+    std::string lastFailure() const override
+    {
+        return downstream_ != nullptr ? downstream_->lastFailure() : std::string();
+    }
+
 private:
     void workerLoop();
 

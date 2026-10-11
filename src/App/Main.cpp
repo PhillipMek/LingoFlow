@@ -88,7 +88,7 @@
 // types) and moves every transport call off the thread that feeds the jitter
 // buffer.
 #include "NDI/NdiDispatch.h"
-#include "NDI/Real/NdiTimedTextOutput.h"
+#include "NDI/Real/NdiSubtitleVideoOutput.h"
 #endif
 
 namespace {
@@ -496,22 +496,25 @@ private:
 #endif
 
 #ifdef LINGOFLOW_WITH_NDI
-    /// Mounts the production subtitle transport (SPEC 38 Mode A):
-    /// caption snapshots as TTML1 metadata over NDI, through the runtime the
-    /// machine provides - loaded dynamically per docs/licensing.md, the SDK's
-    /// import library never linked. When the runtime is absent the controller's
-    /// honest NDI-failure path takes over: the log and the operator chip say
-    /// what is wrong, and audio and translation keep running.
+    /// Mounts the production subtitle transport: burned-in subtitle VIDEO as a
+    /// real NDI source (the OBS-facing default), the delivered TTML timed-text
+    /// as the metadata mode, or both on the same sender - all three modes live
+    /// on ONE NdiSubtitleVideoOutput, so changing the mode never re-mounts and
+    /// changing the look never rebuilds the sender (NDI carries geometry in
+    /// every frame). The runtime is loaded dynamically per docs/licensing.md,
+    /// the SDK's import library never linked. When the runtime is absent the
+    /// controller's honest NDI-failure path takes over: the log and the
+    /// operator chip say what is wrong, and audio and translation keep running.
     /// The transport itself is mounted behind NdiDispatch:
-    /// every SDK call runs on the dispatch worker, never on the OpenAI receiver
-    /// thread that feeds the jitter buffer.
+    /// every SDK call runs on the dispatch worker or the output's own render
+    /// thread, never on the OpenAI receiver thread that feeds the jitter buffer.
     void installProductionNdi()
     {
         controller_.setNdiOutput(std::make_unique<liveai::ndi::NdiDispatch>(
-            std::make_unique<liveai::ndi::real::NdiTimedTextOutput>()));
+            std::make_unique<liveai::ndi::real::NdiSubtitleVideoOutput>()));
         liveai::log::info(kLogComponent,
-                          "NDI: timed-text output mounted behind the dispatch worker"
-                          " (runtime-loaded, never linked; SDK off the receiver thread)");
+                          "NDI: subtitle output mounted behind the dispatch worker"
+                          " (video + timed-text modes, runtime-loaded, never linked; SDK off the receiver thread)");
     }
 #endif
 

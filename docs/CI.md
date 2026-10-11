@@ -26,7 +26,7 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
    - `asio_discovery_verify`/`asio_discovery_list` - registry enumeration only,
      never loads a driver.
    The job summary prints the discovered count per configuration; the suite
-   currently registers 359 tests. A hard-coded count guard was deliberately
+   currently registers 386 tests. A hard-coded count guard was deliberately
    NOT added (test renames legitimately change it); the guard that matters is
    that CI runs every registered test with no exclusion filter.
 4. **Smoke modes** (Release executable):

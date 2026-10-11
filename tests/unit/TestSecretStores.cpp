@@ -411,8 +411,11 @@ TEST_CASE("ApplicationController: the log level is live, the log-file sink waits
     CHECK(log::config().level == LogLevel::debug);
     CHECK(log::enabled(LogLevel::debug));
 
-    // And the note says honestly which is which.
-    CHECK(note.find("log level are live") != std::string::npos);
+    // And the note says honestly which is which (the phrasing grew with the
+    // v2 subtitle-video live-apply; the fact pinned here is the split itself:
+    // the log level is named among the LIVE things, and restart is named too).
+    CHECK(note.find("the log level") != std::string::npos);
+    CHECK(note.find("are live") != std::string::npos);
     CHECK(note.find("application restarts") != std::string::npos);
 
     // A refused backoff pair changes nothing (the funnel is still the only path).

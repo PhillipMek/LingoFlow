@@ -142,6 +142,18 @@ audit_expect("selftest/network-includes-audio" FAIL "AUDIT_INCLUDE_DIRECTION"
 audit_expect("selftest/network-project-include-allowed" PASS ""
     APPEND "Network/Base64.cpp" "#include \"Network/IWebSocketTransport.h\"")
 
+# --- Subtitles: the caption module is shared downward and knows no transport ----
+# Config may persist it, NDI may render through it, the UI may preview it - and
+# nothing may point the other way; the audio path must never reach for it.
+audit_expect("selftest/config-includes-subtitles-allowed" PASS ""
+    APPEND "Config/ConfigStore.cpp" "#include \"Subtitles/SubtitleStyle.h\"")
+
+audit_expect("selftest/audio-includes-subtitles" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Audio/AudioEngine.h" "#include \"Subtitles/SubtitleLayout.h\"")
+
+audit_expect("selftest/subtitles-includes-ndi" FAIL "AUDIT_INCLUDE_DIRECTION"
+    APPEND "Subtitles/SubtitleLayout.h" "#include \"NDI/INdiOutput.h\"")
+
 # --- structural problems -------------------------------------------------------
 audit_expect("selftest/dangling-project-include" FAIL "AUDIT_UNRESOLVED_INCLUDE"
     APPEND "Audio/AudioEngine.h" "#include \"Audio/NoSuchFile.h\"")

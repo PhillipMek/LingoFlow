@@ -86,7 +86,7 @@ that was not present.
   comes close to exhaustion on this machine, Debug-inclusive.
 - No bottleneck was measured that justified a code change; per the task's own PASS
   criterion ("no unnecessary architecture changes") none were made.
-- Regression protection: the `[perf]` bounds now run inside ctest (359 total), so
+- Regression protection: the `[perf]` bounds now run inside ctest (386 total), so
   "unsafe callback budget or regression" becomes a build failure, not a venue
   surprise.
 

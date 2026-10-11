@@ -254,12 +254,21 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
 
     // The accepted candidate is now current: apply what applies live, so a slider
     // release and an on-screen readout never disagree with what the callback is
-    // doing. Device/rate/buffer/channel/languages/NDI need the session or the
+    // doing. Device/rate/buffer/channel/languages need the session or the
     // pipeline to be rebuilt - that is a Stop/Start away, and the note says so.
     const auto& cfg = config_.current();
     engine_.setInputGainDb(cfg.audio.inputGainDb);
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
+
+    // Subtitle appearance, video geometry and the output mode reach a RUNNING
+    // transport (the task's "apply without restarting the sender"): the video
+    // output redraws on its next frame, the mode switches which media that
+    // frame is, and the NDI sender is not rebuilt because frame size and rate
+    // travel in every frame. Only enabled/streamName still wait for Stop+Start -
+    // the name IS the sender's identity.
+    if (!(cfg.ndi.subtitles == previous.ndi.subtitles))
+        ndiOutput_->applySubtitleSettings(cfg.ndi.subtitles);
 
     // Design note: the log level is a mid-show control - the venue run-sheet asks
     // for debug lines while everything is already running - and reconfiguring
@@ -275,10 +284,10 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
 
     std::string saveError;
     if (saveSettings(saveError))
-        note = "settings saved. Gain, jitter and the log level are live. Device, sample rate, "
-               "buffer, channels, languages, instructions and NDI take effect on Stop + Start. "
-               "Recovery policy (backoff, session age) and the log-file sink take effect when "
-               "the application restarts.";
+        note = "settings saved. Gain, jitter, the log level and the NDI subtitle look (appearance, "
+               "geometry, mode) are live. Device, sample rate, buffer, channels, languages, instructions "
+               "and the NDI on/off + stream name take effect on Stop + Start. Recovery policy (backoff, "
+               "session age) and the log-file sink take effect when the application restarts.";
     else
         note = "settings are active for this run but were NOT saved: " + saveError;
 
@@ -596,19 +605,43 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     translationRows.emplace_back("translation_fatal_errors", std::to_string(diag.translationFatalErrors));
     sections.push_back({ "translation", std::move(translationRows) });
 
+    // NDI: the whole truth about the subtitle transport, per media kind.
+    // published_frames counts TTML metadata submits (zero in pure video mode -
+    // it is NOT "captions published" in general); video_frames_sent counts the
+    // frames the render thread handed to the SDK; receivers is the SDK's
+    // connection poll, and the export never dresses any of these numbers up as
+    // "a human saw the text" - that proof lives at the venue checkpoint
+    // (docs/rig-checklist.md), never in a counter.
+    const ndi::INdiOutput* ndiOut = ndiOutput_.get();
     sections.push_back({ "ndi", {
         { "enabled", cfg.ndi.enabled ? "yes" : "no" },
         { "stream_name", cfg.ndi.streamName },
-        { "published_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishedFrames())
+        { "mode", std::string(subtitles::nameOf(cfg.ndi.subtitles.mode)) },
+        { "video_geometry",
+          std::to_string(cfg.ndi.subtitles.video.width) + "x"
+              + std::to_string(cfg.ndi.subtitles.video.height) + "@"
+              + std::to_string(cfg.ndi.subtitles.video.fps) + "fps" },
+        { "font_family", cfg.ndi.subtitles.style.fontFamily },
+        { "published_frames", ndiOut != nullptr ? std::to_string(ndiOut->publishedFrames())
                                                      : std::string("0") },
+        { "video_frames_sent", ndiOut != nullptr ? std::to_string(ndiOut->videoFramesSent())
+                                                  : std::string("0") },
+        { "render_errors", ndiOut != nullptr ? std::to_string(ndiOut->renderErrors())
+                                              : std::string("0") },
+        { "receivers", ndiOut == nullptr ? std::string("no output")
+                       : ndiOut->receivers() >= 0 ? std::to_string(ndiOut->receivers())
+                                                  : std::string("unknown") },
+        { "runtime", ndiOut != nullptr ? ndiOut->runtimeDescription()
+                                       : std::string("no NDI output mounted") },
+        { "last_failure", ndiOut != nullptr ? ndiOut->lastFailure() : std::string() },
         // the NDI contract; the delivery counters: "errors" is what the PRODUCER
         // was told (not started / shutting down); dropped_frames and
         // transport_errors are what happened after acceptance, on the dispatch
         // side - a post-mortem must be able to tell "we chose to drop stale
         // captions" apart from "the transport refused".
-        { "dropped_frames", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->droppedFrames())
+        { "dropped_frames", ndiOut != nullptr ? std::to_string(ndiOut->droppedFrames())
                                                    : std::string("0") },
-        { "transport_errors", ndiOutput_ != nullptr ? std::to_string(ndiOutput_->publishErrors())
+        { "transport_errors", ndiOut != nullptr ? std::to_string(ndiOut->publishErrors())
                                                       : std::string("0") },
         { "errors", std::to_string(diag.ndiErrors) },
     } });
@@ -1101,6 +1134,12 @@ bool ApplicationController::startNdi(std::string& error)
         error = "no NDI output is configured";
         return false;
     }
+
+    // The mounted transport was built blind; the settings are the truth. One
+    // push before the sender opens means frame one already looks the way the
+    // operator configured it (and transports that render nothing simply
+    // ignore it - the contract's default).
+    ndiOutput_->applySubtitleSettings(config_.current().ndi.subtitles);
 
     if (!ndiOutput_->start(config_.current().ndi.streamName, error))
     {

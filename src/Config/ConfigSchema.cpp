@@ -37,6 +37,29 @@ constexpr std::size_t kMaxIdentifierLength = 64;
 constexpr std::size_t kMaxDeviceIdLength = 256;
 constexpr std::size_t kMaxLanguageTagLength = 12;
 
+// the subtitle-video bounds (schema version 2). The widths are the NDI frame
+// facts (docs/ndi-protocol.md): an even width is what the frame-type
+// documentation requires, and 8192 is the ceiling the renderer's own guard
+// uses - storage and render refuse the same numbers.
+constexpr int kMinSubtitleWidth = 256;
+constexpr int kMaxSubtitleWidth = 8192;
+constexpr int kMinSubtitleHeight = 144;
+constexpr int kMaxSubtitleHeight = 4320;
+constexpr int kMinSubtitleFps = 5;
+constexpr int kMaxSubtitleFps = 60;
+constexpr int kMinFontSizePx = 8;
+constexpr int kMaxFontSizePx = 400;
+constexpr int kMaxOutlineWidthPx = 12;
+constexpr int kMaxShadowOffsetPx = 32;
+constexpr int kMaxShadowOpacityPercent = 100;
+constexpr int kMaxEdgeMarginPercent = 40;
+constexpr int kMinBlockWidthPercent = 25;
+constexpr int kMaxBlockWidthPercent = 100;
+constexpr int kMinMaxLines = 1;
+constexpr int kMaxMaxLines = 6;
+constexpr int kMaxLineSpacingPercent = 100;
+constexpr int kMaxBackgroundPaddingPx = 64;
+
 // the developer-mode bounds. The paths ride the same shape rule as device
 // identifiers (bounded, control-character-free) - a settings field is never a
 // license for an unbounded string, even a "only ever dev" one.
@@ -62,6 +85,89 @@ bool isLanguageTag(std::string_view tag)
     return std::all_of(tag.begin(), tag.end(), [](unsigned char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
     });
+}
+
+// the subtitle color fields travel as canonical "#RRGGBB" (uppercase on the
+// way out, case-insensitive on the way in): a human-editable config must show
+// a color AS a color, and the alpha channel deliberately has no place here -
+// the caption opacities are their own settings (see SubtitleStyle.h).
+bool isHexColorText(std::string_view text)
+{
+    if (text.size() != 7 || text.front() != '#')
+        return false;
+    return std::all_of(text.begin() + 1, text.end(), [](unsigned char c)
+    { return std::isxdigit(c) != 0; });
+}
+
+std::string colorText(std::uint32_t rgb)
+{
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string text = "#";
+    for (const int shift : { 16, 8, 0 })
+    {
+        const unsigned byte = (rgb >> shift) & 0xFFu;   // one full channel
+        text.push_back(kHex[byte >> 4]);
+        text.push_back(kHex[byte & 0xF]);
+    }
+    return text;
+}
+
+std::uint32_t colorFromHexText(std::string_view text)
+{
+    std::uint32_t rgb = 0;
+    for (std::size_t i = 1; i < text.size(); ++i)
+    {
+        const char c = static_cast<char>(std::toupper(static_cast<unsigned char>(text[i])));
+        const auto digit = static_cast<unsigned>(c <= '9' ? c - '0' : c - 'A' + 10);
+        rgb = (rgb << 4) | digit;
+    }
+    return rgb;
+}
+
+void readColor(const nlohmann::json& object,
+               const char* key,
+               const std::string& path,
+               std::uint32_t& destination,
+               ConfigProblems& problems)
+{
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null())
+        return;
+
+    if (!it->is_string() || !isHexColorText(it->get_ref<const std::string&>()))
+    {
+        problems.push_back(ConfigProblem{ path, "expected a \"#RRGGBB\" color, default kept" });
+        return;
+    }
+
+    destination = colorFromHexText(it->get_ref<const std::string&>());
+}
+
+/// A stored enum name read through its parse-back function: an unknown
+/// spelling is a reported problem with the default standing, never a silent
+/// cast into an unnamed value.
+template <typename Enum, typename Parser>
+void readEnumName(const nlohmann::json& object,
+                  const char* key,
+                  const std::string& path,
+                  Enum& destination,
+                  ConfigProblems& problems,
+                  Parser parse)
+{
+    const auto it = object.find(key);
+    if (it == object.end() || it->is_null())
+        return;
+
+    if (!it->is_string())
+    {
+        problems.push_back(ConfigProblem{ path, "expected a string, ignored the value" });
+        return;
+    }
+
+    if (const auto parsed = parse(std::string_view(it->get_ref<const std::string&>())); parsed.has_value())
+        destination = *parsed;
+    else
+        problems.push_back(ConfigProblem{ path, "unknown value '" + it->get<std::string>() + "', default kept" });
 }
 
 bool isOpaqueIdentifier(std::string_view text, std::size_t maxLength)
@@ -350,6 +456,82 @@ ConfigProblems validate(const AppConfig& candidate)
                                   || hasControlCharacter(candidate.ndi.streamName)))
         problems.push_back(ConfigProblem{ "ndi.streamName", "NDI is enabled but the stream name is invalid" });
 
+    // Subtitle video bounds, validated ALWAYS (the developer-mode rule: shape
+    // is repaired even while the feature sleeps, so a years-old typo cannot
+    // ambush the first enabled show). The even-width requirement is not local
+    // taste: the NDI frame-type documentation asks for widths divisible by two
+    // (recorded with its access date in docs/ndi-protocol.md).
+    const auto& subtitleVideo = candidate.ndi.subtitles.video;
+    const auto& subtitleStyle = candidate.ndi.subtitles.style;
+
+    if (subtitleVideo.width < kMinSubtitleWidth || subtitleVideo.width > kMaxSubtitleWidth
+        || subtitleVideo.width % 2 != 0)
+        problems.push_back(ConfigProblem{ "ndi.videoWidth",
+                                          "must be an even number between "
+                                              + std::to_string(kMinSubtitleWidth) + " and "
+                                              + std::to_string(kMaxSubtitleWidth) });
+
+    if (subtitleVideo.height < kMinSubtitleHeight || subtitleVideo.height > kMaxSubtitleHeight)
+        problems.push_back(ConfigProblem{ "ndi.videoHeight",
+                                          "must be between " + std::to_string(kMinSubtitleHeight) + " and "
+                                              + std::to_string(kMaxSubtitleHeight) });
+
+    if (subtitleVideo.fps < kMinSubtitleFps || subtitleVideo.fps > kMaxSubtitleFps)
+        problems.push_back(ConfigProblem{ "ndi.videoFps",
+                                          "must be between " + std::to_string(kMinSubtitleFps) + " and "
+                                              + std::to_string(kMaxSubtitleFps) });
+
+    if (!isOpaqueIdentifier(subtitleStyle.fontFamily, kMaxIdentifierLength))
+        problems.push_back(ConfigProblem{ "ndi.fontFamily",
+                                          "a font family name must be 1-"
+                                              + std::to_string(kMaxIdentifierLength)
+                                              + " characters with no control characters" });
+
+    if (subtitleStyle.fontSizePx < kMinFontSizePx || subtitleStyle.fontSizePx > kMaxFontSizePx)
+        problems.push_back(ConfigProblem{ "ndi.fontSizePx",
+                                          "must be between " + std::to_string(kMinFontSizePx) + " and "
+                                              + std::to_string(kMaxFontSizePx) + " px (at 1080p reference)" });
+
+    if (subtitleStyle.outlineWidthPx < 0 || subtitleStyle.outlineWidthPx > kMaxOutlineWidthPx)
+        problems.push_back(ConfigProblem{ "ndi.outlineWidthPx",
+                                          "must be between 0 (no outline) and "
+                                              + std::to_string(kMaxOutlineWidthPx) });
+
+    if (subtitleStyle.shadowOffsetPx < 0 || subtitleStyle.shadowOffsetPx > kMaxShadowOffsetPx)
+        problems.push_back(ConfigProblem{ "ndi.shadowOffsetPx",
+                                          "must be between 0 and " + std::to_string(kMaxShadowOffsetPx) });
+
+    if (subtitleStyle.shadowOpacityPercent < 0 || subtitleStyle.shadowOpacityPercent > kMaxShadowOpacityPercent)
+        problems.push_back(ConfigProblem{ "ndi.shadowOpacityPercent",
+                                          "must be between 0 and " + std::to_string(kMaxShadowOpacityPercent) });
+
+    if (subtitleStyle.edgeMarginPercent < 0 || subtitleStyle.edgeMarginPercent > kMaxEdgeMarginPercent)
+        problems.push_back(ConfigProblem{ "ndi.edgeMarginPercent",
+                                          "must be between 0 and " + std::to_string(kMaxEdgeMarginPercent)
+                                              + " percent of the frame height" });
+
+    if (subtitleStyle.blockWidthPercent < kMinBlockWidthPercent || subtitleStyle.blockWidthPercent > kMaxBlockWidthPercent)
+        problems.push_back(ConfigProblem{ "ndi.blockWidthPercent",
+                                          "must be between " + std::to_string(kMinBlockWidthPercent) + " and "
+                                              + std::to_string(kMaxBlockWidthPercent) });
+
+    if (subtitleStyle.maxLines < kMinMaxLines || subtitleStyle.maxLines > kMaxMaxLines)
+        problems.push_back(ConfigProblem{ "ndi.maxLines",
+                                          "must be between " + std::to_string(kMinMaxLines) + " and "
+                                              + std::to_string(kMaxMaxLines) });
+
+    if (subtitleStyle.lineSpacingPercent < 0 || subtitleStyle.lineSpacingPercent > kMaxLineSpacingPercent)
+        problems.push_back(ConfigProblem{ "ndi.lineSpacingPercent",
+                                          "must be between 0 and " + std::to_string(kMaxLineSpacingPercent) });
+
+    if (subtitleStyle.backgroundOpacityPercent < 0 || subtitleStyle.backgroundOpacityPercent > kMaxShadowOpacityPercent)
+        problems.push_back(ConfigProblem{ "ndi.backgroundOpacityPercent",
+                                          "must be between 0 and " + std::to_string(kMaxShadowOpacityPercent) });
+
+    if (subtitleStyle.backgroundPaddingPx < 0 || subtitleStyle.backgroundPaddingPx > kMaxBackgroundPaddingPx)
+        problems.push_back(ConfigProblem{ "ndi.backgroundPaddingPx",
+                                          "must be between 0 and " + std::to_string(kMaxBackgroundPaddingPx) });
+
     const auto level = log::levelFromName(candidate.diagnostics.logLevel);
     if (log::nameOf(level) != candidate.diagnostics.logLevel)
         problems.push_back(ConfigProblem{ "diagnostics.logLevel",
@@ -454,7 +636,33 @@ std::string toJsonText(const AppConfig& settings)
             { "reconnectMaxBackoffMs", settings.translation.reconnectMaxBackoffMs },
             { "sessionMaxAgeSeconds", settings.translation.sessionMaxAgeSeconds },
             { "expirySafetyMarginSeconds", settings.translation.expirySafetyMarginSeconds } } },
-        { "ndi", { { "enabled", settings.ndi.enabled }, { "streamName", settings.ndi.streamName } } },
+        { "ndi", {
+            { "enabled", settings.ndi.enabled },
+            { "streamName", settings.ndi.streamName },
+            // schema version 2: the subtitle video output. mode/geometry/style
+            // serialize with the transport, so a venue box moves its whole
+            // subtitle look in one file (docs/ndi-protocol.md, docs/release.md).
+            { "mode", std::string(subtitles::nameOf(settings.ndi.subtitles.mode)) },
+            { "videoWidth", settings.ndi.subtitles.video.width },
+            { "videoHeight", settings.ndi.subtitles.video.height },
+            { "videoFps", settings.ndi.subtitles.video.fps },
+            { "fontFamily", settings.ndi.subtitles.style.fontFamily },
+            { "fontSizePx", settings.ndi.subtitles.style.fontSizePx },
+            { "textColor", colorText(settings.ndi.subtitles.style.textColorRgb) },
+            { "outlineColor", colorText(settings.ndi.subtitles.style.outlineColorRgb) },
+            { "outlineWidthPx", settings.ndi.subtitles.style.outlineWidthPx },
+            { "shadowEnabled", settings.ndi.subtitles.style.shadowEnabled },
+            { "shadowOffsetPx", settings.ndi.subtitles.style.shadowOffsetPx },
+            { "shadowOpacityPercent", settings.ndi.subtitles.style.shadowOpacityPercent },
+            { "horizontalAlign", std::string(subtitles::nameOf(settings.ndi.subtitles.style.horizontalAlign)) },
+            { "verticalAnchor", std::string(subtitles::nameOf(settings.ndi.subtitles.style.verticalAnchor)) },
+            { "edgeMarginPercent", settings.ndi.subtitles.style.edgeMarginPercent },
+            { "blockWidthPercent", settings.ndi.subtitles.style.blockWidthPercent },
+            { "maxLines", settings.ndi.subtitles.style.maxLines },
+            { "lineSpacingPercent", settings.ndi.subtitles.style.lineSpacingPercent },
+            { "backgroundEnabled", settings.ndi.subtitles.style.backgroundEnabled },
+            { "backgroundOpacityPercent", settings.ndi.subtitles.style.backgroundOpacityPercent },
+            { "backgroundPaddingPx", settings.ndi.subtitles.style.backgroundPaddingPx } } },
         { "diagnostics", { { "logLevel", settings.diagnostics.logLevel }, { "writeLogFile", settings.diagnostics.writeLogFile } } },
         { "developer",
           { { "enabled", settings.developer.enabled },
@@ -573,11 +781,50 @@ bool fromJsonText(std::string_view text,
 
     if (const auto* section = findSection(root, "ndi", problems); section != nullptr)
     {
-        static const std::set<std::string> kKeys{ "enabled", "streamName" };
+        static const std::set<std::string> kKeys{ "enabled", "streamName", "mode", "videoWidth",
+                                                  "videoHeight", "videoFps", "fontFamily", "fontSizePx",
+                                                  "textColor", "outlineColor", "outlineWidthPx",
+                                                  "shadowEnabled", "shadowOffsetPx", "shadowOpacityPercent",
+                                                  "horizontalAlign", "verticalAnchor", "edgeMarginPercent",
+                                                  "blockWidthPercent", "maxLines", "lineSpacingPercent",
+                                                  "backgroundEnabled", "backgroundOpacityPercent",
+                                                  "backgroundPaddingPx" };
         reportUnknownKeys(*section, "ndi", kKeys, problems);
 
-        readBool(*section, "enabled", "ndi.enabled", out.ndi.enabled, problems);
-        readString(*section, "streamName", "ndi.streamName", out.ndi.streamName, problems);
+        auto& ndi = out.ndi;
+        auto& style = ndi.subtitles.style;
+        readBool(*section, "enabled", "ndi.enabled", ndi.enabled, problems);
+        readString(*section, "streamName", "ndi.streamName", ndi.streamName, problems);
+        readEnumName(*section, "mode", "ndi.mode", ndi.subtitles.mode, problems,
+                     subtitles::outputModeFromName);
+        readNumber<int>(*section, "videoWidth", "ndi.videoWidth", ndi.subtitles.video.width, problems);
+        readNumber<int>(*section, "videoHeight", "ndi.videoHeight", ndi.subtitles.video.height, problems);
+        readNumber<int>(*section, "videoFps", "ndi.videoFps", ndi.subtitles.video.fps, problems);
+        readString(*section, "fontFamily", "ndi.fontFamily", style.fontFamily, problems);
+        readNumber<int>(*section, "fontSizePx", "ndi.fontSizePx", style.fontSizePx, problems);
+        readColor(*section, "textColor", "ndi.textColor", style.textColorRgb, problems);
+        readColor(*section, "outlineColor", "ndi.outlineColor", style.outlineColorRgb, problems);
+        readNumber<int>(*section, "outlineWidthPx", "ndi.outlineWidthPx", style.outlineWidthPx, problems);
+        readBool(*section, "shadowEnabled", "ndi.shadowEnabled", style.shadowEnabled, problems);
+        readNumber<int>(*section, "shadowOffsetPx", "ndi.shadowOffsetPx", style.shadowOffsetPx, problems);
+        readNumber<int>(*section, "shadowOpacityPercent", "ndi.shadowOpacityPercent",
+                        style.shadowOpacityPercent, problems);
+        readEnumName(*section, "horizontalAlign", "ndi.horizontalAlign", style.horizontalAlign, problems,
+                     subtitles::horizontalAlignFromName);
+        readEnumName(*section, "verticalAnchor", "ndi.verticalAnchor", style.verticalAnchor, problems,
+                     subtitles::verticalAnchorFromName);
+        readNumber<int>(*section, "edgeMarginPercent", "ndi.edgeMarginPercent", style.edgeMarginPercent,
+                        problems);
+        readNumber<int>(*section, "blockWidthPercent", "ndi.blockWidthPercent", style.blockWidthPercent,
+                        problems);
+        readNumber<int>(*section, "maxLines", "ndi.maxLines", style.maxLines, problems);
+        readNumber<int>(*section, "lineSpacingPercent", "ndi.lineSpacingPercent", style.lineSpacingPercent,
+                        problems);
+        readBool(*section, "backgroundEnabled", "ndi.backgroundEnabled", style.backgroundEnabled, problems);
+        readNumber<int>(*section, "backgroundOpacityPercent", "ndi.backgroundOpacityPercent",
+                        style.backgroundOpacityPercent, problems);
+        readNumber<int>(*section, "backgroundPaddingPx", "ndi.backgroundPaddingPx",
+                        style.backgroundPaddingPx, problems);
     }
 
     if (const auto* section = findSection(root, "diagnostics", problems); section != nullptr)
@@ -671,6 +918,37 @@ bool fromJsonText(std::string_view text,
               c.ndi.streamName = d.ndi.streamName;
               c.ndi.enabled = d.ndi.enabled;
           } },
+        // schema version 2: one repair row per validated subtitle field - the
+        // mechanism above promises "(default restored)" for every reported
+        // problem, and that promise must stay literally true.
+        { "ndi.videoWidth",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.video.width = d.ndi.subtitles.video.width; } },
+        { "ndi.videoHeight",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.video.height = d.ndi.subtitles.video.height; } },
+        { "ndi.videoFps",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.video.fps = d.ndi.subtitles.video.fps; } },
+        { "ndi.fontFamily",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.fontFamily = d.ndi.subtitles.style.fontFamily; } },
+        { "ndi.fontSizePx",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.fontSizePx = d.ndi.subtitles.style.fontSizePx; } },
+        { "ndi.outlineWidthPx",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.outlineWidthPx = d.ndi.subtitles.style.outlineWidthPx; } },
+        { "ndi.shadowOffsetPx",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.shadowOffsetPx = d.ndi.subtitles.style.shadowOffsetPx; } },
+        { "ndi.shadowOpacityPercent",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.shadowOpacityPercent = d.ndi.subtitles.style.shadowOpacityPercent; } },
+        { "ndi.edgeMarginPercent",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.edgeMarginPercent = d.ndi.subtitles.style.edgeMarginPercent; } },
+        { "ndi.blockWidthPercent",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.blockWidthPercent = d.ndi.subtitles.style.blockWidthPercent; } },
+        { "ndi.maxLines",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.maxLines = d.ndi.subtitles.style.maxLines; } },
+        { "ndi.lineSpacingPercent",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.lineSpacingPercent = d.ndi.subtitles.style.lineSpacingPercent; } },
+        { "ndi.backgroundOpacityPercent",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.backgroundOpacityPercent = d.ndi.subtitles.style.backgroundOpacityPercent; } },
+        { "ndi.backgroundPaddingPx",
+          [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.backgroundPaddingPx = d.ndi.subtitles.style.backgroundPaddingPx; } },
         { "diagnostics.logLevel", [](AppConfig& c, const AppConfig& d) { c.diagnostics.logLevel = d.diagnostics.logLevel; } },
         { "developer.audioSource",
           [](AppConfig& c, const AppConfig& d)

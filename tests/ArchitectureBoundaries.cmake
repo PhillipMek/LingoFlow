@@ -23,21 +23,28 @@ if(NOT IS_DIRECTORY "${AUDIT_SRC_DIR}")
     message(FATAL_ERROR "AUDIT_SRC_DIR does not exist: ${AUDIT_SRC_DIR}")
 endif()
 
-set(audit_known_modules Utils Config Security Diagnostics Audio Translation NDI Platform Network App)
+set(audit_known_modules Utils Config Security Diagnostics Audio Translation Subtitles NDI Platform Network App)
 
 set(AUDIT_ALLOWED_Utils       "Utils")
-set(AUDIT_ALLOWED_Config      "Config;Utils")
+set(AUDIT_ALLOWED_Config      "Config;Utils;Subtitles")
 set(AUDIT_ALLOWED_Security    "Security;Utils")
 set(AUDIT_ALLOWED_Diagnostics "Diagnostics;Utils")
 set(AUDIT_ALLOWED_Audio       "Audio;Utils;Diagnostics")
 set(AUDIT_ALLOWED_Translation "Translation;Utils;Diagnostics")
-set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics")
+# Subtitles is the caption appearance/layout/raster module: it depends on
+# nothing but the standard library (and the OS rasterizer inside its .cpp), so
+# it can stay portable and be consumed by Config (persistence), NDI (video
+# transport) and App (preview) without ever creating a cycle.
+set(AUDIT_ALLOWED_Subtitles   "Subtitles")
+# The NDI module may see the subtitle style/renderer types (their shared data
+# contract) but never the other way around: Subtitles knows no transport.
+set(AUDIT_ALLOWED_NDI         "NDI;Utils;Diagnostics;Subtitles")
 set(AUDIT_ALLOWED_Platform    "Platform;Audio;Utils;Diagnostics")
 # Design note: the OpenAI protocol lives only here; it may see the contract
 # (Translation), the credential store (Security) and logging (Utils), nothing
 # else. Only the App composition root may include Network.
 set(AUDIT_ALLOWED_Network     "Network;Translation;Security;Utils")
-set(AUDIT_ALLOWED_App         "App;Audio;Translation;NDI;Config;Security;Diagnostics;Platform;Network;Utils")
+set(AUDIT_ALLOWED_App         "App;Audio;Translation;Subtitles;NDI;Config;Security;Diagnostics;Platform;Network;Utils")
 
 # The UI is src/App; the JUCE-backed device adapters are src/Platform. Only those two
 # may include JUCE, so Audio/Translation/NDI/Config/Diagnostics/Utils stay portable.

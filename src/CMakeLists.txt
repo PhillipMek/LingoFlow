@@ -84,6 +84,13 @@ add_library(lingoflow_core STATIC
     NDI/Null/NullNdiOutput.cpp
     NDI/Null/NullNdiOutput.h
 
+    Subtitles/SubtitleStyle.h
+    Subtitles/SubtitleStyle.cpp
+    Subtitles/SubtitleLayout.h
+    Subtitles/SubtitleLayout.cpp
+    Subtitles/SubtitleRenderer.h
+    Subtitles/SubtitleRenderer.cpp
+
     App/ApplicationController.cpp
     App/ApplicationController.h
     App/DeveloperMode.cpp
@@ -106,8 +113,10 @@ target_link_libraries(lingoflow_core PRIVATE nlohmann_json::nlohmann_json)
 # Manager, whose Cred* APIs live in advapi32. A PRIVATE link on a static library
 # still reaches the final executables through CMake's link interface, and the
 # class compiles everywhere (it just reports "unavailable" off Windows).
+# gdiplus joins the same rule for the subtitle rasterizer: the renderer reports
+# "no GDI+ here" off Windows, and its consumers inherit the system import.
 if(WIN32)
-    target_link_libraries(lingoflow_core PRIVATE advapi32)
+    target_link_libraries(lingoflow_core PRIVATE advapi32 gdiplus)
 endif()
 
 if(MSVC)
@@ -231,8 +240,8 @@ if(WIN32 AND EXISTS "${LINGOFLOW_NDI_SDK_INCLUDE}/Processing.NDI.Lib.h")
     add_library(lingoflow_ndi_real STATIC
         NDI/Real/NdiRuntime.cpp
         NDI/Real/NdiRuntime.h
-        NDI/Real/NdiTimedTextOutput.cpp
-        NDI/Real/NdiTimedTextOutput.h)
+        NDI/Real/NdiSubtitleVideoOutput.cpp
+        NDI/Real/NdiSubtitleVideoOutput.h)
 
     target_include_directories(lingoflow_ndi_real PRIVATE "${LINGOFLOW_NDI_SDK_INCLUDE}")
     target_link_libraries(lingoflow_ndi_real PUBLIC lingoflow::core)

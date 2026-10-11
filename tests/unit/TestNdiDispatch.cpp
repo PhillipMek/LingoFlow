@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "NDI/NdiDispatch.h"
+#include "NDI/Null/NullNdiOutput.h"
 
 using liveai::ndi::NdiDispatch;
 using liveai::ndi::OutputState;
@@ -120,6 +121,26 @@ public:
         const std::lock_guard<std::mutex> lock(mutex_);
         return delivered_;
     }
+
+    // The video-contract surface, with its OWN mutex: a settings change must
+    // reach the transport even while a caption is frozen inside the fake SDK -
+    // the pass-through test below would deadlock if this shared mutex_.
+    void applySubtitleSettings(const liveai::subtitles::SubtitleSettings& settings) override
+    {
+        const std::lock_guard<std::mutex> lock(styleMutex_);
+        appliedStyle = settings;
+        ++appliedCount;
+    }
+
+    std::uint64_t videoFramesSent() const noexcept override { return 7; }
+    std::uint64_t renderErrors() const noexcept override { return 3; }
+    int receivers() const noexcept override { return 2; }
+    std::string runtimeDescription() const override { return "fake runtime 9.9"; }
+    std::string lastFailure() const override { return "fake failure sentence"; }
+
+    std::mutex styleMutex_;
+    std::int64_t appliedCount = 0;
+    liveai::subtitles::SubtitleSettings appliedStyle;
 
 private:
     std::mutex mutex_;
@@ -301,4 +322,55 @@ TEST_CASE("NdiDispatch: order survives pressure - the worker is the only transpo
     CHECK(dispatch.publishErrors() == 0);
 
     dispatch.stop();
+}
+
+TEST_CASE("NdiDispatch: settings changes pass through live, not through the caption queue",
+          "[ndi][dispatch][video]")
+{
+    auto gated = std::make_unique<GatedNdi>();
+    GatedNdi* fake = gated.get();
+    NdiDispatch dispatch(std::move(gated), 8);
+
+    std::string error;
+    REQUIRE(dispatch.start("LingoFlow EN->RU", error));
+
+    // Freeze the transport mid-caption: the worker is stuck inside the fake SDK.
+    fake->blockPublish();
+    REQUIRE(dispatch.publish(frame("stalled", 1), error));
+    REQUIRE(waitFor([&] { return fake->inFlight(); }));
+
+    // A settings change must not queue behind that stall: it is control-plane,
+    // it reaches the transport while the caption is still frozen, and the
+    // producer is never the one waiting.
+    liveai::subtitles::SubtitleSettings settings;
+    settings.style.fontSizePx = 77;
+    dispatch.applySubtitleSettings(settings);
+
+    CHECK(fake->appliedCount == 1);
+    CHECK(fake->appliedStyle.style.fontSizePx == 77);
+
+    // And the caption queue keeps working after the release, untouched by it.
+    fake->releasePublish();
+    REQUIRE(waitFor([&] { return dispatch.publishedFrames() == 1; }));
+}
+
+TEST_CASE("NdiDispatch: the video counters and sentences forward to the wrapped transport",
+          "[ndi][dispatch][video]")
+{
+    auto gated = std::make_unique<GatedNdi>();
+    NdiDispatch dispatch(std::move(gated), 8);
+
+    // The fake answers: video 7, render errors 3, receivers 2, runtime, failure.
+    CHECK(dispatch.videoFramesSent() == 7);
+    CHECK(dispatch.renderErrors() == 3);
+    CHECK(dispatch.receivers() == 2);
+    CHECK(dispatch.runtimeDescription() == "fake runtime 9.9");
+    CHECK(dispatch.lastFailure() == "fake failure sentence");
+
+    // Null and metadata-style transports keep the honest defaults instead.
+    liveai::ndi::NullNdiOutput nullOut;
+    CHECK(nullOut.videoFramesSent() == 0);
+    CHECK(nullOut.renderErrors() == 0);
+    CHECK(nullOut.receivers() == -1);
+    CHECK(nullOut.lastFailure().empty());
 }

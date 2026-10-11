@@ -10,6 +10,12 @@
 //   recv <namePart> <timeoutMs>           subscribe (metadata-only bandwidth)
 //                                         and print every metadata frame received
 //   send <name> <seconds>                 publish our TTML captions at 2 Hz
+//   video <name> <seconds> [w x h]        publish BURNED-IN SUBTITLE VIDEO
+//                                         (BGRA, straight alpha, transparent
+//                                         background) at the given size - the
+//                                         OBS-side venue check tool (the NDI
+//                                         receiver checkpoint family: docs/ndi-obs.md,
+//                                         docs/rig-checklist.md section 11)
 //   selfcheck [timeoutMs]                 send + find + recv inside one process:
 //                                         a full NDI round-trip on this machine,
 //                                         printing the XML the SDK returns
@@ -35,6 +41,7 @@
 
 #include "NDI/NdiTimedText.h"
 #include "NDI/Real/NdiRuntime.h"
+#include "Subtitles/SubtitleRenderer.h"
 
 using namespace liveai;
 using ndi::real::NdiRuntime;
@@ -204,6 +211,102 @@ uint32_t receiveMetadata(const NDIlib_source_t& source, uint32_t timeoutMs, uint
 
 // Sending --------------------------------------------------------------------
 
+// Sending --------------------------------------------------------------------
+
+/// Burned-in subtitle VIDEO publishing: the point is a human looking at a real
+/// receiver (OBS) while this runs, so it exercises the product's renderer and
+/// the exact wire conventions (BGRA, straight alpha, transparent background,
+/// whole transparent frames between captions). It counts frames and connections;
+/// it never claims what the receiver displayed - that is what the eyes are for.
+int sendVideo(NDIlib_send_instance_t sender, uint32_t seconds, int width, int height)
+{
+    const NDIlib_v6& api = requireApi();
+
+    liveai::subtitles::SubtitleSettings settings;
+    settings.video.width = width;
+    settings.video.height = height;
+    settings.video.fps = 25;
+
+    liveai::subtitles::SubtitleRenderer renderer;
+    renderer.applySettings(settings);
+
+    const std::string captions[] = {
+        "LingoFlow video probe - \xd0\xbf\xd1\x80\xd0\xbe\xd0\xb2\xd0\xb5\xd1\x80\xd0\xba\xd0\xb0",
+        "line two: прозрачность и обводка",
+        "",   // an empty caption on purpose: the receiver must CLEAR
+    };
+
+    std::printf("video: publishing %dx%d BGRA at 25 fps for %u s (caption changes every 2 s)\n",
+                width, height, seconds);
+
+    uint64_t framesSent = 0;
+    uint32_t captionIndex = 0;
+    std::string renderError;
+    std::string paint;
+    std::string familyUsed;
+    const auto start = std::chrono::steady_clock::now();
+    auto nextFrame = start;
+    auto nextCaption = start;
+
+    while (true)
+    {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - start >= std::chrono::seconds(seconds))
+            break;
+
+        if (now >= nextCaption)
+        {
+            paint = captions[captionIndex % 3];
+            ++captionIndex;
+            nextCaption = now + std::chrono::seconds(2);
+            std::printf("video: caption %s\n",
+                        paint.empty() ? "(clear - expect nothing)" : ("\"" + paint + "\"").c_str());
+        }
+
+        if (now < nextFrame)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+        nextFrame += std::chrono::microseconds(40'000);   // 25 fps, no burst
+
+        liveai::subtitles::RenderedSubtitleFrame frame;
+        if (!renderer.render(paint, frame, renderError))
+        {
+            std::printf("video: render refused: %s\n", renderError.c_str());
+            return 2;
+        }
+        familyUsed = frame.familyUsed;
+
+        NDIlib_video_frame_v2_t vf {};
+        vf.xres = frame.width;
+        vf.yres = frame.height;
+        vf.FourCC = NDIlib_FourCC_video_type_BGRA;
+        vf.frame_rate_N = 25;
+        vf.frame_rate_D = 1;
+        vf.picture_aspect_ratio = 0.0f;
+        vf.frame_format_type = NDIlib_frame_format_type_progressive;
+        vf.timecode = NDIlib_send_timecode_synthesize;
+        vf.p_data = frame.bgra.data();
+        vf.line_stride_in_bytes = frame.width * 4;
+
+        api.send_send_video_async_v2(sender, &vf);
+        ++framesSent;
+        if (framesSent == 1)   // the first frame is the fact that mattered; the venue log keeps it
+            std::printf("video: first frame submitted (%dx%d BGRA, family '%s')\n",
+                        frame.width, frame.height, frame.familyUsed.c_str());
+
+        if (framesSent % 50 == 0)   // once per second, and never a blocking poll
+            std::printf("video: %llu frames, %d connection(s)\n",
+                        static_cast<unsigned long long>(framesSent),
+                        api.send_get_no_connections(sender, 0));
+    }
+
+    std::printf("video: %llu frames published (font family '%s'); whether the receiver DISPLAYS it is for human eyes\n",
+                static_cast<unsigned long long>(framesSent), familyUsed.c_str());
+    return 0;
+}
+
 NDIlib_send_instance_t createSender(const std::string& name)
 {
     const NDIlib_v6& api = requireApi();
@@ -332,6 +435,7 @@ int main(int argc, char* argv[])
                     "  lingoflow_ndi_probe list [timeoutMs]\n"
                     "  lingoflow_ndi_probe recv <namePart> <timeoutMs>\n"
                     "  lingoflow_ndi_probe send <name> <seconds>\n"
+                    "  lingoflow_ndi_probe video <name> <seconds> [width height]\n"
                     "  lingoflow_ndi_probe selfcheck [timeoutMs]\n");
         return 2;
     }
@@ -391,6 +495,25 @@ int main(int argc, char* argv[])
 
         std::printf("send: %u captions to '%s'\n", sent, name.c_str());
         return 0;
+    }
+
+    if (mode == "video")
+    {
+        const std::string name = argc > 2 ? argv[2] : "LingoFlow Video";
+        const uint32_t seconds = static_cast<uint32_t>(parseNumber(argc > 3 ? argv[3] : nullptr, 20));
+        const int width = static_cast<int>(parseNumber(argc > 4 ? argv[4] : nullptr, 1920));
+        const int height = static_cast<int>(parseNumber(argc > 5 ? argv[5] : nullptr, 1080));
+
+        if (width <= 0 || height <= 0 || width > 4096 || height > 4096)
+        {
+            std::printf("video: size %dx%d out of bounds\n", width, height);
+            return 2;
+        }
+
+        NDIlib_send_instance_t sender = createSender(name);
+        const int result = sendVideo(sender, seconds, width & ~1, height);   // even width: the NDI frame rule
+        requireApi().send_destroy(sender);
+        return result;
     }
 
     if (mode == "selfcheck")

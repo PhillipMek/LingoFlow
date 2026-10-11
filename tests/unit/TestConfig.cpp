@@ -38,6 +38,27 @@ AppConfig makeConfig()
     cfg.translation.expirySafetyMarginSeconds = 420;
     cfg.ndi.enabled = true;
     cfg.ndi.streamName = "LingoFlow EN->RU";
+    cfg.ndi.subtitles.mode = subtitles::OutputMode::both;
+    cfg.ndi.subtitles.video.width = 1280;
+    cfg.ndi.subtitles.video.height = 720;
+    cfg.ndi.subtitles.video.fps = 30;
+    cfg.ndi.subtitles.style.fontFamily = "Segoe UI";
+    cfg.ndi.subtitles.style.fontSizePx = 60;
+    cfg.ndi.subtitles.style.textColorRgb = 0x12AB34;
+    cfg.ndi.subtitles.style.outlineColorRgb = 0x56CD78;
+    cfg.ndi.subtitles.style.outlineWidthPx = 3;
+    cfg.ndi.subtitles.style.shadowEnabled = true;
+    cfg.ndi.subtitles.style.shadowOffsetPx = 4;
+    cfg.ndi.subtitles.style.shadowOpacityPercent = 60;
+    cfg.ndi.subtitles.style.horizontalAlign = subtitles::HorizontalAlign::right;
+    cfg.ndi.subtitles.style.verticalAnchor = subtitles::VerticalAnchor::top;
+    cfg.ndi.subtitles.style.edgeMarginPercent = 12;
+    cfg.ndi.subtitles.style.blockWidthPercent = 70;
+    cfg.ndi.subtitles.style.maxLines = 3;
+    cfg.ndi.subtitles.style.lineSpacingPercent = 40;
+    cfg.ndi.subtitles.style.backgroundEnabled = true;
+    cfg.ndi.subtitles.style.backgroundOpacityPercent = 40;
+    cfg.ndi.subtitles.style.backgroundPaddingPx = 8;
     cfg.diagnostics.logLevel = "warning";
     cfg.diagnostics.writeLogFile = false;
     return cfg;
@@ -87,6 +108,123 @@ TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[confi
     CHECK(cfg.diagnostics.logLevel == "info");
     CHECK(cfg.diagnostics.writeLogFile);
     CHECK(cfg.schemaVersion == kConfigSchemaVersion);
+
+    // Subtitle video defaults (the task's numbers, persisted as the schema's):
+    // OBS-ready video mode, 1080p at 25 fps, the reference look.
+    CHECK(cfg.ndi.subtitles.mode == subtitles::OutputMode::video);
+    CHECK(cfg.ndi.subtitles.video.width == 1920);
+    CHECK(cfg.ndi.subtitles.video.height == 1080);
+    CHECK(cfg.ndi.subtitles.video.fps == 25);
+    CHECK(cfg.ndi.subtitles.style.fontFamily == "Segoe UI Semibold");
+    CHECK(cfg.ndi.subtitles.style.fontSizePx == 48);
+    CHECK(cfg.ndi.subtitles.style.textColorRgb == 0xFFFFFF);
+    CHECK(cfg.ndi.subtitles.style.outlineColorRgb == 0x000000);
+    CHECK(cfg.ndi.subtitles.style.outlineWidthPx == 2);
+    CHECK_FALSE(cfg.ndi.subtitles.style.shadowEnabled);
+    CHECK(cfg.ndi.subtitles.style.horizontalAlign == subtitles::HorizontalAlign::center);
+    CHECK(cfg.ndi.subtitles.style.verticalAnchor == subtitles::VerticalAnchor::bottom);
+    CHECK(cfg.ndi.subtitles.style.edgeMarginPercent == 8);
+    CHECK(cfg.ndi.subtitles.style.blockWidthPercent == 85);
+    CHECK(cfg.ndi.subtitles.style.maxLines == 2);
+    CHECK(cfg.ndi.subtitles.style.lineSpacingPercent == 25);
+    CHECK_FALSE(cfg.ndi.subtitles.style.backgroundEnabled);
+}
+
+TEST_CASE("ConfigSchema: a v1 settings file grows the v2 defaults, not problems",
+          "[config][schema][migration]")
+{
+    // The delivered ndi section is exactly two keys; loading such a file with
+    // this build must keep what it says (enabled/streamName) and let every
+    // subtitle-video field take its schema default - the no-fake-success rule
+    // of every earlier schema section, repeated honestly for v2.
+    const std::string v1Text = R"({
+        "schemaVersion": 1,
+        "ndi": { "enabled": true, "streamName": "Venue A" }
+    })";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(v1Text, restored, problems, error));
+
+    CHECK(restored.ndi.enabled);
+    CHECK(restored.ndi.streamName == "Venue A");
+    CHECK(restored.ndi.subtitles == config::defaults().ndi.subtitles);
+
+    const auto fresh = config::defaults();
+    CHECK(restored.audio.sampleRate == fresh.audio.sampleRate);   // every other section defaults too
+}
+
+TEST_CASE("ConfigSchema: subtitle video values are validated and repaired field by field",
+          "[config][schema][video]")
+{
+    // An odd NDI width is not a taste rule but a documented constraint (the
+    // frame-type docs require widths divisible by two); every wrong field is
+    // reported and restored, while the GOOD sibling values survive - the
+    // repair granularity the audio section already promises.
+    const std::string bad = R"({
+        "schemaVersion": 2,
+        "ndi": {
+            "enabled": true,
+            "streamName": "Venue A",
+            "mode": "telepathy",
+            "videoWidth": 1919,
+            "videoFps": 240,
+            "textColor": "#12G45Z",
+            "maxLines": 9,
+            "edgeMarginPercent": 8,
+            "fontFamily": ""
+        }
+    })";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(bad, restored, problems, error));
+
+    const auto fields = [&problems](std::string_view field)
+    {
+        return std::any_of(problems.begin(), problems.end(),
+                           [field](const ConfigProblem& p) { return p.field == field; });
+    };
+
+    CHECK(fields("ndi.mode"));
+    CHECK(fields("ndi.videoWidth"));
+    CHECK(fields("ndi.videoFps"));
+    CHECK(fields("ndi.textColor"));
+    CHECK(fields("ndi.maxLines"));
+    CHECK(fields("ndi.fontFamily"));
+
+    const auto& fresh = config::defaults();
+    CHECK(restored.ndi.subtitles.mode == fresh.ndi.subtitles.mode);
+    CHECK(restored.ndi.subtitles.video.width == fresh.ndi.subtitles.video.width);
+    CHECK(restored.ndi.subtitles.video.fps == fresh.ndi.subtitles.video.fps);
+    CHECK(restored.ndi.subtitles.style.textColorRgb == fresh.ndi.subtitles.style.textColorRgb);
+    CHECK(restored.ndi.subtitles.style.maxLines == fresh.ndi.subtitles.style.maxLines);
+    CHECK(restored.ndi.subtitles.style.fontFamily == fresh.ndi.subtitles.style.fontFamily);
+
+    // And the fields that were valid are untouched by the repair.
+    CHECK(restored.ndi.streamName == "Venue A");
+    CHECK(restored.ndi.subtitles.style.edgeMarginPercent == 8);
+}
+
+TEST_CASE("ConfigSchema: colours travel as canonical #RRGGBB", "[config][schema][video]")
+{
+    AppConfig cfg = config::defaults();
+    cfg.ndi.subtitles.style.textColorRgb = 0x0A141E;
+    cfg.ndi.subtitles.style.outlineColorRgb = 0xF0E0D0;
+
+    const std::string text = config::toJsonText(cfg);
+    CHECK(text.find("\"#0A141E\"") != std::string::npos);
+    CHECK(text.find("\"#F0E0D0\"") != std::string::npos);
+
+    // Case-insensitive on the way in, canonical on the way back out.
+    const std::string lower = R"({"schemaVersion": 2, "ndi": { "textColor": "#0a141e" }})";
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(lower, restored, problems, error));
+    CHECK(restored.ndi.subtitles.style.textColorRgb == 0x0A141E);
 }
 
 TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schema][roundtrip]")
@@ -122,6 +260,7 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.translation.expirySafetyMarginSeconds == original.translation.expirySafetyMarginSeconds);
     CHECK(restored.ndi.enabled == original.ndi.enabled);
     CHECK(restored.ndi.streamName == original.ndi.streamName);
+    CHECK(restored.ndi.subtitles == original.ndi.subtitles);   // the whole v2 block, field for field
     CHECK(restored.diagnostics.logLevel == original.diagnostics.logLevel);
     CHECK(restored.diagnostics.writeLogFile == original.diagnostics.writeLogFile);
 }
@@ -488,7 +627,7 @@ TEST_CASE("ConfigSchema: validation covers the documented bounds", "[config][sch
     CHECK(countProblems(config::defaults()) == 0);
 
     auto cfg = config::defaults();
-    cfg.schemaVersion = 2;
+    cfg.schemaVersion = kConfigSchemaVersion + 1;   // from the future: rejected as before
     CHECK(countProblems(cfg) == 1);
     cfg.schemaVersion = 0;
     CHECK(countProblems(cfg) == 1);
