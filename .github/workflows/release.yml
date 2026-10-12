@@ -1,0 +1,718 @@
+name: Release
+
+# LingoFlow manual release pipeline (docs/releasing.md).
+#
+# How a release happens (there is deliberately NO automatic trigger):
+#   1. CI (.github/workflows/ci.yml) is green on main/master for commit X;
+#   2. a human opens that CI run, copies its run ID from the URL;
+#   3. Actions -> Release -> Run workflow -> branch main/master,
+#      ci_run_id = <ID>, bump_type = patch|minor|major.
+#   (equivalent CLI: gh workflow run release.yml -M master \
+#       -f ci_run_id=<ID> -f bump_type=patch)
+#
+# Trust model:
+#   - the only operator input is a run ID + a bump type; both are validated
+#     against the GitHub API, never trusted from the dispatch payload;
+#   - every claim about the source run (repository, workflow file, workflow
+#     name, completion, success, event, branch, commit) is read back from
+#     GET /repos/{owner}/{repo}/actions/runs/{id};
+#   - the source code is built exclusively from that run's head_sha - a fresh
+#     Release build of the proven commit, never from a CI artifact of another
+#     run, and never from whatever the branch HEAD happens to be now;
+#   - tagging + release creation run only after the build, the full test
+#     suite, the installer and the automated installer verification passed;
+#   - the version tag is created atomically (git refs API). Existing tags and
+#     published releases are never moved or overwritten; a repeat publish is
+#     refused. Two concurrent dispatches queue on the workflow-level
+#     concurrency group and the atomic ref creation resolves any residual race.
+#
+# Security notes:
+#   - this workflow contains no pull-request or fork execution path, no
+#     workflow-run auto-trigger (that pattern runs untrusted code with
+#     elevated rights), and references no repository secrets at all;
+#   - job permissions are the minimum each job needs (only publish gets
+#     contents write, for the tag ref and the GitHub Release); the default
+#     GITHUB_TOKEN is sufficient - personal access tokens are neither
+#     required nor accepted;
+#   - the version tag is created LAST (after everything else passed): a
+#     failed run therefore leaves no orphan tag except on a publish-step
+#     crash, and docs/releasing.md documents the safe recovery.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ci_run_id:
+        description: 'ID of the successful CI run to release (URL of that run ends with /actions/runs/<ID>)'
+        required: true
+        type: string
+      bump_type:
+        description: 'SemVer increase over the latest vMAJOR.MINOR.PATCH tag (or the CMakeLists seed version while no tags exist)'
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+run-name: "${{ inputs.bump_type }} release from CI run ${{ inputs.ci_run_id }}"
+
+# Serialize the whole release pipeline: a second dispatch queues instead of
+# racing the first one over the same tag. The atomic ref creation in the
+# publish job is the actual safety net; this group keeps the common case calm.
+concurrency:
+  group: release-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  validate:
+    name: Validate the source CI run and compute the next version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.inputs.outputs.run_id }}
+      bump_type: ${{ steps.inputs.outputs.bump }}
+      release_sha: ${{ steps.provenance.outputs.release_sha }}
+      ci_run_url: ${{ steps.provenance.outputs.ci_run_url }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      previous_tag: ${{ steps.version.outputs.previous_tag }}
+      version_base_source: ${{ steps.version.outputs.base_source }}
+      claim_preview: ${{ steps.precheck.outputs.claim }}
+    steps:
+      - name: Enforce the release branch policy on the dispatch itself
+        shell: pwsh
+        env:
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
+        run: |
+          # The Release pipeline logic itself must come from a trunk ref, not
+          # from a feature branch that someone dispatched while holding a
+          # modified copy of this file. The SOURCE CODE is still built only
+          # from the proven CI-run SHA; this gate protects the tooling.
+          if ($env:DISPATCH_REF -notin @('refs/heads/main', 'refs/heads/master')) {
+            Write-Host "::error::Release must be dispatched on main or master (got '$env:DISPATCH_REF_NAME'); see docs/releasing.md"
+            exit 1
+          }
+          Write-Host "dispatch ref is a release branch"
+
+      - name: Checkout the release tooling (trunk copy of this workflow's branch)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4, pinned 2026-10-07; bumped by dependabot
+        with:
+          persist-credentials: 'false'
+
+      - name: Validate the dispatch inputs (strict allowlists)
+        id: inputs
+        shell: pwsh
+        env:
+          RUN_ID_INPUT: ${{ inputs.ci_run_id }}
+          BUMP_INPUT: ${{ inputs.bump_type }}
+        run: |
+          . ./scripts/release/release-lib.ps1
+          # workflow_dispatch inputs are NOT enforced by the server for API
+          # callers, so both values pass the same strict rules here.
+          if (-not (Test-LingoFlowRunId $env:RUN_ID_INPUT)) {
+            throw "ci_run_id must be a positive integer (the number at the end of the CI run URL), got '$($env:RUN_ID_INPUT)'"
+          }
+          if (-not (Test-LingoFlowBumpType $env:BUMP_INPUT)) {
+            throw "bump_type must be exactly one of patch|minor|major, got '$($env:BUMP_INPUT)'"
+          }
+          "run_id=$($env:RUN_ID_INPUT)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "bump=$($env:BUMP_INPUT)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "inputs OK: run id $($env:RUN_ID_INPUT), bump $($env:BUMP_INPUT)"
+
+      - name: Read the source CI run from the API and check its provenance
+        id: provenance
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.inputs.outputs.run_id }}
+        run: |
+          . ./scripts/release/release-lib.ps1
+          # Fetch by id - the API is the source of truth about the run, not
+          # anything the operator typed.
+          $raw = & gh api "repos/$env:GH_REPO/actions/runs/$($env:RUN_ID)"
+          if ($LASTEXITCODE -ne 0) {
+            throw "CI run id $($env:RUN_ID) was not found in $env:GH_REPO (or the API refused it) - a release needs the id of a completed CI run of THIS repository"
+          }
+          $run = ($raw -join "`n") | ConvertFrom-Json
+          $errors = Get-LingoFlowCiRunProvenanceErrors -Run $run `
+            -ExpectedRepositoryFullName $env:GH_REPO `
+            -ExpectedWorkflowPath '.github/workflows/ci.yml' `
+            -ExpectedWorkflowName 'CI' `
+            -ExpectedRunId $env:RUN_ID `
+            -AllowedEvents @('push', 'workflow_dispatch') `
+            -AllowedHeadBranches @('main', 'master')
+          if (@($errors).Count -gt 0) {
+            foreach ($e in $errors) { Write-Host "::error::$e" }
+            throw "the source run does not qualify for a release ($(@($errors).Count) problems above); nothing was tagged or built"
+          }
+          Write-Host "provenance OK: run '$($run.name)' ($($run.display_title)) completed=$($run.conclusion) on $($run.head_branch) at $($run.head_sha)"
+          "release_sha=$($run.head_sha)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "ci_run_url=$($run.html_url)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Lock the tooling tree to the proven SHA (its scripts and seed decide)
+        shell: pwsh
+        env:
+          RELEASE_SHA: ${{ steps.provenance.outputs.release_sha }}
+        run: |
+          # From here on, everything this job runs (release-lib, the logic
+          # suite, CMakeLists seed) comes from the proven commit - never from
+          # a newer branch tip. Shallow fetch keeps the vendored-JUCE repo
+          # from being cloned twice.
+          git fetch --no-tags --depth 1 origin $env:RELEASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "cannot fetch the proven SHA $env:RELEASE_SHA from origin" }
+          git checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'cannot detach at the proven SHA' }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:RELEASE_SHA) {
+            throw "tooling tree HEAD $head does not equal the proven SHA $env:RELEASE_SHA"
+          }
+          Write-Host "tested commit locked: $head"
+
+      - name: Compute the next SemVer version
+        id: version
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          BUMP: ${{ steps.inputs.outputs.bump }}
+        run: |
+          . ./scripts/release/release-lib.ps1
+          $tags = & gh api --paginate "repos/$env:GH_REPO/tags" --jq '.[].name'
+          if ($LASTEXITCODE -ne 0) { throw 'could not read the repository tags - refusing to guess a version' }
+          $latest = Get-LingoFlowLatestReleaseTag -TagNames @($tags | Where-Object { $_ })
+          foreach ($t in @($latest.Prerelease)) { Write-Host "::notice::ignoring non-stable tag $t (release policy: stable vMAJOR.MINOR.PATCH only, docs/releasing.md)" }
+          foreach ($t in @($latest.Ignored)) { Write-Host "::notice::ignoring non-release tag $t" }
+          if ($latest.Version) {
+            $base = $latest.Version
+            $previousTag = $latest.Tag
+            $baseSource = 'tag'
+          } else {
+            $base = Get-LingoFlowRepoSeedVersion (Get-Content CMakeLists.txt -Raw)
+            $previousTag = ''
+            $baseSource = 'cmake-seed'
+            Write-Host "::notice::no release tags exist - using the documented seed version $base from CMakeLists.txt (LINGOFLOW_VERSION_DEFAULT)"
+          }
+          $next = Get-LingoFlowNextVersion $base $env:BUMP
+          Write-Host "version: $base ($baseSource) + $($env:BUMP) -> $next"
+          "version=$next" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=v$next" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "previous_tag=$previousTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "base_source=$baseSource" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Re-run the release logic suite from the proven commit
+        shell: pwsh
+        run: |
+          # The tree is already locked to the proven SHA (step above), so this
+          # runs exactly the code the release would ship - belt and braces on
+          # top of the source CI run's own release-logic job.
+          $ErrorActionPreference = 'Stop'
+          $t = 'scripts/release/tests/release-process.Tests.ps1'
+          if (Test-Path $t) {
+            & $t
+            if ($LASTEXITCODE -ne 0) { throw "the release logic suite of the proven commit is red ($LASTEXITCODE) - this run would not be publishable" }
+            Write-Host 'release logic suite (proven commit): PASS'
+          } else {
+            Write-Host '::notice::the proven commit predates the release-logic suite; skipping the re-run (all later commits carry it)'
+          }
+
+      - name: Precheck the tag claim (informational; publish re-checks atomically)
+        id: precheck
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_SHA: ${{ steps.provenance.outputs.release_sha }}
+        run: |
+          . ./scripts/release/release-lib.ps1
+          $tagTarget = ''
+          $refJson = & gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null
+          $tagExists = ($LASTEXITCODE -eq 0)
+          if ($tagExists) {
+            $refObj = ($refJson -join "`n" | ConvertFrom-Json).object
+            $tagTarget = $refObj.sha
+            if ($refObj.type -eq 'tag') {
+              # annotated tag - resolve the commit it points at
+              $objJson = & gh api "repos/$env:GH_REPO/git/tag/$tagTarget" 2>$null
+              if ($LASTEXITCODE -eq 0) { $tagTarget = ($objJson -join "`n" | ConvertFrom-Json).object.sha } else { $tagTarget = '' }
+            }
+          }
+          $relJson = & gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2>$null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $claim = Resolve-LingoFlowTagClaim -TagRefExists $tagExists -TagTargetSha $tagTarget -ReleaseExists $releaseExists -ExpectedSha $env:RELEASE_SHA
+          "claim=$($claim.Action)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if ($claim.Action -eq 'Abort') {
+            Write-Host "::error::$($claim.Reason)"
+            throw "pre-publish check refused: $($claim.Reason)"
+          }
+          if ($claim.Action -eq 'Resume') {
+            Write-Host "::warning::$($claim.Reason)"
+            Write-Host "This run completes an earlier failed publication of the SAME tag on the SAME commit."
+          } else {
+            Write-Host "$($env:RELEASE_TAG) is free; it will be created on $($env:RELEASE_SHA) after everything builds"
+          }
+
+      - name: Summary of the validated release plan
+        shell: pwsh
+        env:
+          RUN_URL: ${{ steps.provenance.outputs.ci_run_url }}
+          RELEASE_SHA: ${{ steps.provenance.outputs.release_sha }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          BUMP: ${{ steps.inputs.outputs.bump }}
+          BASE_SOURCE: ${{ steps.version.outputs.base_source }}
+          CLAIM: ${{ steps.precheck.outputs.claim }}
+          RUN_ID: ${{ steps.inputs.outputs.run_id }}
+        run: |
+          # NOTE: here-string content stays indented inside the run: block;
+          # the closing terminator is indented too, which PowerShell 7 allows
+          # (this step runs on shell: pwsh).
+          $md = @"
+          ## Release plan (validated)
+
+          | item | value |
+          |---|---|
+          | source CI run | [$env:RUN_ID]($env:RUN_URL) - completed, success, on a release branch |
+          | commit to release | $env:RELEASE_SHA |
+          | version base source | $env:BASE_SOURCE |
+          | bump | $env:BUMP |
+          | next version | $env:RELEASE_VERSION (tag $env:RELEASE_TAG) |
+          | tag claim preview | $env:CLAIM |
+
+          The build + publish jobs now rebuild this exact commit in Release,
+          run the full test suite, create and verify the installer, and only
+          then create the tag and the GitHub Release.
+          "@
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+  # =========================================================================
+  build:
+    name: Windows x64 Release build + installer (from the proven commit)
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+      # Same FetchContent download cache as CI (pinned-tag sources only;
+      # build products are never cached - the release compiles everything).
+      FETCH_BASE: ${{ github.workspace }}/.fc-cache
+    outputs:
+      installer_name: ${{ steps.installer.outputs.name }}
+      installer_sha256: ${{ steps.installer.outputs.sha256 }}
+    steps:
+      - name: Checkout (workflow files)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: 'false'
+
+      - name: Lock the working tree to the proven SHA
+        shell: pwsh
+        run: |
+          # Never release "whatever master is now" - the tree must be exactly
+          # the commit the validated CI run tested.
+          git fetch --no-tags --depth 1 origin $env:RELEASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw "cannot fetch the proven SHA $env:RELEASE_SHA from origin" }
+          git checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'cannot detach at the proven SHA' }
+          git clean -ffd -e .fc-cache
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:RELEASE_SHA) {
+            throw "locked tree HEAD $head != proven SHA $env:RELEASE_SHA - aborting before any build"
+          }
+          Write-Host "tree locked to $head"
+
+      - name: Cache fetched dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v4, pinned 2026-10-07; bumped by dependabot
+        with:
+          path: .fc-cache
+          key: fc-v1-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'tests/CMakeLists.txt') }}
+          restore-keys: |
+            fc-v1-${{ runner.os }}-
+
+      - name: Build Release, run the full test suite and the smoke checks
+        shell: pwsh
+        run: |
+          # Explicit Stop (the runner also injects it): a script-level error
+          # must red-flag this step even if it never reached an exit code.
+          $ErrorActionPreference = 'Stop'
+          & scripts/release/run-release-build.ps1 -Version $env:RELEASE_VERSION -BuildDir build-release -FetchBase $env:FETCH_BASE
+          if ($LASTEXITCODE -ne 0) { throw "Release build leg failed ($LASTEXITCODE); nothing is tagged or published" }
+
+      - name: Stage the portable release package (licence chain + dependency + version gates)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & packaging/release-package.ps1 -BuildDir build-release -OutDir out/release -Version $env:RELEASE_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "release packaging failed ($LASTEXITCODE)" }
+
+      - name: Ensure the Inno Setup compiler (pre-installed; hash-pinned fallback otherwise)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & scripts/release/ensure-inno-setup.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup not available/verified ($LASTEXITCODE) - no installer can be built" }
+
+      - name: Compile the setup executable
+        id: installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./scripts/release/release-lib.ps1
+          $packageDir = Join-Path 'out/release' ('LingoFlow-' + $env:RELEASE_VERSION)
+          $lines = & packaging/build-installer.ps1 -PackageDir $packageDir -Version $env:RELEASE_VERSION -OutDir out/installer
+          if ($LASTEXITCODE -ne 0) { throw "build-installer failed ($LASTEXITCODE)" }
+          $lines | ForEach-Object { Write-Host $_ }
+          $sha = @($lines | Where-Object { $_ -like 'SHA256:*' }) | Select-Object -First 1
+          $exePath = @($lines | Where-Object { $_ -like 'INSTALLER:*' }) | Select-Object -First 1
+          if (-not $sha -or -not $exePath) { throw 'build-installer did not report its outputs' }
+          $sha = ($sha -replace '^SHA256:\s*', '').Trim().ToLowerInvariant()
+          $exeName = [IO.Path]::GetFileName(($exePath -replace '^INSTALLER:\s*', '').Trim())
+          $expected = Get-LingoFlowInstallerName $env:RELEASE_VERSION
+          if ($exeName -ne $expected) { throw "build-installer produced '$exeName', expected '$expected'" }
+          if (-not (Test-Sha256Hex $sha)) { throw "build-installer reported a malformed sha256: '$sha'" }
+          "name=$exeName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Verify the installer (silent install, run, uninstall; user state preserved)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & packaging/verify-installer.ps1 -Version $env:RELEASE_VERSION -InstallerDir out/installer
+          if ($LASTEXITCODE -ne 0) { throw "installer verification failed ($LASTEXITCODE) - the release is NOT published" }
+
+      - name: Upload the verified installer (+checksum) for publication
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4, pinned 2026-10-07; bumped by dependabot
+        with:
+          name: release-installer
+          path: |
+            out/installer/LingoFlow-Setup-*.exe
+            out/installer/LingoFlow-Setup-*.exe.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build/verify diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v4
+        with:
+          name: release-diagnostics
+          path: |
+            release-logs/
+            out/verify-work/
+            out/installer/iscc-compile.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Build summary
+        if: success()
+        shell: pwsh
+        run: |
+          $exe = Join-Path 'out/installer' $env:INSTALLER_NAME
+          $fv = (Get-Item 'build-release/src/LingoFlow_artefacts/Release/LingoFlow.exe').VersionInfo.FileVersion
+          $mb = '{0:N1} MB' -f ((Get-Item $exe).Length / 1MB)
+          $md = @"
+          ## Release build (Windows x64)
+
+          | item | value |
+          |---|---|
+          | proven commit | $env:RELEASE_SHA |
+          | version | $env:RELEASE_VERSION |
+          | app exe FileVersion | $fv |
+          | installer | $env:INSTALLER_NAME |
+          | installer size | $mb |
+          | installer sha256 | ``$env:INSTALLER_SHA256`` |
+          | installer checks | silent install + files + versions + smoke + uninstall + user-state preserved: PASS |
+
+          Publication (tag + GitHub Release) happens in the publish job only
+          if this job and the validate job are both green.
+          "@
+          $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+        env:
+          INSTALLER_NAME: ${{ steps.installer.outputs.name }}
+          INSTALLER_SHA256: ${{ steps.installer.outputs.sha256 }}
+
+  # =========================================================================
+  publish:
+    name: Create the tag and publish the GitHub Release
+    needs: [validate, build]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_SHA: ${{ needs.validate.outputs.release_sha }}
+      PREVIOUS_TAG: ${{ needs.validate.outputs.previous_tag }}
+      CI_RUN_URL: ${{ needs.validate.outputs.ci_run_url }}
+      CI_RUN_ID: ${{ needs.validate.outputs.run_id }}
+      INSTALLER_NAME: ${{ needs.build.outputs.installer_name }}
+      INSTALLER_SHA256: ${{ needs.build.outputs.installer_sha256 }}
+    steps:
+      - name: Checkout (workflow files)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: 'false'
+
+      - name: Use the release logic from the proven commit
+        shell: pwsh
+        run: |
+          git fetch --no-tags --depth 1 origin $env:RELEASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'cannot fetch the proven SHA' }
+          git checkout --quiet --detach FETCH_HEAD
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:RELEASE_SHA) { throw "tree HEAD $head != proven SHA $env:RELEASE_SHA" }
+
+      - name: Fetch the installer artifact produced by THIS run
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4, pinned 2026-10-12 to match ci.yml's upload-artifact v4
+        with:
+          name: release-installer
+          path: published/
+          run-id: ${{ github.run_id }}
+
+      - name: Prove the published bytes are the verified bytes
+        shell: pwsh
+        run: |
+          . ./scripts/release/release-lib.ps1
+          $expected = Get-LingoFlowInstallerName $env:RELEASE_VERSION
+          $sidecar = Get-LingoFlowChecksumName $expected
+          $root = (Resolve-Path published).Path
+          $files = @(Get-ChildItem $root -Recurse -File)
+          $names = @($files | ForEach-Object { $_.Name } | Sort-Object)
+          $want = @($expected, $sidecar) | Sort-Object
+          if (($names -join ',') -ne ($want -join ',')) {
+            throw "unexpected artifact contents: $($names -join ', ') (expected exactly $($want -join ', '))"
+          }
+          # The publish JS reads published/<name> directly: a nested layout
+          # would silently point at nothing useful, so demand a flat artifact.
+          $nested = @($files | Where-Object { $_.DirectoryName -ne $root })
+          if ($nested.Count -gt 0) {
+            throw "artifact files must sit directly in published/ (JS asset path is flat), found nested: $(($nested | ForEach-Object { $_.FullName }) -join ', ')"
+          }
+          $recomputed = (Get-FileHash ("published/" + $expected) -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($recomputed -ne $env:INSTALLER_SHA256) {
+            throw "the downloaded installer hashes to $recomputed, the verified build reported $($env:INSTALLER_SHA256) - refusing to publish a file that is not the one we tested"
+          }
+          $side = (Get-Content ("published/" + $sidecar) -Raw).Trim()
+          if ($side -ne "$recomputed  $expected") { throw "checksum sidecar content is not the sha256sum format for this installer: '$side'" }
+          Write-Host "asset provenance OK: $expected == the verified build, sha256 $recomputed"
+
+      - name: Re-check the tag claim immediately before touching refs
+        id: claim
+        shell: pwsh
+        run: |
+          . ./scripts/release/release-lib.ps1
+          $tagTarget = ''
+          $refJson = & gh api "repos/$env:GH_REPO/git/ref/tags/$env:RELEASE_TAG" 2>$null
+          $tagExists = ($LASTEXITCODE -eq 0)
+          if ($tagExists) {
+            $refObj = ($refJson -join "`n" | ConvertFrom-Json).object
+            $tagTarget = $refObj.sha
+            if ($refObj.type -eq 'tag') {
+              $objJson = & gh api "repos/$env:GH_REPO/git/tag/$tagTarget" 2>$null
+              if ($LASTEXITCODE -eq 0) { $tagTarget = ($objJson -join "`n" | ConvertFrom-Json).object.sha } else { $tagTarget = '' }
+            }
+          }
+          $relJson = & gh api "repos/$env:GH_REPO/releases/tags/$env:RELEASE_TAG" 2>$null
+          $releaseExists = ($LASTEXITCODE -eq 0)
+          $claim = Resolve-LingoFlowTagClaim -TagRefExists $tagExists -TagTargetSha $tagTarget -ReleaseExists $releaseExists -ExpectedSha $env:RELEASE_SHA
+          Write-Host "claim=$($claim.Action): $($claim.Reason)"
+          if ($claim.Action -eq 'Abort') {
+            Write-Host "::error::$($claim.Reason)"
+            throw "refusing to publish: $($claim.Reason)"
+          }
+          "action=$($claim.Action)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Create the version tag on the proven commit (atomic)
+        if: steps.claim.outputs.action == 'Create'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0, pinned 2026-10-12
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          SHA: ${{ needs.validate.outputs.release_sha }}
+        with:
+          script: |
+            const tag = process.env.TAG, sha = process.env.SHA;
+            if (!/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag) || !/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed('tag/sha shape failed re-validation in the publish job'); return;
+            }
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `refs/tags/${tag}`, sha,
+              });
+              core.info(`created ${tag} -> ${sha}`);
+            } catch (e) {
+              if (e.status === 422 || e.status === 409) {
+                core.setFailed(`another run claimed ${tag} in the meantime (${e.message}); NOTHING was moved or overwritten - see docs/releasing.md before retrying`);
+              } else { core.setFailed(`createRef failed: ${e.message}`); }
+            }
+
+      - name: Assemble the release notes (facts from the API only)
+        shell: pwsh
+        run: |
+          . ./scripts/release/release-lib.ps1
+          $commitLines = @()
+          if ($env:PREVIOUS_TAG) {
+            $cmp = & gh api "repos/$env:GH_REPO/compare/$env:PREVIOUS_TAG...$env:RELEASE_SHA" --jq '.commits[:100][] | (.sha[:7] + " - " + (.message | split("\n")[0]))' 2>$null
+            if ($LASTEXITCODE -eq 0) { $commitLines = @($cmp | Where-Object { $_ }) }
+            else { Write-Host '::warning::compare API failed - the release body will carry no change list rather than an invented one' }
+          }
+          $body = New-LingoFlowReleaseNotes -Version $env:RELEASE_VERSION -CommitSha $env:RELEASE_SHA `
+            -CiRunUrl $env:CI_RUN_URL -RepositoryFullName $env:GH_REPO `
+            -InstallerName $env:INSTALLER_NAME -InstallerSha256 $env:INSTALLER_SHA256 `
+            -PreviousTag $env:PREVIOUS_TAG -CommitLines $commitLines
+          New-Item -ItemType Directory -Force out | Out-Null
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'out/release-notes.md'), $body, (New-Object System.Text.UTF8Encoding($false)))
+          Write-Host "release notes staged (out/release-notes.md)"
+
+      - name: Publish the GitHub Release with the installer and checksum
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          SHA: ${{ needs.validate.outputs.release_sha }}
+          NOTES_FILE: ${{ github.workspace }}/out/release-notes.md
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const tag = process.env.TAG, sha = process.env.SHA;
+            if (!/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag) || !/^[0-9a-f]{40}$/.test(sha)) {
+              core.setFailed('tag/sha shape failed re-validation before publication'); return;
+            }
+            const installerName = process.env.INSTALLER_NAME;
+            if (!/^LingoFlow-Setup-[0-9]+\.[0-9]+\.[0-9]+-x64\.exe$/.test(installerName)) {
+              core.setFailed(`installer name failed validation: ${installerName}`); return;
+            }
+            const checksumName = `${installerName}.sha256`;
+            const exePath = path.join('published', installerName);
+            const sidePath = path.join('published', checksumName);
+            if (!fs.existsSync(exePath) || !fs.existsSync(sidePath)) {
+              core.setFailed('the verified installer or its checksum sidecar is missing from the artifact download'); return;
+            }
+            const { owner, repo } = context.repo;
+            let existing = null;
+            try { existing = await github.rest.repos.getReleaseByTag({ owner, repo, tag }); }
+            catch (e) { if (e.status !== 404) { core.setFailed(`release lookup failed: ${e.message}`); return; } }
+            if (existing) {
+              core.setFailed(`a GitHub Release already exists for ${tag}; publishing again is refused so an existing release is never overwritten (docs/releasing.md)`);
+              return;
+            }
+            const body = fs.readFileSync(process.env.NOTES_FILE, 'utf8');
+            const release = await github.rest.repos.createRelease({
+              owner, repo,
+              tag_name: tag,
+              name: `LingoFlow ${tag}`,
+              body,
+              target_commitish: sha,
+              draft: false,
+              prerelease: false,
+            });
+            core.info(`created release ${release.data.html_url}`);
+            // Record the release immediately: if asset upload below fails,
+            // the summary step can point at the EXISTING release instead of
+            // implying nothing happened (the workflow never edits or deletes
+            // a published release - docs/releasing.md section 10).
+            const tagUrl = `https://github.com/${owner}/${repo}/releases/tag/${tag}`;
+            fs.writeFileSync('publish-result.json', JSON.stringify({
+              release_url: release.data.html_url, tag_url: tagUrl, partial: true,
+            }));
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: release.data.id,
+              name: installerName, data: fs.readFileSync(exePath),
+            });
+            await github.rest.repos.uploadReleaseAsset({
+              owner, repo, release_id: release.data.id,
+              name: checksumName, data: fs.readFileSync(sidePath),
+            });
+            const check = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            const names = check.data.assets.map(a => a.name).sort().join(',');
+            const want = [installerName, checksumName].sort().join(',');
+            if (names !== want) {
+              core.setFailed(`the published release carries assets '${names}', expected '${want}' - investigate before retrying (the release exists now; see docs/releasing.md)`);
+              return;
+            }
+            const asset = check.data.assets.find(a => a.name === installerName);
+            fs.writeFileSync('publish-result.json', JSON.stringify({
+              release_url: check.data.html_url,
+              tag_url: tagUrl,
+              download_url: asset.browser_download_url,
+              asset_size: asset.size,
+              partial: false,
+            }));
+            core.info(`published: ${check.data.html_url}`);
+
+      - name: Summary (links to the release, tag and asset - or recovery guidance)
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path publish-result.json) {
+            $r = Get-Content publish-result.json -Raw | ConvertFrom-Json
+            $relUrl = $r.release_url
+            $tagUrl = $r.tag_url
+            if ($r.partial) {
+              $md = @"
+          ## WARNING: release created, completion unverified
+
+          GitHub Release: [$relUrl]($relUrl) (tag $env:RELEASE_TAG exists on $env:RELEASE_SHA).
+          The asset upload or its verification did not complete in this run.
+          The workflow will NOT retry against this release (published releases
+          are never edited). Attach the installer manually from this run's
+          Artifacts (byte-identical, checksum verified) or ship the next
+          patch - see docs/releasing.md section 10.
+          "@
+            }
+            else {
+              $dlUrl = $r.download_url
+              $mb = [math]::Round($r.asset_size / 1MB, 1)
+              $md = @"
+          ## LingoFlow $env:RELEASE_TAG is published
+
+          | | |
+          |---|---|
+          | GitHub Release | [$relUrl]($relUrl) |
+          | Tag | [$tagUrl]($tagUrl) -> commit $env:RELEASE_SHA |
+          | Installer | [$env:INSTALLER_NAME]($dlUrl) ($mb MB) |
+          | SHA-256 | ``$env:INSTALLER_SHA256`` |
+          | Source CI run | [$env:CI_RUN_ID]($env:CI_RUN_URL) |
+          "@
+            }
+            $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            if ($r.partial) { throw 'the release exists but its assets are unverified - see the warning above' }
+          }
+          else {
+            $tagPage = "https://github.com/$env:GH_REPO/tags"
+            $md = @"
+          ## Publication did not complete
+
+          This run did not produce a published GitHub Release. Recovery, in order:
+
+          1. Check whether tag $env:RELEASE_TAG exists now ($tagPage) and whether
+             a Release for it exists.
+          2. The workflow never moves or overwrites tags or releases, so the
+             state is safe to inspect: if the tag exists on commit
+             $env:RELEASE_SHA but has no release, re-dispatch the Release workflow
+             with the SAME ci_run_id and the SAME bump type - the claim check
+             will Resume the publication.
+          3. If the tag exists on a DIFFERENT commit, or a release already
+             exists: STOP; a human decides (docs/releasing.md, 'After a failure').
+          4. If no tag exists, the failure happened before any Git state
+             changed - fix the cause and re-dispatch normally.
+          "@
+            $md | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            throw "publish job failed - see the steps above; recovery notes are in the summary and docs/releasing.md"
+          }

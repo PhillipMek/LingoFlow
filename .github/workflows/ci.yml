@@ -14,6 +14,14 @@ name: CI
 #   receiver, long-run stability, clean-machine install. Those remain the
 #   manual production checkpoints (docs/rig-checklist.md, docs/release.md).
 #   Green CI does not mean the venue check happened.
+#
+# CI never publishes anything (permissions: contents read only). A green run
+# here is the precondition for a release: the manual "Release" workflow
+# (.github/workflows/release.yml, docs/releasing.md) takes THIS run's id,
+# re-validates it through the GitHub API, rebuilds the exact commit in
+# Release, builds + verifies the installer and only then tags and publishes.
+# The release-logic job below keeps the release decision logic itself under
+# test on every push.
 
 on:
   push:
@@ -239,3 +247,57 @@ jobs:
           (docs/CI.md, docs/release.md, docs/rig-checklist.md).
           "@
           $md | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+      # --------------------------------------------------------- release pointer
+      # Informational only - CI neither tags nor publishes. This block tells the
+      # operator exactly how to release THIS verified run (docs/releasing.md).
+      - name: Release pointer (trunk runs only)
+        if: success() && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        shell: pwsh
+        run: |
+          $md = @"
+
+          ---
+          **To release this verified run:** the pipeline is manual by design.
+          GitHub UI: Actions -> "Release" workflow -> Run workflow,
+          branch ``${{ github.ref_name }}``, ci_run_id ``${{ github.run_id }}``,
+          bump_type ``patch`` | ``minor`` | ``major``.
+
+          CLI equivalent:
+
+              gh workflow run release.yml -M ${{ github.ref_name }} -f ci_run_id=${{ github.run_id }} -f bump_type=patch
+
+          The Release workflow re-checks this run through the API (that it is
+          the CI workflow, completed, successful, on a release branch) and
+          builds exactly commit ``${{ github.sha }}`` before it tags anything.
+          Details and recovery: docs/releasing.md.
+          "@
+          $md | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+  # ===========================================================================
+  # Release process logic gate: the pure decision functions behind
+  # .github/workflows/release.yml (SemVer, provenance rules, tag-claim races,
+  # naming, version consistency) + static invariants of the release pipeline
+  # files. No hardware, no network, no build products - see
+  # scripts/release/tests/release-process.Tests.ps1.
+  # ===========================================================================
+  release-logic:
+    name: Release logic (semver, provenance, installer scripts)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4, pinned 2026-10-07; bumped by dependabot
+
+      # Both shells on purpose: the packaging scripts are documented to run on
+      # Windows PowerShell 5.1 (local developers) and the release workflow
+      # steps run on pwsh 7 (runners). The same suite must be green there.
+      - name: Release logic tests (Windows PowerShell 5.1)
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/tests/release-process.Tests.ps1
+
+      - name: Release logic tests (PowerShell 7)
+        shell: pwsh
+        run: ./scripts/release/tests/release-process.Tests.ps1

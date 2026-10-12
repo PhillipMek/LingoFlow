@@ -6,15 +6,41 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Design note - build the shippable release folder, and verify the one thing that
-# makes it shippable: the executable imports SYSTEM dlls only. If a developer
+# Design note - build the shippable release folder, and verify the two things that
+# make it shippable: (a) the executable imports SYSTEM dlls only - if a developer
 # dependency ever comes back (dynamic CRT, a linked import library, anything
-# that is not on a stock Windows), this script fails before the package exists.
+# that is not on a stock Windows), this script fails before the package exists;
+# (b) the binary carries exactly the version being released (single source of
+# truth chain: release tag -> LINGOFLOW_VERSION -> PROJECT_VERSION -> this gate
+# -> installer metadata -> GitHub Release; see docs/releasing.md).
+
+. (Join-Path ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))) 'scripts\release\release-lib.ps1')
 
 $exe = Join-Path $BuildDir 'src\LingoFlow_artefacts\Release\LingoFlow.exe'
 $pdb = Join-Path $BuildDir 'src\LingoFlow_artefacts\RelWithDebInfo\LingoFlow.pdb'
 
 if (-not (Test-Path $exe)) { throw "Release exe not found: $exe (build --config Release first)" }
+$exe = (Get-Item -LiteralPath $exe).FullName
+
+# version gate: the exe's Windows version resource (stamped by CMake/JUCE from
+# PROJECT_VERSION) must equal the release version this package is for.
+if (-not (Test-LingoFlowVersion $Version)) {
+    throw "release-package: -Version must be MAJOR.MINOR.PATCH (the tag minus the v prefix), got '$Version'"
+}
+$exeVersion = Get-LingoFlowNormalizedVersion (Get-Item -LiteralPath $exe).VersionInfo.FileVersion
+$consistencyErrors = Get-LingoFlowVersionConsistencyErrors -ExpectedVersion $Version -Sources @{ exe = $exeVersion }
+if (@($consistencyErrors).Count -gt 0) {
+    throw ('release-package: ' + ($consistencyErrors -join '; ') + ' - refusing to package a build that does not carry the release version')
+}
+Write-Output ("version gate OK: LingoFlow.exe FileVersion = {0}" -f (Get-Item -LiteralPath $exe).VersionInfo.FileVersion)
+
+# the package is exe + paperwork by design; a DLL that appeared next to the
+# binary would mean a dynamic dependency crept back in (the dumpbin scan below
+# names imports, this check catches payloads).
+$strayDlls = @(Get-ChildItem -LiteralPath (Split-Path $exe) -Filter '*.dll' -ErrorAction SilentlyContinue)
+if ($strayDlls.Count -gt 0) {
+    throw ("unexpected DLLs next to the Release exe (the package must stay self-contained): " + (($strayDlls | ForEach-Object { $_.Name }) -join ', '))
+}
 
 if (-not $Dumpbin) {
     $Dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022' -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |

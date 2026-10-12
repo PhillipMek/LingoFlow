@@ -146,6 +146,12 @@ machine install. Those are venue checks with written protocols:
 `docs/rig-checklist.md` (live run sheet) and `docs/release.md` (packaging and the
 clean-machine steps).
 
+Releases are manual: a green CI run on the trunk is handed by id to the
+**Release** workflow (`docs/releasing.md`), which rebuilds that exact commit,
+builds and verifies the Windows x64 installer (`LingoFlow-Setup-<version>-x64.exe`,
+Inno Setup; downloadable from GitHub Releases with a SHA-256 checksum) and
+only then tags and publishes. Ordinary CI never publishes anything.
+
 ## Diagnostics, latency, reliability - how the project stays honest
 
 * Latency rows carry their kind (measured / estimated / live-computed / not
@@ -176,9 +182,12 @@ src/            App (controller + JUCE UI), Audio, Platform/Asio, Network,
 tests/          unit, integration, realtime (allocation gate), performance,
                 support (mocks/fakes), audit scripts (CTest gates)
 docs/           architecture, dependencies, protocol references, CI, release,
-                rig-checklist, latency-budget, licensing, performance
+                releasing (operator runbook), rig-checklist, latency-budget,
+                licensing, performance
 assets/         application icon (ICO/RC/PNG)
 third_party/    vendored JUCE 9.0.3 + ASIO SDK 2.3.4 (licence files included)
-packaging/      release-package / install / uninstall scripts (PowerShell)
-.github/        CI workflow
+packaging/      release-package / build-installer (Inno Setup) /
+                verify-installer / install / uninstall scripts (PowerShell)
+scripts/        release pipeline logic (semver, provenance, gates) + its tests
+.github/        CI workflow + manual Release workflow + dependabot
 ```

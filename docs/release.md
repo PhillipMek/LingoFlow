@@ -4,6 +4,15 @@ Date: 2026-10-06. Version: 0.1.0 (the CMake project version, stamped into the
 binary's JUCE version string and shown in the app, the log line and the
 diagnostics export).
 
+> Updated 2026-10-12: published releases are now produced by the manual
+> GitHub Actions **Release** workflow, which attaches a full Windows
+> installer (`LingoFlow-Setup-<version>-x64.exe`, built with Inno Setup) to
+> each GitHub Release and stamps the release tag's version into every layer
+> (see `docs/releasing.md` for the operator runbook and the version source of
+> truth). The portable package + scripted install below remain supported for
+> offline venue machines - the two paths ship the same binary and the same
+> licence chain.
+
 ## What ships
 
 A single executable plus its licence chain. `packaging/release-package.ps1`
@@ -84,6 +93,22 @@ exercised on this machine (package -> install -> launched the installed exe,
 `--dev --smoke` exit 0 -> uninstall -> folder and shortcut gone, user state
 untouched).
 
+## The setup executable (GitHub Releases path)
+
+`packaging/LingoFlow.iss` (Inno Setup 6, >= 6.3) is compiled by
+`packaging/build-installer.ps1` into `LingoFlow-Setup-<version>-x64.exe` and
+attached to each GitHub Release by the Release workflow. It is a real
+installer, not a zip wrapper: per-user install with no administrator (a
+machine-wide option is offered explicitly), Start Menu shortcut, optional
+desktop icon, standard Apps&Features uninstall, and it installs exactly the
+approved file set (exe + VERSION.txt + licence chain - never PDBs, never
+user settings; `%APPDATA%\LingoFlow` and the credential store are not its
+territory in either direction). The version in the tag, the app binary, the
+installer metadata and the release notes is enforced to be the same number
+(see `docs/releasing.md`). `packaging/verify-installer.ps1` runs the
+install -> installed-smoke -> uninstall cycle unattended before publication;
+the clean-machine check below stays on top of that.
+
 ## Build configurations (the task's "Release/RelWithDebInfo")
 
 - **Release** - ships (`ctest -C Release`: 386/386).
@@ -119,3 +144,12 @@ REQUIRED clean-Windows test remains for the owner. No product code changed
 beyond the CRT linkage decision (measured dependency -> documented fix); no new
 dependencies were introduced (the installer is PowerShell + Shell COM, both
 always present).
+
+2026-10-12 update: the GitHub Releases path (manual Release workflow +
+Inno Setup .exe installer + SemVer + checks) is implemented; its automated
+scope is done (logic suite green, packaging chain rehearsed on a real
+machine), the end-to-end publication and the clean-machine install of the
+setup exe remain HUMAN CHECKPOINTS (docs/releasing.md sections 6 and 8).
+Inno Setup is a build-machine tool only (compiled installers are ours to
+distribute per its license; the vendor asks commercial users to buy a
+license - owner decision, docs/releasing.md section 8).

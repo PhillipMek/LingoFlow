@@ -1,7 +1,34 @@
 cmake_minimum_required(VERSION 3.25)
 
+# ---------------------------------------------------------------------------
+# Version - the single authoritative source (docs/releasing.md)
+#
+# LINGOFLOW_VERSION_DEFAULT is the repository's own version: the documented
+# seed used while no release Git tag exists yet, and the version a plain
+# local build carries. The manual GitHub Release workflow does NOT depend on
+# this default: it stamps the computed release version into every published
+# build through the LINGOFLOW_VERSION environment variable (process-scoped,
+# never a cache entry, so a release build can never leak a version into the
+# next local configure), so the Git tag, the Windows version resource of the
+# exe, JUCE_APPLICATION_VERSION_STRING (what the app shows), VERSION.txt, the
+# installer metadata and the GitHub Release notes are all derived from one
+# value. The release pipeline re-checks that equality before publishing
+# (packaging/verify-installer.ps1 and the gates in
+# scripts/release/run-release-build.ps1 / packaging/release-package.ps1).
+# ---------------------------------------------------------------------------
+set(LINGOFLOW_VERSION_DEFAULT "0.1.0")
+set(LINGOFLOW_VERSION "${LINGOFLOW_VERSION_DEFAULT}")
+if(DEFINED ENV{LINGOFLOW_VERSION} AND NOT "$ENV{LINGOFLOW_VERSION}" STREQUAL "")
+    set(LINGOFLOW_VERSION "$ENV{LINGOFLOW_VERSION}")
+    message(STATUS "LingoFlow: version override from the release workflow: ${LINGOFLOW_VERSION}")
+endif()
+if(NOT LINGOFLOW_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR
+        "LINGOFLOW_VERSION must be MAJOR.MINOR.PATCH without a v prefix (got '${LINGOFLOW_VERSION}')")
+endif()
+
 project(LingoFlow
-    VERSION 0.1.0
+    VERSION "${LINGOFLOW_VERSION}"
     DESCRIPTION "LingoFlow - simultaneous speech translation for live events"
     LANGUAGES C CXX)
 

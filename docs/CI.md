@@ -2,7 +2,18 @@
 
 Workflow: `.github/workflows/ci.yml` (name: **CI**, badge in README).
 Runner: `windows-latest`. Trigger: push to `main`/`master`, any pull request,
-manual `workflow_dispatch`. Permissions: `contents: read` only.
+manual `workflow_dispatch`. Permissions: `contents: read` only. CI never
+publishes anything: releases are made by the separate manual **Release**
+workflow (`.github/workflows/release.yml`, docs/releasing.md), which takes a
+green CI run's id from this pipeline, re-validates it through the API and
+rebuilds the exact commit before it tags. A green trunk run's summary prints
+the operator instructions with its own run id.
+
+Two jobs: `ci` (everything below) and `release-logic` - the pure decision
+logic of the release pipeline (SemVer, provenance rules, tag-claim races,
+naming, version consistency, static invariants of the workflow/installer
+files; scripts/release/tests/release-process.Tests.ps1) on both PowerShell
+5.1 and 7. The same suite is also the ctest entry `release_process_logic`.
 
 ## What the CI runs (all of it hardware- and secret-free)
 
@@ -26,9 +37,11 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
    - `asio_discovery_verify`/`asio_discovery_list` - registry enumeration only,
      never loads a driver.
    The job summary prints the discovered count per configuration; the suite
-   currently registers 386 tests. A hard-coded count guard was deliberately
-   NOT added (test renames legitimately change it); the guard that matters is
-   that CI runs every registered test with no exclusion filter.
+    currently registers 435 tests (434 C++/audit plus, since 2026-10-12, the
+    PowerShell `release_process_logic` gate - the release pipeline's own
+    decision logic). A hard-coded count guard was deliberately NOT added
+    (test renames legitimately change it); the guard that matters is that
+    CI runs every registered test with no exclusion filter.
 4. **Smoke modes** (Release executable):
    - `--dev --smoke` must exit 0. This is the hardware-independent proof that
      the production wiring starts end to end without device/key/network
@@ -48,7 +61,7 @@ manual `workflow_dispatch`. Permissions: `contents: read` only.
 | a real OpenAI session | no API key by design - and none needed: the protocol surface is tested against scripted transports (the project rules); live round trip = the venue translation checkpoint |
 | a real NDI receiver | needs a receiver on the network; transport failure paths are injected in tests; live = the venue NDI checkpoint |
 | long-run 1h/4h/8h+ | time + real hardware; `docs/performance.md` protocol, the long-run venue checkpoint |
-| clean-machine install test | the runner is neither clean nor the installed target; `docs/release.md` four-step protocol, the clean-machine checkpoint |
+| clean-machine install test | the runner is neither clean nor the installed target; `docs/release.md` four-step protocol, the clean-machine checkpoint. (Since 2026-10-12 the Release workflow automates the installer's mechanics on the runner - silent install, installed-binary smoke, uninstall, user-state preservation - but a runner is not a clean machine; that check remains human.) |
 | branch protection configuration | GitHub setting, owner's decision, not a repository file |
 
 A green CI run means: everything deterministic without hardware and secrets

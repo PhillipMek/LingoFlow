@@ -12,6 +12,7 @@ any dependency added later.
 | Catch2 v3.16.0 | BSL-1.0 | Test-time only, not linked into the product. Fine. |
 | Waves SoundGrid driver | Waves EULA, system install | Not redistributed by us. The product documents it as a required prerequisite; nothing from `C:\Program Files (x86)\Waves` or `System32\SoundGridAsio.dll` is copied into the repository or the installer. |
 | NDI SDK 6 / NDI runtime | NewTek proprietary SDK + EULA | **Not GPL-compatible.** See the constraint below. |
+| Inno Setup 6 (build-time only) | Inno Setup licence (LICENSE.TXT grants use "for any purpose, including commercial applications" and allows redistributing compiled installers) | Used only as the CI/local packaging compiler - never linked into, embedded in or shipped with the product; only the generated `LingoFlow-Setup-<version>-x64.exe` ships. The vendor additionally asks commercial users to purchase a license (jrsoftware.org/isorder.php) - a request that supplements but does not override LICENSE.TXT; purchasing for venue deployments is the owner's decision, see `docs/releasing.md` section 8. |
 
 ## The NDI constraint created by choosing AGPLv3
 

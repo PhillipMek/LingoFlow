@@ -221,6 +221,21 @@ add_test(NAME realtime_safety_audit_selftest
 set_property(TEST realtime_safety_audit realtime_safety_audit_selftest
              PROPERTY LABELS realtime)
 
+# --- release-process logic gate ------------------------------------------
+# Pure decision logic of the GitHub Release pipeline (SemVer derivation, CI
+# run provenance, tag-claim races, artifact naming, version consistency,
+# installer/workflow static invariants). No network, no build - the same
+# script the "release-logic" CI job runs, here as a ctest entry so a local
+# developer hits the same gate. Windows only (powershell.exe is everywhere
+# on Windows; nothing else runs PowerShell here).
+if(WIN32)
+    add_test(NAME release_process_logic
+             COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+                     ${CMAKE_SOURCE_DIR}/scripts/release/tests/release-process.Tests.ps1)
+    set_property(TEST release_process_logic PROPERTY LABELS release-process)
+    set_property(TEST release_process_logic PROPERTY TIMEOUT 180)
+endif()
+
 # --- ASIO discovery -------------------------------------------------
 # The probe tool exercises the real JUCE ASIO path. --verify compares the devices JUCE
 # enumerates with the HKLM\SOFTWARE\ASIO registrations, without loading any driver, so
