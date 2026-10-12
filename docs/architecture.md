@@ -356,6 +356,30 @@ new code is written against behaviour that already has proof, not against commen
   `blocksMeasured()` stops advancing (no new data is not "hold the last level").
   No locks, no allocation, nothing added to the callback; the clipping lamp
   stays raw, because a hazard flag must never be hidden by polish.
+* **Window geometry keeps three operator promises** (venue task 4). (1) The
+  mouse wheel never changes a value: every slider in the app is built by its
+  window's factory, and every factory calls `ui::wheelSafeSlider` - a JUCE
+  Slider with the wheel disabled hands the event to its parent chain, so the
+  cursor crossing a fader scrolls the page under it instead of riding the
+  wheel into a setting (drag, click, text box and keyboard stay live).
+  (2) Content taller than the window scrolls: `ui::ScrollablePage` is the one
+  viewport pattern - a measure callback positions the widgets AND reports the
+  height in the same pass (measurement and layout cannot disagree), the
+  operator screen pins its header and command bar and scrolls only the card
+  column, every settings tab is such a page with Apply outside the scroll,
+  and the Diagnostics surface now prints the whole event ring instead of the
+  slice that fit. A growing list is followed only while the reader already
+  sits at the bottom, and a fresh page opens at its headline, not at the
+  tail. (3) Auxiliary windows are application-modal without a nested loop:
+  Settings and Diagnostics run on `enterModalState`, which returns
+  immediately - the message thread, the audio engine and the network threads
+  are unaffected while a dialog is open, closing ends the modal state
+  explicitly and the dismissal callback returns control to the operator
+  window on the next loop pass. The main column itself compacted (2x2 status
+  and health grids, captions inline with their controls, one merged
+  translation row): the card stack needs ~700 px where it used to demand
+  ~1130, and START/STOP - the controls a live show runs on - are pinned and
+  can never sit below the fold again.
 * **Typed text is real today, and the seam is still the string pair**:
   `Translation/TextPipeline.h` turns the sink's partial/final strings into
   `TranslationTextEvent`s with a product-owned sequence and arrival clock, a

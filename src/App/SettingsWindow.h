@@ -4,7 +4,11 @@
 // final shape by the UI redesign: six tabs (Audio, Translation, Subtitles / NDI,
 // Credentials, Diagnostics, Advanced), one Apply button, one note line. The
 // tab bar is a plain juce::TabbedComponent - the natural navigation the task
-// asks for, not a framework.
+// asks for, not a framework. Since the venue layout pass (task 4 §3) each tab
+// is a ui::ScrollablePage: a page taller than the window scrolls vertically
+// instead of hiding its bottom rows, and the Apply row lives outside the
+// scroll. The dialog is application-modal while open (task 4 §4) - see the
+// frame's comment for the mechanism and the no-nested-loop promise.
 //
 // It follows the same rule as every other window (tasks 014/015): widgets
 // only. Every value comes from and goes to the controller - updateSettings for
@@ -43,6 +47,7 @@
 
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
+#include "App/UiWidgets.h"
 #include "Subtitles/SubtitleStyle.h"
 
 namespace liveai {
@@ -91,25 +96,28 @@ private:
     /// reset share this single writer).
     void fillSubtitleWidgets(const subtitles::SubtitleSettings&);
 
-    // One layout function per tab; resized() calls them all (JUCE lays out
-    // hidden tab pages too, and they are cheap).
-    void layoutAudioPage();
-    void layoutTranslationPage();
-    void layoutSubtitlesPage();
-    void layoutCredentialsPage();
-    void layoutDiagnosticsPage();
-    void layoutAdvancedPage();
+    // One layout function per tab. The page now lives inside a
+    // ui::ScrollablePage: the function measures the content height for the
+    // width the viewport offers AND positions the widgets in the same pass
+    // (the ScrollablePage contract), so the page scrolls exactly as far as
+    // its content is tall and never drifts (venue task 4 §3).
+    int layoutAudioPage(int width);
+    int layoutTranslationPage(int width);
+    int layoutSubtitlesPage(int width);
+    int layoutCredentialsPage(int width);
+    int layoutDiagnosticsPage(int width);
+    int layoutAdvancedPage(int width);
 
     ApplicationController& controller_;
     std::string actionNote_;
 
     std::unique_ptr<juce::TabbedComponent> tabs_;
-    juce::Component* audioPage_ = nullptr;         // owned by tabs_
-    juce::Component* translationPage_ = nullptr;
-    juce::Component* subtitlesPage_ = nullptr;
-    juce::Component* credentialsPage_ = nullptr;
-    juce::Component* diagnosticsPage_ = nullptr;
-    juce::Component* advancedPage_ = nullptr;
+    ui::ScrollablePage* audioPage_ = nullptr;         // owned by tabs_
+    ui::ScrollablePage* translationPage_ = nullptr;
+    ui::ScrollablePage* subtitlesPage_ = nullptr;
+    ui::ScrollablePage* credentialsPage_ = nullptr;
+    ui::ScrollablePage* diagnosticsPage_ = nullptr;
+    ui::ScrollablePage* advancedPage_ = nullptr;
 
     // ------------------------------------------------------------------ audio
     juce::Label deviceCaption_, deviceNoteLabel_, sampleRateCaption_, bufferCaption_;
@@ -234,18 +242,30 @@ private:
 
 /// Thin frame. Closing hides it (the owner may reopen it and the values are
 /// re-read); quitting the application happens only from the operator window.
+/// The window is APPLICATION-MODAL while open (venue task 4 §4):
+/// enterModalState blocks input to every other window, but it returns
+/// immediately and runs no nested event loop - the message thread keeps
+/// ticking, so the audio engine, the network threads and the operator
+/// window's own refresh are untouched. Closing ends the modal state
+/// explicitly and the JUCE dismissal callback returns control to the
+/// parent window on the next message-loop pass.
 class SettingsWindow final : public juce::DocumentWindow
 {
 public:
-    explicit SettingsWindow(ApplicationController& controller);
+    SettingsWindow(ApplicationController& controller, juce::Component& ownerWindow);
 
-    /// Re-reads the settings into the widgets and brings the window up.
+    /// Re-reads the configuration, the option lists and the credential
+    /// presence into the widgets, brings the window up and takes the
+    /// application-modal state it always holds while open.
     void reopen();
 
     void closeButtonPressed() override;
 
 private:
+    void becomeModal();
+
     SettingsContent* content_ = nullptr;   ///< owned by the DocumentWindow
+    juce::Component& ownerWindow_;         ///< control returns here on dismissal
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SettingsWindow)
 };

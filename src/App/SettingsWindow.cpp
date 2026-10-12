@@ -1,5 +1,6 @@
 #include "App/SettingsWindow.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <utility>
@@ -33,6 +34,19 @@ constexpr int kControlH = 28;
 constexpr int kCaptionH = 16;
 constexpr int kButtonH = 32;
 
+/// The height a page layout function measures against: taller than any page
+/// ever is, so every removeFromTop chain consumes its true total and the
+/// returned content height is exact. The number itself carries no meaning -
+/// it only has to dominate every layout below (venue task 4 §3, and the
+/// monotone-measure contract of ui::ScrollablePage).
+constexpr int kMeasureHeight = 20000;
+
+/// The subtitle preview's strip on the (now measured) Subtitles page. It was
+/// "whatever the column has left"; a scrolling page decides its own height,
+/// so the preview keeps a fixed window - tall enough to read the caption
+/// placement against the checkerboard.
+constexpr int kPreviewH = 240;
+
 juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent)
 {
     label.setFont(ui::uiFont(12.0f));
@@ -59,6 +73,12 @@ juce::Slider& slider(juce::Slider& s, double min, double max, double interval,
     s.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 84, 24);
     s.setColour(juce::Slider::trackColourId, sink::blue.withAlpha(0.55f));
     s.setColour(juce::Slider::thumbColourId, sink::textPrimary);
+    // The application-wide rule (venue task 4 §2, ui::wheelSafeSlider): the
+    // wheel scrolls the page, it never changes a value - here it would also
+    // fight the tab's own scrolling viewport, which is exactly the accidental
+    // edit the task names. This factory is the ONE place a settings slider is
+    // built; nothing here or later re-enables the wheel.
+    ui::wheelSafeSlider(s);
     parent.addAndMakeVisible(s);
     return s;
 }
@@ -294,9 +314,10 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     addAndMakeVisible(*tabs_);
 
     // ------------------------------------------------------------------ audio
-    audioPage_ = new juce::Component();
-    caption(deviceCaption_, "ASIO device (one in/out device)", *audioPage_);
-    styleBox(deviceChoice_, *audioPage_);   // no onChange: the draft owns the widget until Apply
+    audioPage_ = new ui::ScrollablePage([this](int width) { return layoutAudioPage(width); });
+    auto& audioBody = audioPage_->body();
+    caption(deviceCaption_, "ASIO device (one in/out device)", audioBody);
+    styleBox(deviceChoice_, audioBody);   // no onChange: the draft owns the widget until Apply
     refreshDevicesButton_.onClick = [this]
     {
         // A rescan updates the LIST only - the rest of the draft on screen is
@@ -309,143 +330,147 @@ SettingsContent::SettingsContent(ApplicationController& controller)
                                  juce::NotificationType::dontSendNotification);
         updatingWidgets_ = false;
     };
-    styleButton(refreshDevicesButton_, *audioPage_);
-    hint(deviceNoteLabel_, "", *audioPage_);
-    caption(sampleRateCaption_, "Sample rate", *audioPage_);
-    styleBox(sampleRateChoice_, *audioPage_);
-    caption(bufferCaption_, "Buffer size (frames)", *audioPage_);
+    styleButton(refreshDevicesButton_, audioBody);
+    hint(deviceNoteLabel_, "", audioBody);
+    caption(sampleRateCaption_, "Sample rate", audioBody);
+    styleBox(sampleRateChoice_, audioBody);
+    caption(bufferCaption_, "Buffer size (frames)", audioBody);
     const auto [bufferMin, bufferMax] = config::bufferFramesRange();
-    slider(bufferSlider_, bufferMin, bufferMax, 16, *audioPage_);
-    caption(inputChannelCaption_, "Input channel", *audioPage_);
-    styleBox(inputChannelChoice_, *audioPage_);
-    caption(outputChannelCaption_, "Output channel", *audioPage_);
-    styleBox(outputChannelChoice_, *audioPage_);
-    hint(channelNoteLabel_, "", *audioPage_);
-    caption(inputGainCaption_, "Input gain (dB)", *audioPage_);
-    caption(outputGainCaption_, "Output gain (dB)", *audioPage_);
+    slider(bufferSlider_, bufferMin, bufferMax, 16, audioBody);
+    caption(inputChannelCaption_, "Input channel", audioBody);
+    styleBox(inputChannelChoice_, audioBody);
+    caption(outputChannelCaption_, "Output channel", audioBody);
+    styleBox(outputChannelChoice_, audioBody);
+    hint(channelNoteLabel_, "", audioBody);
+    caption(inputGainCaption_, "Input gain (dB)", audioBody);
+    caption(outputGainCaption_, "Output gain (dB)", audioBody);
     const auto [gainMin, gainMax] = config::gainRange();
-    slider(inputGainSlider_, gainMin, gainMax, 0.5, *audioPage_);
-    slider(outputGainSlider_, gainMin, gainMax, 0.5, *audioPage_);
-    // Same rule as the main screen's faders (where it is set inside fader()):
-    // these gains are live, and a stray mouse wheel must never ride them.
-    // Deliberately only the gain pair - the other settings sliders are not
-    // live audio, and the task warns against a global wheel ban.
-    inputGainSlider_.setScrollWheelEnabled(false);
-    outputGainSlider_.setScrollWheelEnabled(false);
+    // The wheel rule is the factory's now (ui::wheelSafeSlider via slider()):
+    // every settings slider - these live gains included - ignores the wheel
+    // and lets it scroll the page (venue task 4 §2 superseded the earlier
+    // "only the live pair" decision).
+    slider(inputGainSlider_, gainMin, gainMax, 0.5, audioBody);
+    slider(outputGainSlider_, gainMin, gainMax, 0.5, audioBody);
     hint(audioRestartHintLabel_,
          "Device, sample rate, buffer and channels take effect on the next Start; the target "
          "language (and the Off behavior) applies while running.",
-         *audioPage_);
+         audioBody);
 
     // -------------------------------------------------------------- translation
-    translationPage_ = new juce::Component();
+    translationPage_ = new ui::ScrollablePage(
+        [this](int width) { return layoutTranslationPage(width); });
+    auto& translationBody = translationPage_->body();
     // The provider auto-detects the spoken language (docs section 5, R8):
     // what the operator picks here is the EXPECTATION LingoFlow validates
     // and reports with - not a parameter OpenAI is given. The labels say
     // exactly that, so the screen cannot imply a declaration the wire never
     // carries.
-    caption(sourceCaption_, "Expected source language", *translationPage_);
-    styleBox(sourceChoice_, *translationPage_);
-    caption(targetCaption_, "Target language", *translationPage_);
-    styleBox(targetChoice_, *translationPage_);
+    caption(sourceCaption_, "Expected source language", translationBody);
+    styleBox(sourceChoice_, translationBody);
+    caption(targetCaption_, "Target language", translationBody);
+    styleBox(targetChoice_, translationBody);
     // §3: Off is a point in the target list; what the audience hears while
     // off is this separate, persisted choice - not a third list entry and not
     // a voice switch. Both values come from the panel's closed vocabulary, so
     // the selector cannot offer what the schema would refuse.
-    caption(offBehaviorCaption_, "When the target is Off, the output:", *translationPage_);
-    styleBox(offBehaviorChoice_, *translationPage_);
+    caption(offBehaviorCaption_, "When the target is Off, the output:", translationBody);
+    styleBox(offBehaviorChoice_, translationBody);
     hint(offBehaviorNoteLabel_,
          "Bypass sends your live audio straight to the room (no translation, no added delay); "
          "silence stops the output. The device stays open in both.",
-         *translationPage_);
+         translationBody);
     hint(sourceNoteLabel_,
          "OpenAI detects the spoken language automatically. The expectation above is used "
          "by LingoFlow for validation and diagnostics only.",
-         *translationPage_);
+         translationBody);
     pairWarningLabel_.setFont(ui::uiFont(12.0f));
     pairWarningLabel_.setColour(juce::Label::textColourId, sink::red);
-    translationPage_->addAndMakeVisible(pairWarningLabel_);
-    caption(modelHintCaption_, "Model hint (empty = backend default)", *translationPage_);
-    translationPage_->addAndMakeVisible(modelHintEditor_);
-    toggle(reconnectToggle_, *translationPage_);
+    translationBody.addAndMakeVisible(pairWarningLabel_);
+    caption(modelHintCaption_, "Model hint (empty = backend default)", translationBody);
+    translationBody.addAndMakeVisible(modelHintEditor_);
+    toggle(reconnectToggle_, translationBody);
     const auto [backoffMin, backoffMax] = config::reconnectBackoffRange();
-    caption(initialBackoffCaption_, "First reconnect delay (ms)", *translationPage_);
-    slider(initialBackoffSlider_, backoffMin, backoffMax, 100, *translationPage_);
-    caption(maxBackoffCaption_, "Maximum reconnect backoff (ms)", *translationPage_);
-    slider(maxBackoffSlider_, backoffMin, backoffMax, 100, *translationPage_);
+    caption(initialBackoffCaption_, "First reconnect delay (ms)", translationBody);
+    slider(initialBackoffSlider_, backoffMin, backoffMax, 100, translationBody);
+    caption(maxBackoffCaption_, "Maximum reconnect backoff (ms)", translationBody);
+    slider(maxBackoffSlider_, backoffMin, backoffMax, 100, translationBody);
     const auto [ageMin, ageMax] = config::sessionMaxAgeRange();
-    caption(sessionAgeCaption_, "Session max age (s; 0 = no proactive reopen)", *translationPage_);
-    slider(sessionAgeSlider_, ageMin, ageMax, 60, *translationPage_);
-    caption(jitterCaption_, "Jitter pre-roll (ms)", *translationPage_);
+    caption(sessionAgeCaption_, "Session max age (s; 0 = no proactive reopen)", translationBody);
+    slider(sessionAgeSlider_, ageMin, ageMax, 60, translationBody);
+    caption(jitterCaption_, "Jitter pre-roll (ms)", translationBody);
     const auto [jitterMin, jitterMax] = config::jitterBufferRange();
-    slider(jitterSlider_, jitterMin, jitterMax, 10, *translationPage_);
+    slider(jitterSlider_, jitterMin, jitterMax, 10, translationBody);
 
     // ----------------------------------------------------------- subtitles/NDI
-    subtitlesPage_ = new juce::Component();
-    toggle(ndiToggle_, *subtitlesPage_);
-    caption(streamNameCaption_, "NDI stream name", *subtitlesPage_);
-    subtitlesPage_->addAndMakeVisible(streamNameEditor_);
+    subtitlesPage_ = new ui::ScrollablePage(
+        [this](int width) { return layoutSubtitlesPage(width); });
+    auto& subtitlesBody = subtitlesPage_->body();
+    toggle(ndiToggle_, subtitlesBody);
+    caption(streamNameCaption_, "NDI stream name", subtitlesBody);
+    subtitlesBody.addAndMakeVisible(streamNameEditor_);
     ndiStateLabel_.setFont(ui::uiFont(13.0f));
-    subtitlesPage_->addAndMakeVisible(ndiStateLabel_);
+    subtitlesBody.addAndMakeVisible(ndiStateLabel_);
 
-    caption(ndiModeCaption_, "Output (one source, chosen media)", *subtitlesPage_);
+    caption(ndiModeCaption_, "Output (one source, chosen media)", subtitlesBody);
     for (std::size_t i = 0; i < std::size(kSubtitleModes); ++i)
         ndiModeChoice_.addItem(juce::String(kSubtitleModes[i].first), static_cast<int> (i) + 1);
-    styleBox(ndiModeChoice_, *subtitlesPage_);
+    styleBox(ndiModeChoice_, subtitlesBody);
 
-    caption(ndiResolutionCaption_, "Video resolution", *subtitlesPage_);
+    caption(ndiResolutionCaption_, "Video resolution", subtitlesBody);
     for (std::size_t i = 0; i < std::size(kSubtitleResolutions); ++i)
         ndiResolutionChoice_.addItem(juce::String(kSubtitleResolutions[i].first), static_cast<int> (i) + 1);
-    styleBox(ndiResolutionChoice_, *subtitlesPage_);
+    styleBox(ndiResolutionChoice_, subtitlesBody);
 
-    caption(ndiFpsCaption_, "Frame rate (fps)", *subtitlesPage_);
+    caption(ndiFpsCaption_, "Frame rate (fps)", subtitlesBody);
     for (std::size_t i = 0; i < std::size(kSubtitleFrameRates); ++i)
         ndiFpsChoice_.addItem(juce::String(kSubtitleFrameRates[i]), static_cast<int> (i) + 1);
-    styleBox(ndiFpsChoice_, *subtitlesPage_);
+    styleBox(ndiFpsChoice_, subtitlesBody);
 
-    caption(fontFamilyCaption_, "Font family", *subtitlesPage_);
-    subtitlesPage_->addAndMakeVisible(fontFamilyEditor_);
-    caption(fontSizeCaption_, "Font size (px at 1080p; scales with resolution)", *subtitlesPage_);
-    slider(fontSizeSlider_, 16, 200, 1, *subtitlesPage_);
+    caption(fontFamilyCaption_, "Font family", subtitlesBody);
+    subtitlesBody.addAndMakeVisible(fontFamilyEditor_);
+    caption(fontSizeCaption_, "Font size (px at 1080p; scales with resolution)", subtitlesBody);
+    slider(fontSizeSlider_, 16, 200, 1, subtitlesBody);
 
     textColorButton_.onClick = [this] { aimColourSelector(true); };
     outlineColorButton_.onClick = [this] { aimColourSelector(false); };
-    styleButton(textColorButton_, *subtitlesPage_);
-    styleButton(outlineColorButton_, *subtitlesPage_);
+    styleButton(textColorButton_, subtitlesBody);
+    styleButton(outlineColorButton_, subtitlesBody);
 
-    caption(outlineWidthCaption_, "Outline width (px at 1080p; 0 = none)", *subtitlesPage_);
-    slider(outlineWidthSlider_, 0, 8, 1, *subtitlesPage_);
-    toggle(shadowToggle_, *subtitlesPage_);
-    caption(shadowOffsetCaption_, "Shadow offset (px at 1080p)", *subtitlesPage_);
-    slider(shadowOffsetSlider_, 0, 16, 1, *subtitlesPage_);
-    caption(shadowOpacityCaption_, "Shadow opacity (%)", *subtitlesPage_);
-    slider(shadowOpacitySlider_, 0, 100, 5, *subtitlesPage_);
-    toggle(backgroundToggle_, *subtitlesPage_);
+    caption(outlineWidthCaption_, "Outline width (px at 1080p; 0 = none)", subtitlesBody);
+    slider(outlineWidthSlider_, 0, 8, 1, subtitlesBody);
+    toggle(shadowToggle_, subtitlesBody);
+    caption(shadowOffsetCaption_, "Shadow offset (px at 1080p)", subtitlesBody);
+    slider(shadowOffsetSlider_, 0, 16, 1, subtitlesBody);
+    caption(shadowOpacityCaption_, "Shadow opacity (%)", subtitlesBody);
+    slider(shadowOpacitySlider_, 0, 100, 5, subtitlesBody);
+    toggle(backgroundToggle_, subtitlesBody);
 
-    caption(alignCaption_, "Alignment (horizontal / vertical edge)", *subtitlesPage_);
+    caption(alignCaption_, "Alignment (horizontal / vertical edge)", subtitlesBody);
     hAlignChoice_.addItem("left", 1);
     hAlignChoice_.addItem("center", 2);
     hAlignChoice_.addItem("right", 3);
     vAnchorChoice_.addItem("bottom", 1);
     vAnchorChoice_.addItem("top", 2);
-    styleBox(hAlignChoice_, *subtitlesPage_);
-    styleBox(vAnchorChoice_, *subtitlesPage_);
+    styleBox(hAlignChoice_, subtitlesBody);
+    styleBox(vAnchorChoice_, subtitlesBody);
 
-    caption(marginCaption_, "Edge margin (%) of frame height", *subtitlesPage_);
-    slider(marginSlider_, 0, 40, 1, *subtitlesPage_);
-    caption(blockWidthCaption_, "Max text block width (%)", *subtitlesPage_);
-    slider(blockWidthSlider_, 25, 100, 5, *subtitlesPage_);
-    caption(maxLinesCaption_, "Max lines (font shrinks to fit first)", *subtitlesPage_);
-    slider(maxLinesSlider_, 1, 6, 1, *subtitlesPage_);
-    caption(lineSpacingCaption_, "Line spacing (%)", *subtitlesPage_);
-    slider(lineSpacingSlider_, 0, 100, 5, *subtitlesPage_);
+    caption(marginCaption_, "Edge margin (%) of frame height", subtitlesBody);
+    slider(marginSlider_, 0, 40, 1, subtitlesBody);
+    caption(blockWidthCaption_, "Max text block width (%)", subtitlesBody);
+    slider(blockWidthSlider_, 25, 100, 5, subtitlesBody);
+    caption(maxLinesCaption_, "Max lines (font shrinks to fit first)", subtitlesBody);
+    slider(maxLinesSlider_, 1, 6, 1, subtitlesBody);
+    caption(lineSpacingCaption_, "Line spacing (%)", subtitlesBody);
+    slider(lineSpacingSlider_, 0, 100, 5, subtitlesBody);
 
     resetAppearanceButton_.onClick = [this] { resetAppearancePressed(); };
-    styleButton(resetAppearanceButton_, *subtitlesPage_);
+    styleButton(resetAppearanceButton_, subtitlesBody);
 
-    auto colourSlider = [this](juce::Slider& s)
+    auto colourSlider = [this, &subtitlesBody](juce::Slider& s)
     {
-        slider(s, 0, 255, 1, *subtitlesPage_);
+        // slider() carries the wheel rule (venue task 4 §2) - the colour
+        // editor's RGB sliders are sliders like any other.
+        slider(s, 0, 255, 1, subtitlesBody);
         s.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 18);
         s.onValueChange = [this] { applyColourEdit(); };
     };
@@ -453,14 +478,14 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     colourSlider(colourGSlider_);
     colourSlider(colourBSlider_);
     caption(colourEditorCaption_, "Colour editor (R / G / B) - aim it with the two buttons above",
-            *subtitlesPage_);
+            subtitlesBody);
     colourSwatch_.setColour(juce::Label::backgroundColourId, colourFromRgb(0xFFFFFF));
-    subtitlesPage_->addAndMakeVisible(colourSwatch_);
+    subtitlesBody.addAndMakeVisible(colourSwatch_);
 
     subtitlePreview_ = std::make_unique<SubtitlePreview>();
     caption(previewCaption_, "Preview (checkerboard = the transparent background; sample caption)",
-            *subtitlesPage_);
-    subtitlesPage_->addAndMakeVisible(*subtitlePreview_);
+            subtitlesBody);
+    subtitlesBody.addAndMakeVisible(*subtitlePreview_);
 
     hint(ndiHintLabel_,
          "Video mode is a real NDI video source with a transparent background - add it in OBS "
@@ -468,82 +493,88 @@ SettingsContent::SettingsContent(ApplicationController& controller)
          "behaviour). Appearance and geometry apply live; the stream name takes effect on "
          "Stop + Start. NDI never carries audio and its failure never stops it - seeing the "
          "text on a receiver is the venue checkpoint; counters only prove the sender sent.",
-         *subtitlesPage_);
+         subtitlesBody);
 
     // -------------------------------------------------------------- credentials
-    credentialsPage_ = new juce::Component();
+    credentialsPage_ = new ui::ScrollablePage(
+        [this](int width) { return layoutCredentialsPage(width); });
+    auto& credentialsBody = credentialsPage_->body();
     credStatusLabel_.setFont(ui::uiFont(14.0f));
     credStatusLabel_.setColour(juce::Label::textColourId, sink::textPrimary);
-    credentialsPage_->addAndMakeVisible(credStatusLabel_);
+    credentialsBody.addAndMakeVisible(credStatusLabel_);
     apiKeyEditor_.setPasswordCharacter(L'*');   // the field masks its echo (PASS criterion)
-    credentialsPage_->addAndMakeVisible(apiKeyEditor_);
+    credentialsBody.addAndMakeVisible(apiKeyEditor_);
     saveKeyButton_.onClick = [this] { saveKeyPressed(); };
     removeKeyButton_.onClick = [this] { removeKeyPressed(); };
-    styleButton(saveKeyButton_, *credentialsPage_);
-    styleButton(removeKeyButton_, *credentialsPage_);
+    styleButton(saveKeyButton_, credentialsBody);
+    styleButton(removeKeyButton_, credentialsBody);
     hint(keyHintLabel_,
          "The key lives in Windows secure storage, never in the settings file or the "
          "log. The field clears after a successful store and the value is never shown "
          "again here.",
-         *credentialsPage_);
+         credentialsBody);
 
     // -------------------------------------------------------------- diagnostics
-    diagnosticsPage_ = new juce::Component();
-    caption(logLevelCaption_, "Log level", *diagnosticsPage_);
-    diagnosticsPage_->addAndMakeVisible(logLevelChoice_);   // part of the draft: Apply commits it
+    diagnosticsPage_ = new ui::ScrollablePage(
+        [this](int width) { return layoutDiagnosticsPage(width); });
+    auto& diagnosticsBody = diagnosticsPage_->body();
+    caption(logLevelCaption_, "Log level", diagnosticsBody);
+    diagnosticsBody.addAndMakeVisible(logLevelChoice_);   // part of the draft: Apply commits it
     logLevelChoice_.setColour(juce::ComboBox::backgroundColourId, sink::control);
     logLevelChoice_.setColour(juce::ComboBox::outlineColourId, sink::cardBorder);
     logLevelChoice_.setColour(juce::ComboBox::textColourId, sink::textPrimary);
-    toggle(logFileToggle_, *diagnosticsPage_);
+    toggle(logFileToggle_, diagnosticsBody);
     hint(logHintLabel_,
          "The log file and recovery-policy edits take effect when the application "
          "restarts. Export writes a structured diagnostics report you can carry to "
          "a venue - it contains counters and events, never the API key.",
-         *diagnosticsPage_);
+         diagnosticsBody);
     exportDiagnosticsButton_.onClick = [this] { exportPressed(); };
-    styleButton(exportDiagnosticsButton_, *diagnosticsPage_);
+    styleButton(exportDiagnosticsButton_, diagnosticsBody);
 
     // ------------------------------------------------------------------ advanced
-    advancedPage_ = new juce::Component();
+    advancedPage_ = new ui::ScrollablePage(
+        [this](int width) { return layoutAdvancedPage(width); });
+    auto& advancedBody = advancedPage_->body();
     caption(instructionsCaption_,
             "Translation instructions - unsupported by the current model (kept for a future one)",
-            *advancedPage_);
+            advancedBody);
     instructionsEditor_.setMultiLine(true);
     instructionsEditor_.setScrollbarsShown(true);
     instructionsEditor_.setReadOnly(true);   // An earlier review: no authoring of a dead setting
-    advancedPage_->addAndMakeVisible(instructionsEditor_);
+    advancedBody.addAndMakeVisible(instructionsEditor_);
     hint(instructionsHintLabel_,
          "The provider accepts no custom prompting (protocol docs section 12.1). This "
          "value is stored for a future model, is never sent today, and the backend logs "
          "plainly that it was ignored. Empty means \"nothing configured\".",
-         *advancedPage_);
-    toggle(developerToggle_, *advancedPage_);
-    caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", *advancedPage_);
+         advancedBody);
+    toggle(developerToggle_, advancedBody);
+    caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", advancedBody);
     devSourceChoice_.setColour(juce::ComboBox::backgroundColourId, sink::control);
     devSourceChoice_.setColour(juce::ComboBox::outlineColourId, sink::cardBorder);
     devSourceChoice_.setColour(juce::ComboBox::textColourId, sink::textPrimary);
-    advancedPage_->addAndMakeVisible(devSourceChoice_);
-    caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", *advancedPage_);
-    advancedPage_->addAndMakeVisible(devWavInEditor_);
-    caption(devWavOutCaption_, "Rehearsal recording WAV (empty = do not record)", *advancedPage_);
-    advancedPage_->addAndMakeVisible(devWavOutEditor_);
-    toggle(mockToggle_, *advancedPage_);
+    advancedBody.addAndMakeVisible(devSourceChoice_);
+    caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", advancedBody);
+    advancedBody.addAndMakeVisible(devWavInEditor_);
+    caption(devWavOutCaption_, "Rehearsal recording WAV (empty = do not record)", advancedBody);
+    advancedBody.addAndMakeVisible(devWavOutEditor_);
+    toggle(mockToggle_, advancedBody);
     const auto [mockMin, mockMax] = config::mockLatencyRange();
-    caption(mockLatencyCaption_, "Mock echo delay (ms)", *advancedPage_);
-    slider(devMockLatencySlider_, mockMin, mockMax, 10, *advancedPage_);
-    caption(devToneFreqCaption_, "Test tone frequency (Hz)", *advancedPage_);
+    caption(mockLatencyCaption_, "Mock echo delay (ms)", advancedBody);
+    slider(devMockLatencySlider_, mockMin, mockMax, 10, advancedBody);
+    caption(devToneFreqCaption_, "Test tone frequency (Hz)", advancedBody);
     const auto [toneMin, toneMax] = config::toneFrequencyRange();
-    slider(devToneFreqSlider_, toneMin, toneMax, 10, *advancedPage_);
-    caption(devToneLevelCaption_, "Test tone level (dBFS)", *advancedPage_);
+    slider(devToneFreqSlider_, toneMin, toneMax, 10, advancedBody);
+    caption(devToneLevelCaption_, "Test tone level (dBFS)", advancedBody);
     const auto [levelMin, levelMax] = config::toneLevelRangeDb();
-    slider(devToneLevelSlider_, levelMin, levelMax, 1, *advancedPage_);
+    slider(devToneLevelSlider_, levelMin, levelMax, 1, advancedBody);
     loopbackToggle_.onClick = [this] { loopbackVisuals(); };
-    toggle(loopbackToggle_, *advancedPage_);
+    toggle(loopbackToggle_, advancedBody);
     hint(developerHintLabel_,
          "Mounted at application start: source, mock and loopback edits take effect on "
          "restart. Loopback plays the capture to the audience and leaves the translator "
          "unfed - never enable it with a live room.",
-         *advancedPage_);
+         advancedBody);
 
     // --------------------------------------------------------------- bottom bar
     applyButton_.onClick = [this] { applyPressed(); };
@@ -1129,6 +1160,9 @@ void SettingsContent::resized()
 
     // Breathing room between the tab content and the command row: the tabs
     // end, then the gap, then Apply - the first cut had them sharing an edge.
+    // Apply and the note line sit OUTSIDE the tab pages on purpose: whichever
+    // page is open and however far it is scrolled, the commit button never
+    // hides behind the viewport (venue task 4 §3).
     auto bottom = bounds.removeFromBottom(kRowGap + kButtonH + kRowGap + 18);
     bottom.removeFromTop(kRowGap);
     applyButton_.setBounds(bottom.removeFromTop(kButtonH).withWidth(180));
@@ -1136,17 +1170,15 @@ void SettingsContent::resized()
 
     tabs_->setBounds(bounds);
 
-    layoutAudioPage();
-    layoutTranslationPage();
-    layoutSubtitlesPage();
-    layoutCredentialsPage();
-    layoutDiagnosticsPage();
-    layoutAdvancedPage();
+    // The pages lay themselves out: each ui::ScrollablePage measures and
+    // positions its body inside its own resized() (driven here by the
+    // TabbedComponent sizing the current page). Hidden pages measure when
+    // they become current - their widgets wait in the body meanwhile.
 }
 
-void SettingsContent::layoutAudioPage()
+int SettingsContent::layoutAudioPage(int width)
 {
-    auto b = audioPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
 
     deviceCaption_.setBounds(b.removeFromTop(kCaptionH));
     {
@@ -1189,12 +1221,17 @@ void SettingsContent::layoutAudioPage()
     b.removeFromTop(kRowGap);
     channelNoteLabel_.setBounds(b.removeFromTop(16));
     b.removeFromTop(kRowGap);
-    audioRestartHintLabel_.setBounds(b.withHeight(28));
+    audioRestartHintLabel_.setBounds(b.removeFromTop(28));
+
+    // Everything the page needs sits above this line; the viewport hands the
+    // rest to the scroll bar. kMeasureHeight is the measuring stick - the
+    // answer is what the stack actually consumed, plus the bottom padding.
+    return kMeasureHeight - b.getHeight() - kPad;
 }
 
-void SettingsContent::layoutTranslationPage()
+int SettingsContent::layoutTranslationPage(int width)
 {
-    auto b = translationPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
 
     auto cols = b.removeFromTop(kCaptionH + kControlH + 4);   // consumed from b too
     auto left = cols.removeFromLeft(cols.getWidth() / 2);
@@ -1234,11 +1271,14 @@ void SettingsContent::layoutTranslationPage()
     b.removeFromTop(kRowGap);
     jitterCaption_.setBounds(b.removeFromTop(kCaptionH));
     jitterSlider_.setBounds(b.removeFromTop(kControlH));
+
+    return kMeasureHeight - b.getHeight() - kPad;
 }
 
-void SettingsContent::layoutSubtitlesPage()
+int SettingsContent::layoutSubtitlesPage(int width)
 {
-    auto b = subtitlesPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
+    const int trackH = kMeasureHeight - 2 * kPad;   // both columns start this tall
 
     // Two columns: the transport (what NDI carries) left, the look (what the
     // audience reads) right, with the live preview under the look. Every row
@@ -1267,7 +1307,7 @@ void SettingsContent::layoutSubtitlesPage()
     ndiFpsChoice_.setBounds(b.removeFromTop(kControlH));
     b.removeFromTop(kRowGap);
 
-    ndiHintLabel_.setBounds(b.withHeight(80));
+    ndiHintLabel_.setBounds(b.removeFromTop(80));
 
     // ------------------------------------------------------------- right: the look
     auto rb = right;
@@ -1332,15 +1372,22 @@ void SettingsContent::layoutSubtitlesPage()
     resetAppearanceButton_.setBounds(rb.removeFromTop(kButtonH).withWidth(240));
     rb.removeFromTop(kRowGap);
 
-    // Preview: the remaining space. Checkerboard first, the rendered caption
-    // over it - the transparency claim becomes a picture, not a paragraph.
+    // Preview: a fixed-height window. A measured page cannot hand the last
+    // widget "the rest of the rectangle" - the viewport decides the height -
+    // so the preview claims its own strip and the checkerboard scales to it.
     previewCaption_.setBounds(rb.removeFromTop(kCaptionH));
-    subtitlePreview_->setBounds(rb);
+    subtitlePreview_->setBounds(rb.removeFromTop(kPreviewH));
+
+    // The page is as tall as its TALLER column (the ui::ScrollablePage
+    // monotone contract holds: nothing here depends on the leftover height).
+    const int leftUsed = trackH - b.getHeight();
+    const int rightUsed = trackH - rb.getHeight();
+    return kPad + std::max(leftUsed, rightUsed);
 }
 
-void SettingsContent::layoutCredentialsPage()
+int SettingsContent::layoutCredentialsPage(int width)
 {
-    auto b = credentialsPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
 
     credStatusLabel_.setBounds(b.removeFromTop(22));
     b.removeFromTop(kRowGap);
@@ -1354,11 +1401,13 @@ void SettingsContent::layoutCredentialsPage()
     }
     b.removeFromTop(kRowGap);
     keyHintLabel_.setBounds(b.removeFromTop(44));
+
+    return kMeasureHeight - b.getHeight() - kPad;
 }
 
-void SettingsContent::layoutDiagnosticsPage()
+int SettingsContent::layoutDiagnosticsPage(int width)
 {
-    auto b = diagnosticsPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
 
     logLevelCaption_.setBounds(b.removeFromTop(kCaptionH));
     logLevelChoice_.setBounds(b.removeFromTop(kControlH).withWidth(200));
@@ -1367,12 +1416,14 @@ void SettingsContent::layoutDiagnosticsPage()
     b.removeFromTop(kRowGap);
     exportDiagnosticsButton_.setBounds(b.removeFromTop(kButtonH).withWidth(200));
     b.removeFromTop(kRowGap);
-    logHintLabel_.setBounds(b.withHeight(44));
+    logHintLabel_.setBounds(b.removeFromTop(44));
+
+    return kMeasureHeight - b.getHeight() - kPad;
 }
 
-void SettingsContent::layoutAdvancedPage()
+int SettingsContent::layoutAdvancedPage(int width)
 {
-    auto b = advancedPage_->getLocalBounds().reduced(kPad);
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kPad);
 
     developerToggle_.setBounds(b.removeFromTop(24));
     b.removeFromTop(kRowGap);
@@ -1408,15 +1459,20 @@ void SettingsContent::layoutAdvancedPage()
     right.removeFromTop(4);
     loopbackToggle_.setBounds(right.removeFromTop(24));
     right.removeFromTop(kRowGap);
-    developerHintLabel_.setBounds(right.withHeight(56));
+    developerHintLabel_.setBounds(right.removeFromTop(56));
+
+    // Both columns live inside the fixed devBlockH - the block arithmetic is
+    // the page's own, the return just closes the stack with the bottom pad.
+    return kMeasureHeight - b.getHeight() - kPad;
 }
 
 // =========================================================================== SettingsWindow
 
-SettingsWindow::SettingsWindow(ApplicationController& controller)
+SettingsWindow::SettingsWindow(ApplicationController& controller, juce::Component& ownerWindow)
     : juce::DocumentWindow("LingoFlow Settings",
                            juce::Colour(0xff1a1d20u),
-                           juce::DocumentWindow::closeButton)
+                           juce::DocumentWindow::closeButton),
+      ownerWindow_(ownerWindow)
 {
     setUsingNativeTitleBar(true);
     // No delete-on-close: close hides, the owner window owns the lifetime
@@ -1427,12 +1483,16 @@ SettingsWindow::SettingsWindow(ApplicationController& controller)
     setContentOwned(content, true);
 
     setResizable(true, true);
-    // the UI redesign: tabs made the old column-stacking height unnecessary; the widest
-    // page (Audio) and the tallest (Advanced) fit comfortably here.
-    setResizeLimits(640, 560, 4000, 4000);
-    setSize(820, 640);
+    // the UI redesign made the tabs; venue task 4 §3 made the pages
+    // scrollable: the window no longer has to grow to the tallest page, it
+    // shows one honest viewport and Apply outside the scroll. 820x620 keeps
+    // every short page unscrolled on a venue laptop; taller ones scroll
+    // instead of cutting their bottom rows off.
+    setResizeLimits(640, 480, 4000, 4000);
+    setSize(820, 620);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
+    becomeModal();
 }
 
 void SettingsWindow::reopen()
@@ -1442,10 +1502,54 @@ void SettingsWindow::reopen()
 
     setVisible(true);
     toFront(true);   ///< the component-level bring-to-front; no focus tricks needed
+    becomeModal();   // dismissal ended the modal state - a reopen begins it again
+}
+
+void SettingsWindow::becomeModal()
+{
+    // Venue task 4 §4. enterModalState returns immediately and runs NO nested
+    // event loop (unlike runModalLoop): the message thread keeps dispatching,
+    // so the audio engine, the network threads and the operator window's own
+    // refresh clock are untouched, and a Stop or a quit behind this dialog can
+    // never deadlock on it. Input to every other window is blocked by JUCE's
+    // dispatch rule - the operator cannot drive the main screen mid-draft.
+    //
+    // Closing (closeButtonPressed) ends the modal state EXPLICITLY and the
+    // dismissal callback hands control back to the operator window one loop-
+    // pass later. The explicit call is deliberate: JUCE's hide-auto-cancel
+    // needs a real showing->hidden transition, which only a peer-backed window
+    // has - relying on it alone would make the guarantee untestable headless
+    // and fragile to a close that arrives while the window is mid-show.
+    // deleteWhenDismissed stays false: this dialog is hidden and reopened,
+    // never destroyed per close (one settings object, one config funnel).
+    if (isCurrentlyModal())
+        return;   // a duplicate reopen never stacks modality on itself
+
+    enterModalState(true,
+                    juce::ModalCallbackFunction::create(
+                        [this](int)
+                        {
+                            // Dismissed by any route (the X, a hide, the quit
+                            // teardown): the main window gets the focus back.
+                            // Guarded for shutdown, where the parent may be
+                            // on its way out already.
+                            if (auto* topLevel = ownerWindow_.getTopLevelComponent())
+                                topLevel->toFront(true);
+                        }),
+                    false);
 }
 
 void SettingsWindow::closeButtonPressed()
 {
+    // End the modal state EXPLICITLY, then hide. (JUCE documents a hide as an
+    // auto-cancel, but the unit probe on this very tree saw that watcher path
+    // never fire without a peer - and the close button is not the only way a
+    // dialog ends: the explicit call covers every path the same way. The
+    // removal and the focus-return callback then land on the next message-loop
+    // pass, one frame - the application loop never stops, so they always run.)
+    if (isCurrentlyModal())
+        exitModalState();
+
     setVisible(false);
 }
 

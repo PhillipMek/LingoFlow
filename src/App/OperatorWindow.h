@@ -8,12 +8,18 @@
 // logic" is kept out by construction.
 //
 // The visual contract (it, on top of the earlier information architecture):
-//   header -> SYSTEM STATUS card -> AUDIO card (paired INPUT/OUTPUT columns)
-//   -> TRANSLATION card -> HEALTH card (with the door to Diagnostics)
-//   -> command bar (START/STOP). Colour is state only; the spacing scale is
+//   header -> [scroll: SYSTEM STATUS card -> AUDIO card (paired INPUT/OUTPUT
+//   columns) -> TRANSLATION card -> HEALTH card] -> note -> command bar
+//   (START/STOP). Colour is state only; the spacing scale is
 //   4/8/12/16/24/32; no monospace and no engineering explanations on this
 //   screen - the applied-glide detail and the arithmetic behind the latency
 //   line live in the Diagnostics window.
+//
+// Venue task 4 §1 compacted the column (status and health became 2x2 grids,
+// captions moved inline with their controls, the translation rows merged) and
+// pinned the header and the command bar outside the scroll - the buttons the
+// show runs on are never below the fold; the cards that inform are the ones
+// that may scroll.
 //
 // Threading: everything runs on the message thread. The timer (100 ms) is a
 // repaint clock over atomic snapshots - a slow paint stalls paint only, never
@@ -39,6 +45,7 @@
 
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
+#include "App/UiWidgets.h"
 #include "Audio/LevelMeter.h"
 
 namespace liveai {
@@ -56,10 +63,6 @@ public:
     void setLevels(const UiMeterView& view);
     void paint(juce::Graphics& g) override;
 
-    /// Natural height of the card column for the current width - the
-    /// viewport's scroll extent (see resized()).
-    int preferredHeight() const;
-
 private:
     static float positionForDb(float db) noexcept;   ///< -60..0 dBFS across the bar
 
@@ -70,6 +73,14 @@ private:
 /// the UI redesign visual hierarchy. Raw counters, the full latency accounting and the
 /// technical gain-glide detail are the Diagnostics window's business; this
 /// screen answers "ready? routed? levels? translating? act?" in one glance.
+///
+/// Venue task 4 §1 gave the screen its vertical shape: the header (identity +
+/// Settings) and the command bar (note + START/STOP) are PINNED to the window,
+/// the four information cards scroll between them inside a ui::ScrollablePage,
+/// and the cards themselves got their compact forms (status and health as
+/// 2x2 grids, captions inline with their controls, the merged translation
+/// row). The command buttons used to sit below the fold of a laptop screen -
+/// on a stage that is the one control that must always be reachable.
 class OperatorContent final : public juce::Component, private juce::Timer
 {
 public:
@@ -77,13 +88,28 @@ public:
     ~OperatorContent() override;   ///< defined where SettingsWindow is complete
 
     void paint(juce::Graphics& g) override;
-
-    /// Natural height of the card column for the current width - the
-    /// viewport's scroll extent (see resized()).
-    int preferredHeight() const;
     void resized() override;
 
 private:
+    /// The scrollable card column. It positions the owner's card widgets for
+    /// the width the viewport offers and returns the height the cards need
+    /// (the ui::ScrollablePage measure contract - measurement and placement
+    /// are one pass, so they cannot disagree), and it paints the card panels
+    /// under the rects that same pass computed.
+    class CardsSurface final : public ui::ScrollablePage::Body
+    {
+    public:
+        explicit CardsSurface(OperatorContent& owner) : owner_(owner) {}
+
+        int layout(int width);
+        void paintContent(juce::Graphics& g, const juce::Rectangle<int>& area) override;
+
+    private:
+        OperatorContent& owner_;   ///< outlives the surface: it owns the page
+
+        // Card rectangles, computed by layout() and consumed by paintContent().
+        juce::Rectangle<int> statusCard_, audioCard_, translationCard_, healthCard_;
+    };
     // ------------------------------------------------------------ refresh
     void timerCallback() override;
     void rebuild();
@@ -115,13 +141,14 @@ private:
     static juce::Colour stateColour(std::string_view state) noexcept;
     static juce::String stateGlyph(std::string_view state) noexcept;
 
-    /// One status row: "Audio  РІвЂ”РЏ Running" - dot and word share the state's
-    /// colour, the caption stays neutral. Painted as two labels per row.
-    void layoutStatusRow(juce::Rectangle<int>& area, juce::Label& caption,
-                         juce::Label& value) const;
-
     ApplicationController& controller_;
     std::string actionNote_;
+
+    // ------------------------------------------------------- the scrollable middle
+    /// The card column inside its ui::ScrollablePage (venue task 4 §1): the
+    /// header above and the command bar below are pinned, the cards scroll.
+    std::unique_ptr<ui::ScrollablePage> cardsPage_;
+    CardsSurface* cards_ = nullptr;   ///< owned by the page's viewport
 
     // ---------------------------------------------------------------- header
     juce::Label titleLabel_;
@@ -190,9 +217,6 @@ private:
     // ------------------------------------------------------------- command bar
     juce::TextButton startButton_ { "Start" };
     juce::TextButton stopButton_ { "Stop" };
-
-    // Card rectangles, computed in resized() and painted in paint().
-    juce::Rectangle<int> statusCard_, audioCard_, translationCard_, healthCard_;
 
     // Option caches: the window's only lists, mirrored from the panel.
     std::vector<UiOption> deviceCache_, targetCache_;

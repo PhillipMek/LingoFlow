@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <memory>
 #include <utility>
 
 #include "App/DiagnosticsWindow.h"
@@ -45,12 +46,28 @@ constexpr int kControlH  = 30;   // ComboBox height, everywhere
 constexpr int kSmallBtnH = 30;   // Refresh / Diagnostics
 constexpr int kCommandH  = 46;   // START / STOP - the tallest controls on screen
 constexpr int kMeterH    = 22;
-constexpr int kStatusRowH = 24;
-constexpr int kHealthRowH = 22;
+constexpr int kStatusRowH = 24;  // one row of the 2x2 status grid (task 4 §1)
+constexpr int kHealthRowH = 22;  // one row of the 2x2 health grid (task 4 §1)
 
-/// One AUDIO column: caption, channel combo, meter, numeric level, gain, mute.
+/// The height CardsSurface::layout measures against - taller than the card
+/// column ever is, so the removeFromTop walk consumes its true total and the
+/// returned content height is exact (the same contract the settings pages
+/// use).
+constexpr int kMeasureHeight = 20000;
+
+/// Inline caption widths (task 4 §1): a caption ABOVE its control cost a 14 px
+/// row each; the same words BESIDE it cost nothing and still say what the
+/// control is. Sized to the longest string each carries at its font.
+constexpr int kChannelCapW = 78;    ///< "Channel"
+constexpr int kLevelCapW   = 90;    ///< "Input level" / "Output level"
+constexpr int kGainCapW    = 110;   ///< "Gain  +2.0 dB"
+constexpr int kStatusCapW  = 110;   ///< "Translation" - the longest status caption
+constexpr int kDeviceCapW  = 210;   ///< "Device (one ASIO in/out)"
+
+/// One AUDIO column: channel row, level line, meter, gain row, mute.
 /// The same block height on both sides is what makes the pair read as a pair.
-constexpr int kColumnH = 14 + kControlH + 4 + 14 + kMeterH + 16 + 4 + 14 + 28 + kRowGap + 30;
+/// Task 4 §1: the three captions joined their controls' rows - 184 became 144.
+constexpr int kColumnH = kControlH + 4 + 18 + kMeterH + 4 + 28 + kRowGap + 30;
 
 juce::Font uiFont(float height = 15.0f, bool bold = false)
 {
@@ -76,13 +93,12 @@ juce::Slider& fader(juce::Slider& slider, double min, double max, double interva
     slider.setRange(min, max, interval);
     slider.setSliderStyle(juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 74, 26);
-    // The screen scrolls with the wheel, and a cursor crossing a gain fader on
-    // its way must never ride that scroll into the live audio path: JUCE's
-    // own rule - with the wheel disabled the Slider hands the event back to
-    // the parent (the viewport), so scrolling keeps working and the gain
-    // stays exactly where the operator left it. Drag, click and keyboard on
-    // the fader are untouched.
-    slider.setScrollWheelEnabled(false);
+    // The application-wide wheel rule now lives in ui::wheelSafeSlider (venue
+    // task 4 §2): with the wheel disabled a JUCE Slider hands the event back
+    // to its parent chain, so scrolling over a gain fader scrolls the card
+    // column - the live audio value never moves by accident. Drag, click,
+    // the fader's own text box and keyboard editing are untouched.
+    ui::wheelSafeSlider(slider);
     slider.setColour(juce::Slider::backgroundColourId, ink::card);
     slider.setColour(juce::Slider::trackColourId, ink::blue.withAlpha(0.55f));
     slider.setColour(juce::Slider::thumbColourId, ink::textPrimary);
@@ -111,29 +127,18 @@ void styleQuietButton(juce::TextButton& button)
     button.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
 }
 
-/// The viewport pattern JUCE expects for a width-fitting, height-deciding
-/// child: on every resize the viewport offers the width of its content
-/// holder (getMaximumVisibleWidth - deliberately not getViewWidth, which
-/// mirrors the child's own width and would deadlock at zero), and the child's
-/// resized() then decides the scrollable height - see OperatorContent::resized.
-/// Without this nudge the child would never hear about window resizes: a
-/// Viewport does not touch its content's bounds.
-class OperatorViewport final : public juce::Viewport
-{
-public:
-    using juce::Viewport::Viewport;
-
-    void resized() override
-    {
-        juce::Viewport::resized();
-
-        if (auto* content = getViewedComponent())
-            content->setSize(getMaximumVisibleWidth(), content->getHeight());
-    }
-};
 /// How many history lines this screen shows: a tail, not a transcript - the
 /// full bounded history stays in the model (and readable in Diagnostics).
 constexpr int kOperatorHistoryTail = 3;
+
+/// One status cell of the 2x2 grid: caption left (fixed width, shared so the
+/// two columns read as columns), value right of it (venue task 4 §1 - the
+/// four rows were the card's biggest mouth).
+void layoutStatusCell(juce::Rectangle<int> cell, juce::Label& caption, juce::Label& value)
+{
+    caption.setBounds(cell.removeFromLeft(kStatusCapW).reduced(0, 2));
+    value.setBounds(cell.reduced(0, 2));
+}
 
 } // namespace
 
@@ -198,6 +203,17 @@ void MeterBar::paint(juce::Graphics& g)
 OperatorContent::OperatorContent(ApplicationController& controller)
     : controller_(controller)
 {
+    // The scrollable card column first (venue task 4 §1): everything that
+    // INFORMS lives inside it; the header above and the command bar below are
+    // pinned outside, so Start/Stop/Settings are reachable at any scroll
+    // position and on any screen. The surface measures and places the cards
+    // in one pass - the ui::ScrollablePage contract.
+    auto surface = std::make_unique<CardsSurface>(*this);
+    cards_ = surface.get();
+    cardsPage_ = std::make_unique<ui::ScrollablePage>(
+        std::move(surface), [this](int width) { return cards_->layout(width); });
+    addAndMakeVisible(*cardsPage_);
+
     // ---------------------------------------------------------------- header
     titleLabel_.setFont(uiFont(20.0f, true));
     titleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
@@ -224,69 +240,75 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(settingsButton_);
 
     // ---------------------------------------------------------- system status
-    caption(statusHeader_, "SYSTEM STATUS", *this, ink::textMuted, 11.0f);
+    caption(statusHeader_, "SYSTEM STATUS", *cards_, ink::textMuted, 11.0f);
 
-    caption(appCaption_, "App", *this, ink::textSecondary, 14.0f);
-    caption(audioCaption_, "Audio", *this, ink::textSecondary, 14.0f);
-    caption(sessionCaption_, "Translation", *this, ink::textSecondary, 14.0f);
-    caption(ndiCaption_, "NDI", *this, ink::textSecondary, 14.0f);
+    caption(appCaption_, "App", *cards_, ink::textSecondary, 14.0f);
+    caption(audioCaption_, "Audio", *cards_, ink::textSecondary, 14.0f);
+    caption(sessionCaption_, "Translation", *cards_, ink::textSecondary, 14.0f);
+    caption(ndiCaption_, "NDI", *cards_, ink::textSecondary, 14.0f);
 
     for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
     {
         chip->setFont(uiFont(14.0f));
-        addAndMakeVisible(*chip);
+        cards_->addAndMakeVisible(*chip);
     }
 
     detailLabel_.setFont(uiFont(13.0f));
     detailLabel_.setColour(juce::Label::textColourId, ink::amber);
-    addAndMakeVisible(detailLabel_);
+    cards_->addAndMakeVisible(detailLabel_);
 
     credentialLabel_.setFont(uiFont(12.0f));
     credentialLabel_.setColour(juce::Label::textColourId, ink::textMuted);
-    addAndMakeVisible(credentialLabel_);
+    cards_->addAndMakeVisible(credentialLabel_);
 
     devDetailLabel_.setFont(uiFont(11.0f));
     devDetailLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     devDetailLabel_.setVisible(false);
-    addAndMakeVisible(devDetailLabel_);
+    cards_->addAndMakeVisible(devDetailLabel_);
 
     // ------------------------------------------------------------------ audio
-    caption(audioHeader_, "AUDIO", *this, ink::textMuted, 11.0f);
+    caption(audioHeader_, "AUDIO", *cards_, ink::textMuted, 11.0f);
 
-    caption(deviceCaption_, "Device (one ASIO in/out)", *this);
+    caption(deviceCaption_, "Device (one ASIO in/out)", *cards_);
     deviceChoice_.onChange = [this] { deviceSelected(); };
     styleBox(deviceChoice_);
-    addAndMakeVisible(deviceChoice_);
+    cards_->addAndMakeVisible(deviceChoice_);
 
     refreshDevicesButton_.onClick = [this] { refreshDevicesPressed(); };
     styleQuietButton(refreshDevicesButton_);
-    addAndMakeVisible(refreshDevicesButton_);
+    cards_->addAndMakeVisible(refreshDevicesButton_);
 
     deviceNoteLabel_.setFont(uiFont(11.0f));
     deviceNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
-    addAndMakeVisible(deviceNoteLabel_);
+    cards_->addAndMakeVisible(deviceNoteLabel_);
 
-    caption(inputChannelCaption_, "Channel", *this);
+    caption(inputChannelCaption_, "Channel", *cards_);
     inputChannelChoice_.onChange = [this] { channelChanged(); };
     styleBox(inputChannelChoice_);
-    addAndMakeVisible(inputChannelChoice_);
+    cards_->addAndMakeVisible(inputChannelChoice_);
 
-    caption(outputChannelCaption_, "Channel", *this);
+    caption(outputChannelCaption_, "Channel", *cards_);
     outputChannelChoice_.onChange = [this] { channelChanged(); };
     styleBox(outputChannelChoice_);
-    addAndMakeVisible(outputChannelChoice_);
+    cards_->addAndMakeVisible(outputChannelChoice_);
 
     channelNoteLabel_.setFont(uiFont(11.0f));
     channelNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
-    addAndMakeVisible(channelNoteLabel_);
+    cards_->addAndMakeVisible(channelNoteLabel_);
 
-    caption(inputMeterCaption_, "Input level", *this);
-    addAndMakeVisible(inputMeter_);
-    caption(inputLevelLabel_, "", *this, ink::textSecondary, 12.0f);
+    caption(inputMeterCaption_, "Input level", *cards_);
+    cards_->addAndMakeVisible(inputMeter_);
+    // The numeric readout rides the caption's row now (task 4 §1): one line
+    // "Input level      -24.3 dB   peak -12.0 dB" above the bar. Right-aligned
+    // so the digits form a column against the bar's right edge.
+    inputLevelLabel_.setFont(uiFont(12.0f));
+    inputLevelLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    inputLevelLabel_.setJustificationType(juce::Justification::centredRight);
+    cards_->addAndMakeVisible(inputLevelLabel_);
 
-    caption(inputGainCaption_, "Gain", *this);
+    caption(inputGainCaption_, "Gain", *cards_);
     const auto [gainMin, gainMax] = config::gainRange();
-    fader(inputGainSlider_, gainMin, gainMax, 0.5, *this);
+    fader(inputGainSlider_, gainMin, gainMax, 0.5, *cards_);
     inputGainSlider_.onValueChange = [this] { gainMoved(); };
     inputGainSlider_.onDragStart = [this] { gainDragging_ = true; };
     inputGainSlider_.onDragEnd = [this]
@@ -298,14 +320,17 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     inputMuteButton_.setClickingTogglesState(true);
     inputMuteButton_.onClick = [this] { muteToggled(); };
     styleQuietButton(inputMuteButton_);
-    addAndMakeVisible(inputMuteButton_);
+    cards_->addAndMakeVisible(inputMuteButton_);
 
-    caption(outputMeterCaption_, "Output level", *this);
-    addAndMakeVisible(outputMeter_);
-    caption(outputLevelLabel_, "", *this, ink::textSecondary, 12.0f);
+    caption(outputMeterCaption_, "Output level", *cards_);
+    cards_->addAndMakeVisible(outputMeter_);
+    outputLevelLabel_.setFont(uiFont(12.0f));
+    outputLevelLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    outputLevelLabel_.setJustificationType(juce::Justification::centredRight);
+    cards_->addAndMakeVisible(outputLevelLabel_);
 
-    caption(outputGainCaption_, "Gain", *this);
-    fader(outputGainSlider_, gainMin, gainMax, 0.5, *this);
+    caption(outputGainCaption_, "Gain", *cards_);
+    fader(outputGainSlider_, gainMin, gainMax, 0.5, *cards_);
     outputGainSlider_.onValueChange = [this] { gainMoved(); };
     outputGainSlider_.onDragStart = [this] { gainDragging_ = true; };
     outputGainSlider_.onDragEnd = [this]
@@ -317,62 +342,63 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     outputMuteButton_.setClickingTogglesState(true);
     outputMuteButton_.onClick = [this] { muteToggled(); };
     styleQuietButton(outputMuteButton_);
-    addAndMakeVisible(outputMuteButton_);
+    cards_->addAndMakeVisible(outputMuteButton_);
 
     // ------------------------------------------------------------ translation
-    caption(translationHeader_, "TRANSLATION", *this, ink::textMuted, 11.0f);
+    caption(translationHeader_, "TRANSLATION", *cards_, ink::textMuted, 11.0f);
 
     // The pair as the wire knows it (docs section 5, R8): the target is the
     // operator's choice, the source is what the provider decides by itself.
     // The old "From [combo] -> To [combo]" implied a declaration that never
     // leaves LingoFlow; the expectation lives in Settings, the truth lives
-    // here.
-    caption(targetCaption_, "Target", *this);
+    // here. Task 4 §1 put the source truth and the session state on the
+    // target's row: one line says "Target [ru]  ● running  Source: automatic".
+    caption(targetCaption_, "Target", *cards_);
     targetChoice_.onChange = [this] { targetSelected(); };
     styleBox(targetChoice_);
-    addAndMakeVisible(targetChoice_);
+    cards_->addAndMakeVisible(targetChoice_);
 
-    caption(sourceCaption_, "Source", *this);
+    caption(sourceCaption_, "Source", *cards_);
     sourceValueLabel_.setFont(uiFont(14.0f));
     sourceValueLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
     sourceValueLabel_.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(sourceValueLabel_);
+    cards_->addAndMakeVisible(sourceValueLabel_);
 
     sessionLineLabel_.setFont(uiFont(13.0f));
-    addAndMakeVisible(sessionLineLabel_);
+    cards_->addAndMakeVisible(sessionLineLabel_);
 
     pairWarningLabel_.setFont(uiFont(12.0f));
     pairWarningLabel_.setColour(juce::Label::textColourId, ink::red);
-    addAndMakeVisible(pairWarningLabel_);
+    cards_->addAndMakeVisible(pairWarningLabel_);
 
     currentSubtitleLabel_.setFont(uiFont(18.0f));
     currentSubtitleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
     currentSubtitleLabel_.setJustificationType(juce::Justification::centredLeft);
-    addAndMakeVisible(currentSubtitleLabel_);
+    cards_->addAndMakeVisible(currentSubtitleLabel_);
 
     historyLabel_.setFont(uiFont(12.0f));
     historyLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     historyLabel_.setJustificationType(juce::Justification::topLeft);
-    addAndMakeVisible(historyLabel_);
+    cards_->addAndMakeVisible(historyLabel_);
 
     // ------------------------------------------------------------ live health
-    caption(healthHeader_, "HEALTH", *this, ink::textMuted, 11.0f);
+    caption(healthHeader_, "HEALTH", *cards_, ink::textMuted, 11.0f);
 
-    caption(latencyCaption_, "Latency", *this, ink::textSecondary, 13.0f);
-    caption(jitterCaption_, "Jitter fill", *this, ink::textSecondary, 13.0f);
-    caption(underrunCaption_, "Underruns", *this, ink::textSecondary, 13.0f);
-    caption(reconnectCaption_, "Reconnects", *this, ink::textSecondary, 13.0f);
+    caption(latencyCaption_, "Latency", *cards_, ink::textSecondary, 13.0f);
+    caption(jitterCaption_, "Jitter fill", *cards_, ink::textSecondary, 13.0f);
+    caption(underrunCaption_, "Underruns", *cards_, ink::textSecondary, 13.0f);
+    caption(reconnectCaption_, "Reconnects", *cards_, ink::textSecondary, 13.0f);
 
     for (auto* value : { &latencyValue_, &jitterValue_, &underrunValue_, &reconnectValue_ })
     {
         value->setFont(uiFont(13.0f));
         value->setColour(juce::Label::textColourId, ink::textSecondary);
-        addAndMakeVisible(*value);
+        cards_->addAndMakeVisible(*value);
     }
 
     diagnosticsButton_.onClick = [this] { diagnosticsPressed(); };
     styleQuietButton(diagnosticsButton_);
-    addAndMakeVisible(diagnosticsButton_);
+    cards_->addAndMakeVisible(diagnosticsButton_);
 
     noteLabel_.setFont(uiFont(12.0f));
     noteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
@@ -428,9 +454,11 @@ void OperatorContent::settingsPressed()
 {
     // One dialog object for the lifetime of the window; close hides it, and a
     // reopen always re-reads the settings first - a second stale copy of the
-    // configuration is exactly the thing this product refuses to have.
+    // configuration is exactly the thing this product refuses to have. The
+    // dialog is modal while open (venue task 4 §4) and this screen is the
+    // window it hands control back to.
     if (settingsWindow_ == nullptr)
-        settingsWindow_ = std::make_unique<SettingsWindow>(controller_);
+        settingsWindow_ = std::make_unique<SettingsWindow>(controller_, *this);
     else
         settingsWindow_->reopen();
 }
@@ -438,9 +466,10 @@ void OperatorContent::settingsPressed()
 void OperatorContent::diagnosticsPressed()
 {
     // the UI redesign: the engineering surface opens on request, owns the Export button,
-    // and follows the same hide/reopen lifetime rule as the settings dialog.
+    // and follows the same hide/reopen lifetime rule as the settings dialog -
+    // and the same modal rule (venue task 4 §4).
     if (diagnosticsWindow_ == nullptr)
-        diagnosticsWindow_ = std::make_unique<DiagnosticsWindow>(controller_);
+        diagnosticsWindow_ = std::make_unique<DiagnosticsWindow>(controller_, *this);
     else
         diagnosticsWindow_->reopen();
 }
@@ -587,14 +616,6 @@ juce::String OperatorContent::stateGlyph(std::string_view state) noexcept
     return off ? juce::String::fromUTF8("\u25cb ") : juce::String::fromUTF8("\u25cf ");
 }
 
-void OperatorContent::layoutStatusRow(juce::Rectangle<int>& area, juce::Label& captionLabel,
-                                      juce::Label& value) const
-{
-    auto row = area.removeFromTop(kStatusRowH);
-    captionLabel.setBounds(row.removeFromLeft(140).reduced(0, 2));
-    value.setBounds(row.reduced(0, 2));
-}
-
 void OperatorContent::syncOptions(juce::ComboBox& box, std::vector<UiOption>& cache,
                                   const std::vector<UiOption>& fresh, int selectedIndex)
 {
@@ -636,10 +657,16 @@ void OperatorContent::rebuild()
     ndiValue_.setColour(juce::Label::textColourId, stateColour(panel.ndiState));
 
     // Warnings only when they ask something (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§9): "ok" paints nothing.
-    detailLabel_.setText(panel.detail == "ok" ? juce::String() : juce::String(panel.detail),
-                         juce::NotificationType::dontSendNotification);
+    const juce::String detailText = panel.detail == "ok"
+                                        ? juce::String()
+                                        : juce::String(panel.detail);
+    detailLabel_.setText(detailText, juce::NotificationType::dontSendNotification);
     detailLabel_.setColour(juce::Label::textColourId,
                            panel.faulted ? ink::red : ink::amber);
+    // Task 4 §1: an empty line reserves no row - the card shrinks to what it
+    // actually says (visibility is read by CardsSurface::layout, which runs at
+    // the end of this function through resized()).
+    detailLabel_.setVisible(!detailText.isEmpty());
 
     // Design note: the credential state belongs to the main screen too - an
     // operator must be able to see "no key" before pressing Start, not only
@@ -689,6 +716,9 @@ void OperatorContent::rebuild()
                               juce::NotificationType::dontSendNotification);
     pairWarningLabel_.setText(juce::String(panel.languagePairWarning),
                               juce::NotificationType::dontSendNotification);
+    // Task 4 §1 again: the warning row is reserved only while a bad pair is
+    // actually on screen - a healthy show does not pay 18 px for silence.
+    pairWarningLabel_.setVisible(!panel.languagePairWarning.empty());
 
     if (!gainDragging_)
     {
@@ -821,13 +851,237 @@ void OperatorContent::rebuild()
                              : ink::textMuted);
 
     updatingWidgets_ = false;
-    resized();   // the developer row changes the content height mid-run
+    resized();   // the developer row and the detail lines change the height mid-run
     repaint();
+    cards_->repaint();   // the card panels follow the visibility of those lines
 }
 
 // ------------------------------------------------------------------------------ paint
 
 void OperatorContent::paint(juce::Graphics& g)
+{
+    // The pinned frame: header above, command bar below. The card column paints
+    // itself inside its own surface (CardsSurface::paintContent) - the two
+    // halves share the house background, so the split is invisible.
+    g.fillAll(ink::background);
+}
+
+// ---------------------------------------------------------------------------- layout
+
+namespace {
+
+/// One AUDIO column laid out inside its rectangle (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§5: the same block on
+/// both sides - device is shared above them, channel/meter/gain/mute are not).
+void layoutAudioColumn(juce::Rectangle<int>& col,
+                       juce::Label& channelCaption, juce::ComboBox& channelBox,
+                       juce::Label& levelCaption, MeterBar& meter, juce::Label& levelLabel,
+                       juce::Label& gainCaption, juce::Slider& gainSlider,
+                       juce::TextButton& muteButton)
+{
+    // Venue task 4 §1: the three captions moved INTO their control's row -
+    // "Channel [combo]", "Input level   -24.3 dB peak", "Gain +2.0 dB [====]".
+    // Same words, same controls, 40 px less per column, and nothing got
+    // smaller to achieve it.
+    auto channelRow = col.removeFromTop(kControlH);
+    channelCaption.setBounds(channelRow.removeFromLeft(kChannelCapW));
+    channelBox.setBounds(channelRow.withTrimmedLeft(8));
+    col.removeFromTop(4);
+
+    auto levelRow = col.removeFromTop(18);
+    levelCaption.setBounds(levelRow.removeFromLeft(kLevelCapW));
+    levelLabel.setBounds(levelRow);
+    meter.setBounds(col.removeFromTop(kMeterH));
+    col.removeFromTop(4);
+
+    auto gainRow = col.removeFromTop(28);
+    gainCaption.setBounds(gainRow.removeFromLeft(kGainCapW));
+    gainSlider.setBounds(gainRow.withTrimmedLeft(6));
+    col.removeFromTop(kRowGap);
+
+    muteButton.setBounds(col.removeFromTop(30));
+}
+
+/// One cell of a 2x2 grid: fixed caption column, value beside it.
+void layoutGridCell(juce::Rectangle<int> cell, juce::Label& caption, juce::Label& value,
+                    int captionWidth)
+{
+    caption.setBounds(cell.removeFromLeft(captionWidth));
+    value.setBounds(cell);
+}
+
+} // namespace
+
+// =========================================================================== CardsSurface
+
+int OperatorContent::CardsSurface::layout(int width)
+{
+    // One pass measures AND places: the removeFromTop walk consumes exactly the
+    // height the cards need, and the answer is what the viewport scrolls (the
+    // ui::ScrollablePage contract - no mirrored preferredHeight() anymore).
+    auto bounds = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kMargin);
+    const bool stacked = bounds.getWidth() < 760;   // narrow: the audio pair stacks
+
+    // 1. SYSTEM STATUS card: the four states as a 2x2 grid (task 4 §1 - four
+    // stacked rows were 96 px of mostly-quiet labels). The lines that ask
+    // attention reserve their rows only while they carry text.
+    {
+        const bool hasDetail = owner_.detailLabel_.isVisible();
+        const bool hasDev = owner_.devDetailLabel_.isVisible();
+        const int height = kCardPad * 2 + 16 + 6 + 2 * kStatusRowH + 6 + 16
+                         + (hasDetail ? 18 : 0) + (hasDev ? 16 : 0);
+        statusCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
+
+        auto inner = statusCard_.reduced(kCardPad);
+        owner_.statusHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(6);
+
+        auto row1 = inner.removeFromTop(kStatusRowH);
+        layoutStatusCell(row1.removeFromLeft(row1.getWidth() / 2),
+                         owner_.appCaption_, owner_.appValue_);
+        row1.removeFromLeft(12);
+        layoutStatusCell(row1, owner_.audioCaption_, owner_.audioValue_);
+
+        auto row2 = inner.removeFromTop(kStatusRowH);
+        layoutStatusCell(row2.removeFromLeft(row2.getWidth() / 2),
+                         owner_.sessionCaption_, owner_.sessionValue_);
+        row2.removeFromLeft(12);
+        layoutStatusCell(row2, owner_.ndiCaption_, owner_.ndiValue_);
+        inner.removeFromTop(6);
+
+        if (hasDetail)
+            owner_.detailLabel_.setBounds(inner.removeFromTop(18));
+        owner_.credentialLabel_.setBounds(inner.removeFromTop(16));
+        if (hasDev)
+            owner_.devDetailLabel_.setBounds(inner.removeFromTop(16));
+    }
+
+    // 2. AUDIO card: shared device row on top, then the paired columns. The
+    //    device caption shares the combo's row now (task 4 §1, same rule as
+    //    the columns).
+    {
+        const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
+        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + kRowGap
+                         + columnsHeight + (stacked ? 0 : kRowGap + 14);
+        audioCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
+
+        auto inner = audioCard_.reduced(kCardPad);
+        owner_.audioHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+        {
+            auto row = inner.removeFromTop(kControlH);
+            owner_.deviceCaption_.setBounds(row.removeFromLeft(kDeviceCapW));
+            row.removeFromLeft(8);
+            owner_.refreshDevicesButton_.setBounds(row.removeFromRight(90));
+            owner_.deviceChoice_.setBounds(row.withTrimmedLeft(8));
+        }
+        owner_.deviceNoteLabel_.setBounds(inner.removeFromTop(14));
+        inner.removeFromTop(kRowGap);
+
+        auto columns = inner;
+        if (stacked)
+        {
+            auto inCol = columns.removeFromTop(kColumnH);
+            columns.removeFromTop(kRowGap);
+            auto outCol = columns;   // full width, under the input column
+
+            layoutAudioColumn(inCol, owner_.inputChannelCaption_, owner_.inputChannelChoice_,
+                              owner_.inputMeterCaption_, owner_.inputMeter_,
+                              owner_.inputLevelLabel_,
+                              owner_.inputGainCaption_, owner_.inputGainSlider_,
+                              owner_.inputMuteButton_);
+            layoutAudioColumn(outCol, owner_.outputChannelCaption_, owner_.outputChannelChoice_,
+                              owner_.outputMeterCaption_, owner_.outputMeter_,
+                              owner_.outputLevelLabel_,
+                              owner_.outputGainCaption_, owner_.outputGainSlider_,
+                              owner_.outputMuteButton_);
+            owner_.channelNoteLabel_.setBounds({});
+        }
+        else
+        {
+            auto inCol = columns.removeFromLeft(columns.getWidth() / 2);
+            auto outCol = columns;
+            outCol.removeFromLeft(24);
+
+            layoutAudioColumn(inCol, owner_.inputChannelCaption_, owner_.inputChannelChoice_,
+                              owner_.inputMeterCaption_, owner_.inputMeter_,
+                              owner_.inputLevelLabel_,
+                              owner_.inputGainCaption_, owner_.inputGainSlider_,
+                              owner_.inputMuteButton_);
+            layoutAudioColumn(outCol, owner_.outputChannelCaption_, owner_.outputChannelChoice_,
+                              owner_.outputMeterCaption_, owner_.outputMeter_,
+                              owner_.outputLevelLabel_,
+                              owner_.outputGainCaption_, owner_.outputGainSlider_,
+                              owner_.outputMuteButton_);
+            owner_.channelNoteLabel_.setBounds(outCol.withHeight(14));
+        }
+    }
+
+    // 3. TRANSLATION card: one row for the pair as the wire knows it -
+    //    Target [combo], the session state, and the source truth beside them
+    //    (task 4 §1 merged the two stacked rows; R8's sentence still reads in
+    //    full, just horizontally). No arrow - an arrow drew a pair the wire
+    //    never carries. The live line and the compact tail below.
+    {
+        const bool hasWarning = owner_.pairWarningLabel_.isVisible();
+        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 8
+                         + (hasWarning ? 18 : 0) + 30 + 3 * 16;
+        translationCard_ = bounds.removeFromTop(height);
+        bounds.removeFromTop(kCardGap);
+
+        auto inner = translationCard_.reduced(kCardPad);
+        owner_.translationHeader_.setBounds(inner.removeFromTop(16));
+        inner.removeFromTop(kRowGap);
+
+        auto pairRow = inner.removeFromTop(kControlH);
+        owner_.targetCaption_.setBounds(pairRow.removeFromLeft(52));
+        owner_.targetChoice_.setBounds(pairRow.removeFromLeft(208).withTrimmedLeft(6));
+        owner_.sessionLineLabel_.setBounds(pairRow.removeFromLeft(160).withTrimmedLeft(16));
+        pairRow.removeFromLeft(16);
+        owner_.sourceCaption_.setBounds(pairRow.removeFromLeft(64));
+        owner_.sourceValueLabel_.setBounds(pairRow);
+
+        if (hasWarning)
+            owner_.pairWarningLabel_.setBounds(inner.removeFromTop(18));
+        owner_.currentSubtitleLabel_.setBounds(inner.removeFromTop(30));
+        owner_.historyLabel_.setBounds(inner);   // kOperatorHistoryTail * 16, reserved above
+    }
+
+    // 4. HEALTH card: four numbers as a 2x2 grid, the (deliberately quiet)
+    //    door to detail riding the header row (task 4 §1 - the card lost its
+    //    four stacked rows and its dedicated button row).
+    {
+        const int height = kCardPad * 2 + kSmallBtnH + 6 + 2 * kHealthRowH;
+        healthCard_ = bounds.removeFromTop(height);
+
+        auto inner = healthCard_.reduced(kCardPad);
+        {
+            auto headerRow = inner.removeFromTop(kSmallBtnH);
+            owner_.diagnosticsButton_.setBounds(headerRow.removeFromRight(140));
+            owner_.healthHeader_.setBounds(headerRow.reduced(0, 8));
+        }
+        inner.removeFromTop(6);
+
+        auto row1 = inner.removeFromTop(kHealthRowH);
+        layoutGridCell(row1.removeFromLeft(row1.getWidth() / 2),
+                       owner_.latencyCaption_, owner_.latencyValue_, 92);
+        row1.removeFromLeft(16);
+        layoutGridCell(row1, owner_.jitterCaption_, owner_.jitterValue_, 92);
+
+        auto row2 = inner.removeFromTop(kHealthRowH);
+        layoutGridCell(row2.removeFromLeft(row2.getWidth() / 2),
+                       owner_.underrunCaption_, owner_.underrunValue_, 92);
+        row2.removeFromLeft(16);
+        layoutGridCell(row2, owner_.reconnectCaption_, owner_.reconnectValue_, 92);
+    }
+
+    // The stack consumed its cards plus the two margins - that is the scroll
+    // extent. No trailing gap: the last card ends the page.
+    return kMeasureHeight - bounds.getHeight();
+}
+
+void OperatorContent::CardsSurface::paintContent(juce::Graphics& g, const juce::Rectangle<int>&)
 {
     g.fillAll(ink::background);
 
@@ -840,72 +1094,12 @@ void OperatorContent::paint(juce::Graphics& g)
     }
 }
 
-// ---------------------------------------------------------------------------- layout
-
-namespace {
-
-/// One AUDIO column laid out inside its rectangle (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§5: the same block on
-/// both sides - device is shared above them, channel/meter/gain/mute are not).
-void layoutAudioColumn(juce::Rectangle<int>& col,
-                       juce::Label& channelCaption, juce::ComboBox& channelBox,
-                       juce::Label& meterCaption, MeterBar& meter, juce::Label& levelLabel,
-                       juce::Label& gainCaption, juce::Slider& gainSlider,
-                       juce::TextButton& muteButton)
-{
-    channelCaption.setBounds(col.removeFromTop(14));
-    channelBox.setBounds(col.removeFromTop(kControlH));
-    col.removeFromTop(4);
-    meterCaption.setBounds(col.removeFromTop(14));
-    meter.setBounds(col.removeFromTop(kMeterH));
-    levelLabel.setBounds(col.removeFromTop(16));
-    col.removeFromTop(4);
-    gainCaption.setBounds(col.removeFromTop(14));
-    gainSlider.setBounds(col.removeFromTop(28));
-    col.removeFromTop(kRowGap);
-    muteButton.setBounds(col.removeFromTop(30));
-}
-
-} // namespace
-
-int OperatorContent::preferredHeight() const
-{
-    // The natural height of the card column: the same constants resized()
-    // consumes, summed (kept in sync by construction - both read the stacked
-    // flag off the same width rule). Inside the window's viewport this is the
-    // scrollable content height: the window can be shorter than the screen
-    // while every card keeps its size.
-    const bool stacked = getWidth() - 2 * kMargin < 760;
-
-    const int status = kCardPad * 2 + 16 + kRowGap + 4 * kStatusRowH + kRowGap + 18 + 16
-                     + (devBadge_.isVisible() ? 16 : 0);
-    const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
-    const int audio = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
-                    + columnsHeight + 14;
-    const int translation = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 20 + 12
-                          + 18 + kRowGap + 30 + 3 * 16;
-    const int health = kCardPad * 2 + 16 + kRowGap + 4 * kHealthRowH + kRowGap + kSmallBtnH;
-
-    return 2 * kMargin + 36 + kCardGap + status + kCardGap + audio + kCardGap
-         + translation + kCardGap + health + kRowGap + 18 + kRowGap + kCommandH;
-}
-
 void OperatorContent::resized()
 {
-    // Inside the window's viewport the rule is the documented one: the
-    // viewport offers a width (its visible track), the viewed component
-    // decides its own height. Both are applied only when they changed -
-    // setSize from resized would otherwise recurse.
-    auto* viewport = findParentComponentOfClass<juce::Viewport>();
-    const int wantedWidth = viewport != nullptr
-                                ? viewport->getMaximumVisibleWidth()
-                                : getWidth();
-    const int needed = preferredHeight();
-    if (getWidth() != wantedWidth || getHeight() != needed)
-    {
-        setSize(wantedWidth, needed);
-        return;   // the resize re-enters with final bounds; lay out then
-    }
-
+    // Pinned top, pinned bottom, scroll in between (venue task 4 §1). This
+    // function positions the pinned parts and hands the middle to the
+    // ui::ScrollablePage, which measures and lays out the cards for the width
+    // it is given - the cards never see a window resize directly.
     auto bounds = getLocalBounds().reduced(kMargin);
 
     // 1. Header: identity left, the compact developer chip, Settings right.
@@ -915,144 +1109,21 @@ void OperatorContent::resized()
     titleLabel_.setBounds(header);
     bounds.removeFromTop(kCardGap);
 
-    const bool stacked = bounds.getWidth() < 760;   // narrow: the audio pair stacks
+    // 2. The command bar and the action note, built from the bottom so they
+    // are ALWAYS on screen: the buttons a live show runs on are not allowed
+    // to sit below the fold.
+    auto commands = bounds.removeFromBottom(kCommandH);
+    bounds.removeFromBottom(kRowGap);
+    auto noteRow = bounds.removeFromBottom(18);
+    bounds.removeFromBottom(kCardGap);
 
-    // 2. SYSTEM STATUS card: header line (with the app state), three rows,
-    // then the lines that ask attention.
-    {
-        const int height = kCardPad * 2 + 16 + kRowGap
-                         + 4 * kStatusRowH + kRowGap + 18 + 16
-                         + (devBadge_.isVisible() ? 16 : 0);
-        statusCard_ = bounds.removeFromTop(height);
-        bounds.removeFromTop(kCardGap);
+    // 3. Everything between is the scrollable card column.
+    cardsPage_->setBounds(bounds);
 
-        auto inner = statusCard_.reduced(kCardPad);
-        statusHeader_.setBounds(inner.removeFromTop(16));
-        inner.removeFromTop(kRowGap);
-        layoutStatusRow(inner, appCaption_, appValue_);
-        layoutStatusRow(inner, audioCaption_, audioValue_);
-        layoutStatusRow(inner, sessionCaption_, sessionValue_);
-        layoutStatusRow(inner, ndiCaption_, ndiValue_);
-        inner.removeFromTop(kRowGap);
-        detailLabel_.setBounds(inner.removeFromTop(18));
-        credentialLabel_.setBounds(inner.removeFromTop(16));
-        if (devBadge_.isVisible())
-            devDetailLabel_.setBounds(inner.removeFromTop(16));
-    }
-
-    // 3. AUDIO card: shared device row on top, then the paired columns.
-    {
-        const int columnsHeight = stacked ? 2 * kColumnH + kRowGap : kColumnH;
-        const int height = kCardPad * 2 + 16 + kRowGap + 14 + kControlH + 14 + kRowGap
-                         + columnsHeight + 14;   // preferredHeight() mirrors this
-        audioCard_ = bounds.removeFromTop(height);
-        bounds.removeFromTop(kCardGap);
-
-        auto inner = audioCard_.reduced(kCardPad);
-        audioHeader_.setBounds(inner.removeFromTop(16));
-        inner.removeFromTop(kRowGap);
-        deviceCaption_.setBounds(inner.removeFromTop(14));
-        {
-            auto row = inner.removeFromTop(kControlH);
-            refreshDevicesButton_.setBounds(row.removeFromRight(90).withTrimmedLeft(kRowGap));
-            deviceChoice_.setBounds(row);
-        }
-        deviceNoteLabel_.setBounds(inner.removeFromTop(14));
-        inner.removeFromTop(kRowGap);
-
-        auto columns = inner;
-        if (stacked)
-        {
-            auto inCol = columns.removeFromTop(kColumnH);
-            columns.removeFromTop(kRowGap);
-            auto outCol = columns;   // full width, under the input column
-
-            layoutAudioColumn(inCol, inputChannelCaption_, inputChannelChoice_,
-                              inputMeterCaption_, inputMeter_, inputLevelLabel_,
-                              inputGainCaption_, inputGainSlider_, inputMuteButton_);
-            layoutAudioColumn(outCol, outputChannelCaption_, outputChannelChoice_,
-                              outputMeterCaption_, outputMeter_, outputLevelLabel_,
-                              outputGainCaption_, outputGainSlider_, outputMuteButton_);
-            channelNoteLabel_.setBounds({});
-        }
-        else
-        {
-            auto inCol = columns.removeFromLeft(columns.getWidth() / 2);
-            auto outCol = columns;
-            outCol.removeFromLeft(24);
-
-            layoutAudioColumn(inCol, inputChannelCaption_, inputChannelChoice_,
-                              inputMeterCaption_, inputMeter_, inputLevelLabel_,
-                              inputGainCaption_, inputGainSlider_, inputMuteButton_);
-            layoutAudioColumn(outCol, outputChannelCaption_, outputChannelChoice_,
-                              outputMeterCaption_, outputMeter_, outputLevelLabel_,
-                              outputGainCaption_, outputGainSlider_, outputMuteButton_);
-            channelNoteLabel_.setBounds(outCol.withHeight(14));
-        }
-    }
-
-    // 4. TRANSLATION card: the target the operator chose, the source the
-    //    provider decides for itself (R8), the live text. No arrow - an
-    //    arrow drew a pair the wire never carries.
-    {
-        const int height = kCardPad * 2 + 16 + kRowGap + kControlH + 14 + 20 + 12
-                         + 18 + kRowGap + 30 + 3 * 16;
-        translationCard_ = bounds.removeFromTop(height);
-        bounds.removeFromTop(kCardGap);
-
-        auto inner = translationCard_.reduced(kCardPad);
-        translationHeader_.setBounds(inner.removeFromTop(16));
-        inner.removeFromTop(kRowGap);
-
-        auto targetRow = inner.removeFromTop(kControlH + 14);
-        auto toCol = targetRow.removeFromLeft(260);
-        targetCaption_.setBounds(toCol.removeFromTop(14));
-        targetChoice_.setBounds(toCol);
-        auto statusCol = targetRow;
-        statusCol.removeFromTop(14 + 6);
-        sessionLineLabel_.setBounds(statusCol.reduced(16, 0).withHeight(kControlH - 12));
-
-        auto sourceRow = inner.removeFromTop(20);
-        sourceCaption_.setBounds(sourceRow.removeFromLeft(64));
-        sourceValueLabel_.setBounds(sourceRow);
-
-        pairWarningLabel_.setBounds(inner.removeFromTop(18));
-        currentSubtitleLabel_.setBounds(inner.removeFromTop(30));
-        historyLabel_.setBounds(inner);
-    }
-
-    // 5. HEALTH card: four rows and the (deliberately quiet) door to detail.
-    {
-        const int height = kCardPad * 2 + 16 + kRowGap + 4 * kHealthRowH + kRowGap + kSmallBtnH;
-        healthCard_ = bounds.removeFromTop(height);
-        bounds.removeFromTop(kRowGap);
-
-        auto inner = healthCard_.reduced(kCardPad);
-        healthHeader_.setBounds(inner.removeFromTop(16));
-        inner.removeFromTop(kRowGap);
-
-        const auto layoutHealth = [](juce::Rectangle<int>& row, juce::Label& cap,
-                                     juce::Label& val)
-        {
-            auto r = row.removeFromTop(kHealthRowH);
-            cap.setBounds(r.removeFromLeft(140));
-            val.setBounds(r);
-        };
-        layoutHealth(inner, latencyCaption_, latencyValue_);
-        layoutHealth(inner, jitterCaption_, jitterValue_);
-        layoutHealth(inner, underrunCaption_, underrunValue_);
-        layoutHealth(inner, reconnectCaption_, reconnectValue_);
-
-        diagnosticsButton_.setBounds(inner.withHeight(kSmallBtnH).withWidth(140));
-    }
-
-    // 6. Action note + the command bar: the last thing the eye lands on.
-    noteLabel_.setBounds(bounds.removeFromTop(18).reduced(4, 0));
-    bounds.removeFromTop(kRowGap);
-    auto commands = bounds.removeFromTop(kCommandH);
     const int half = commands.getWidth() / 2;
     startButton_.setBounds(commands.removeFromLeft(half).reduced(4, 0));
     stopButton_.setBounds(commands.reduced(4, 0));
+    noteLabel_.setBounds(noteRow.reduced(4, 0));
 }
 
 // ============================================================================ OperatorWindow
@@ -1064,22 +1135,20 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
 {
     setUsingNativeTitleBar(true);
 
-    // the UI redesign follow-up: the card column is taller than some venue laptops are
-    // wide-tall, so the content lives in a vertical viewport - the window
-    // itself fits any screen and the operator scrolls between sections.
-    // Nothing about the layout changed: the same cards, the same sizes.
-    auto* viewport = new OperatorViewport("OperatorScroll");
-    viewport->setScrollBarsShown(true, false);            // vertical only
-    viewport->setViewedComponent(new OperatorContent(controller), false);
-    setContentOwned(viewport, true);
+    // Venue task 4 §1: the scroll moved INSIDE the content - OperatorContent
+    // pins the header and the command bar and lets only the card column
+    // scroll (ui::ScrollablePage). The frame is therefore just the content;
+    // DocumentWindow lays it out, resized() does the rest.
+    setContentOwned(new OperatorContent(controller), true);
 
     setResizable(true, true);
-    // the UI redesign: the minimum stays a sane operator width; the height may now be
-    // smaller than the content because the viewport scrolls. The default
-    // 980x700 (outer ~731) fits the 1366x768 work area, the 620 floor fits
-    // 1280x720.
-    setResizeLimits(720, 620, 4000, 4000);
-    setSize(980, 700);
+    // The compacted card column (2x2 status and health grids, inline captions,
+    // the merged translation row) needs about 700 px instead of the old 1128,
+    // so the default 980x660 - outer ~691 with the title bar - fits a
+    // 1366x768 work area, and the 540 floor keeps header, note and START/STOP
+    // on screen everywhere: the cards scroll, the command bar never does.
+    setResizeLimits(720, 540, 4000, 4000);
+    setSize(980, 660);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
 }

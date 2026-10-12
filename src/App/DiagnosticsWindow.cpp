@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <format>
+#include <memory>
 
 #include "App/UiWidgets.h"
 
@@ -33,7 +34,15 @@ constexpr int kCardGap = 12;
 constexpr int kSectionGap = 24;   // between groups of cards, not just cards
 constexpr int kRowH = 20;
 constexpr int kLatencyRowH = 30;
+constexpr int kRawLineH = 16;
 constexpr int kHeaderH = 22;
+constexpr int kButtonH = 30;
+constexpr int kNoteH = 18;
+
+/// The height the measure passes run against (see the settings page's rule of
+/// the same name): every stack here consumes fixed rows, so what is left at
+/// the end is exactly the slack and the returned content height is exact.
+constexpr int kMeasureHeight = 40000;
 
 /// The state words the row colouring knows. The words come from the modules'
 /// own nameOf() - the tested contract is the word (UiModel tests assert it);
@@ -107,40 +116,17 @@ void styleQuiet(juce::TextButton& button)
 DiagnosticsContent::DiagnosticsContent(ApplicationController& controller)
     : controller_(controller)
 {
-    exportButton_.onClick = [this] { exportPressed(); };
-    styleQuiet(exportButton_);
-    addAndMakeVisible(exportButton_);
-
-    rawButton_.onClick = [this] { rawToggled(); };
-    styleQuiet(rawButton_);
-    addAndMakeVisible(rawButton_);
-
-    noteLabel_.setFont(ui::uiFont(12.0f));
-    noteLabel_.setColour(juce::Label::textColourId, dink::amber);
-    addAndMakeVisible(noteLabel_);
-
     rebuild();
     startTimer(500);   // engineering numbers on an engineering surface
 }
 
-void DiagnosticsContent::exportPressed()
+void DiagnosticsContent::setShowRaw(bool show)
 {
-    // the export funnel; the note is the receipt either way - success names
-    // the file, failure is as talkable as the success. The export itself is
-    // secret-free by construction (identifiers only, the established rule, pinned
-    // by the export tests).
-    std::filesystem::path written;
-    std::string note;
-    controller_.exportDiagnostics({}, written, note);
-    actionNote_ = std::move(note);
-    rebuild();
-}
-
-void DiagnosticsContent::rawToggled()
-{
-    showRaw_ = !showRaw_;
-    rawButton_.setButtonText(showRaw_ ? "Hide raw details" : "Show raw details");
-    resized();
+    showRaw_ = show;
+    if (auto* page = findParentComponentOfClass<ui::ScrollablePage>())
+        page->relayout();   // the raw section changes the content height
+    else
+        resized();
     repaint();
 }
 
@@ -152,9 +138,45 @@ void DiagnosticsContent::timerCallback()
 void DiagnosticsContent::rebuild()
 {
     panel_ = buildDiagnosticsPanel(controller_);
-    noteLabel_.setText(juce::String(actionNote_), juce::NotificationType::dontSendNotification);
-    resized();   // card heights follow the row counts
+
+    // Row counts can move between refreshes (the raw ring grows; session
+    // fields join or leave), so the scroll extent is re-measured, not just
+    // repainted. The page's follow-at-bottom rule decides whether the reader
+    // is carried along with new events (venue task 4 §5): a reader who
+    // scrolled up into history is NOT yanked to the newest line.
+    if (auto* page = findParentComponentOfClass<ui::ScrollablePage>())
+        page->relayout();
+    else
+        resized();
     repaint();
+}
+
+int DiagnosticsContent::preferredHeight(int width) const
+{
+    // Mirrors resized() by construction: the same cardHeightFor()/latency/
+    // raw helpers stack the same sections the layout walk places.
+    auto b = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kMargin);
+
+    const int leftBlock = cardHeightFor(panel_.audioHealth) + kCardGap
+                        + cardHeightFor(panel_.runtime);
+    const int rightBlock = cardHeightFor(panel_.translationHealth) + kCardGap
+                         + cardHeightFor(panel_.subtitles);
+    b.removeFromTop(std::max(leftBlock, rightBlock) + kSectionGap);
+
+    const int latencyHeight = kHeaderH + kCardPad
+                            + static_cast<int>(panel_.latency.size()) * kLatencyRowH
+                            + kCardPad / 2;
+    b.removeFromTop(latencyHeight + kSectionGap);
+
+    if (showRaw_)
+    {
+        const int rawHeight = kHeaderH + kCardPad
+                            + static_cast<int>(panel_.rawDetails.size()) * kRawLineH
+                            + kCardPad / 2;
+        b.removeFromTop(rawHeight);
+    }
+
+    return kMeasureHeight - b.getHeight() - kMargin;
 }
 
 void DiagnosticsContent::drawCard(juce::Graphics& g, const juce::Rectangle<int>& card,
@@ -188,8 +210,10 @@ void DiagnosticsContent::drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
     }
 }
 
-void DiagnosticsContent::paint(juce::Graphics& g)
+void DiagnosticsContent::paintContent(juce::Graphics& g, const juce::Rectangle<int>&)
 {
+    // The rectangles were recomputed by the last resized() - paint reads
+    // them, never re-derives (the same discipline as before the scroll pass).
     g.fillAll(dink::background);
 
     drawCard(g, audioCard_, "AUDIO HEALTH");
@@ -244,84 +268,159 @@ void DiagnosticsContent::paint(juce::Graphics& g)
         g.setFont(ui::monoFont(12.0f));
         g.setColour(dink::value);
 
-        // Newest last; when the area is short, the newest lines are the ones
-        // that must be visible, so the tail is what gets drawn.
-        const std::size_t lines = std::min<std::size_t>(
-            static_cast<std::size_t>(std::max(0, inner.getHeight() / 16)),
-            panel_.rawDetails.size());
-        std::string text;
-        for (std::size_t i = panel_.rawDetails.size() - lines;
-             i < panel_.rawDetails.size(); ++i)
-            text += panel_.rawDetails[i] + "\n";
-        g.drawMultiLineText(juce::String(text), inner.getX(),
-                            inner.getY() + 12, inner.getWidth());
+        // Newest last - and EVERY line is printed. Before the scrolling pass
+        // this card drew only the tail that fit and the events above the fold
+        // were unreachable; the body now grows to hold the whole ring, and
+        // the reader scrolls back through it at their own position (venue
+        // task 4 §5).
+        juce::String text;
+        for (const auto& line : panel_.rawDetails)
+            text += juce::String(line) + "\n";
+        g.drawMultiLineText(text, inner.getX(), inner.getY() + 12, inner.getWidth());
     }
 }
 
 void DiagnosticsContent::resized()
 {
+    // Top-down stacking inside the scroll body: the two columns of metric
+    // cards, the latency table, and - expanded or not - the raw section was
+    // the last card; every card keeps its NATURAL height (cardHeightFor) and
+    // the page makes the body exactly preferredHeight() tall. Nothing is
+    // stretched or cut; what does not fit the window scrolls.
     auto bounds = getLocalBounds().reduced(kMargin);
 
-    // Bottom-up stacking: buttons + note, then (when expanded) the raw window,
-    // then the latency table, then the two columns of metric cards take what
-    // is left. Every card's rect is disjoint by construction.
-    auto bottom = bounds.removeFromBottom(kCardGap + 30 + kCardGap + 18);   // buttons + note
-    if (showRaw_)
-    {
-        const int rawHeight = kHeaderH + kCardPad + 8 * 16 + kCardPad / 2;   // a window into the ring
-        bounds.removeFromBottom(kSectionGap);
-        rawCard_ = bounds.removeFromBottom(rawHeight);
-    }
-
-    const int latencyHeight = kHeaderH + kCardPad
-                            + static_cast<int>(panel_.latency.size()) * kLatencyRowH + kCardPad / 2;
-    bounds.removeFromBottom(kSectionGap);
-    latencyCard_ = bounds.removeFromBottom(latencyHeight);
-
-    // The four metric cards in two columns; each column stacks two cards,
-    // the shorter column's second card absorbs the remainder so no gap lies.
     auto columns = bounds;
     auto left = columns.removeFromLeft(columns.getWidth() / 2);
     auto right = columns;
     right.removeFromLeft(kCardGap);
 
-    const int leftFirst = cardHeightFor(panel_.audioHealth);
-    audioCard_ = left.removeFromTop(leftFirst);
+    audioCard_ = left.removeFromTop(cardHeightFor(panel_.audioHealth));
     left.removeFromTop(kCardGap);
-    runtimeCard_ = left;
+    runtimeCard_ = left.removeFromTop(cardHeightFor(panel_.runtime));
 
-    const int rightFirst = cardHeightFor(panel_.translationHealth);
-    translationCard_ = right.removeFromTop(rightFirst);
+    translationCard_ = right.removeFromTop(cardHeightFor(panel_.translationHealth));
     right.removeFromTop(kCardGap);
-    subtitlesCard_ = right;
+    subtitlesCard_ = right.removeFromTop(cardHeightFor(panel_.subtitles));
 
-    auto buttons = bottom.removeFromTop(30);
+    const int leftBlock = audioCard_.getHeight() + kCardGap + runtimeCard_.getHeight();
+    const int rightBlock = translationCard_.getHeight() + kCardGap + subtitlesCard_.getHeight();
+    bounds.removeFromTop(std::max(leftBlock, rightBlock) + kSectionGap);
+
+    const int latencyHeight = kHeaderH + kCardPad
+                            + static_cast<int>(panel_.latency.size()) * kLatencyRowH
+                            + kCardPad / 2;
+    latencyCard_ = bounds.removeFromTop(latencyHeight);
+    bounds.removeFromTop(kSectionGap);
+
+    if (showRaw_)
+    {
+        const int rawHeight = kHeaderH + kCardPad
+                            + static_cast<int>(panel_.rawDetails.size()) * kRawLineH
+                            + kCardPad / 2;
+        rawCard_ = bounds.removeFromTop(rawHeight);
+    }
+    else
+    {
+        rawCard_ = {};
+    }
+}
+
+// ============================================================================ DiagnosticsFrame
+
+DiagnosticsFrame::DiagnosticsFrame(ApplicationController& controller)
+    : controller_(controller)
+{
+    auto surface = std::make_unique<DiagnosticsContent>(controller);
+    content_ = surface.get();
+
+    page_ = new ui::ScrollablePage(std::move(surface),
+                                   [this](int width) { return content_->preferredHeight(width); });
+    // The live-tail rule (venue task 4 §5): new events pull the view along
+    // ONLY while it already sits at the bottom. Scrolled up to read history?
+    // the refresh keeps your position; nothing here resets to the top either -
+    // a relayout never touches the scroll number.
+    page_->setFollowsNewContent(true);
+    addAndMakeVisible(*page_);
+
+    exportButton_.onClick = [this] { exportPressed(); };
+    styleQuiet(exportButton_);
+    addAndMakeVisible(exportButton_);
+
+    rawButton_.onClick = [this] { rawToggled(); };
+    styleQuiet(rawButton_);
+    addAndMakeVisible(rawButton_);
+
+    noteLabel_.setFont(ui::uiFont(12.0f));
+    noteLabel_.setColour(juce::Label::textColourId, dink::amber);
+    addAndMakeVisible(noteLabel_);
+}
+
+void DiagnosticsFrame::exportPressed()
+{
+    // the export funnel; the note is the receipt either way - success names
+    // the file, failure is as talkable as the success. The export itself is
+    // secret-free by construction (identifiers only, the established rule, pinned
+    // by the export tests).
+    std::filesystem::path written;
+    std::string note;
+    controller_.exportDiagnostics({}, written, note);
+    actionNote_ = std::move(note);
+    noteLabel_.setText(juce::String(actionNote_), juce::NotificationType::dontSendNotification);
+    content_->rebuild();
+}
+
+void DiagnosticsFrame::rawToggled()
+{
+    const bool show = !content_->isShowingRaw();
+    content_->setShowRaw(show);
+    rawButton_.setButtonText(show ? "Hide raw details" : "Show raw details");
+}
+
+void DiagnosticsFrame::resized()
+{
+    // The fixed strip at the bottom, the scroll above it: the buttons and the
+    // note never scroll away (venue task 4 §5 - "нижние элементы должны
+    // оставаться доступными").
+    auto bounds = getLocalBounds();
+    auto bottom = bounds.removeFromBottom(kMargin + kButtonH + kCardGap + kNoteH + kMargin);
+    bottom.removeFromTop(kMargin);
+
+    auto buttons = bottom.removeFromTop(kButtonH);
     exportButton_.setBounds(buttons.removeFromLeft(180));
     buttons.removeFromLeft(kCardGap);
     rawButton_.setBounds(buttons.removeFromLeft(160));
-    noteLabel_.setBounds(bottom.withHeight(18));
+
+    noteLabel_.setBounds(bottom.withHeight(kNoteH));
+
+    page_->setBounds(bounds);
 }
 
 // ======================================================================== DiagnosticsWindow
 
-DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller)
+DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller, juce::Component& ownerWindow)
     : juce::DocumentWindow("LingoFlow Diagnostics",
                            dink::background,
-                           juce::DocumentWindow::closeButton)
+                           juce::DocumentWindow::closeButton),
+      ownerWindow_(ownerWindow)
 {
     setUsingNativeTitleBar(true);
     // No delete-on-close: close hides, the operator window owns the lifetime
     // (the same rule the settings dialog established earlier).
 
-    auto* content = new DiagnosticsContent(controller);
-    content_ = content;
-    setContentOwned(content, true);
+    auto* frame = new DiagnosticsFrame(controller);
+    content_ = &frame->surface();
+    setContentOwned(frame, true);
 
     setResizable(true, true);
-    setResizeLimits(900, 900, 4000, 4000);
-    setSize(1100, 1120);
+    // Task 4 §5 made this surface scrollable: the window used to demand
+    // 1100x1120 (and still cut the raw list off); now it shows an honest
+    // viewport and the rest scrolls. 700 fits a 1366x768 work area with the
+    // title bar; the card grid wants ~900 across to keep the value column.
+    setResizeLimits(900, 560, 4000, 4000);
+    setSize(1100, 700);
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
+    becomeModal();
 }
 
 void DiagnosticsWindow::reopen()
@@ -331,10 +430,38 @@ void DiagnosticsWindow::reopen()
 
     setVisible(true);
     toFront(true);
+    becomeModal();   // dismissal ended the modal state - a reopen begins it again
+}
+
+void DiagnosticsWindow::becomeModal()
+{
+    // Venue task 4 §4 - the same mechanism as the settings dialog, and the
+    // same reasons: enterModalState returns immediately (no nested event
+    // loop, so the audio engine, the network threads and this window's own
+    // 500 ms refresh keep running while it is open, and quitting or Stopping
+    // behind it cannot deadlock). Closing ends the modal state explicitly and
+    // the callback returns control to the operator window one loop-pass later.
+    if (isCurrentlyModal())
+        return;   // a duplicate reopen never stacks modality on itself
+
+    enterModalState(true,
+                    juce::ModalCallbackFunction::create(
+                        [this](int)
+                        {
+                            if (auto* topLevel = ownerWindow_.getTopLevelComponent())
+                                topLevel->toFront(true);
+                        }),
+                    false);
 }
 
 void DiagnosticsWindow::closeButtonPressed()
 {
+    // Same close rule as the settings dialog: end the modal state explicitly,
+    // then hide - the callback returns focus to the operator window on the
+    // next message-loop pass.
+    if (isCurrentlyModal())
+        exitModalState();
+
     setVisible(false);
 }
 

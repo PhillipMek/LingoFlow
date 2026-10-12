@@ -107,6 +107,64 @@ include(CTest)
 include(Catch)
 catch_discover_tests(lingoflow_tests)
 
+# ---------------------------------------------------------------------------
+# UI widget tests (venue task 4) - a separate executable for the same reason
+# the realtime gate has one: these cases bring the JUCE GUI library to life
+# (juce::ScopedJuceInitialiser_GUI in a fixture), while the portable core's
+# test binary links no JUCE at all - lingoflow_core is JUCE-free by boundary
+# rule, and its tests must not acquire GUI state as a side effect. The fixture
+# initialises juce_gui_basics the way a plugin host does: no JUCEApplication,
+# no peers, and no window ever appears on the screen. It is declared with
+# juce_add_gui_app only because that is the gate juce_generate_juce_header
+# accepts - WIN32_EXECUTABLE is switched back to OFF below, so the binary
+# keeps Catch2's console main and ctest can still read its output.
+# ---------------------------------------------------------------------------
+juce_add_gui_app(lingoflow_ui_tests
+    PRODUCT_NAME "lingoflow_ui_tests"
+    BUNDLE_ID "com.lingoflow.uitests"
+    VERSION "${PROJECT_VERSION}"
+    NEEDS_WEB_BROWSER FALSE
+    NEEDS_CURL FALSE)
+
+juce_generate_juce_header(lingoflow_ui_tests)
+
+set_target_properties(lingoflow_ui_tests PROPERTIES WIN32_EXECUTABLE OFF)
+
+target_sources(lingoflow_ui_tests
+    PRIVATE
+        unit/TestUiWidgets.cpp)
+
+target_compile_definitions(lingoflow_ui_tests
+    PRIVATE
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        # The one exception this test binary makes to the house rule "no
+        # nested message loops" (juce_recommended_config_flags / JUCE leaves
+        # JUCE_MODAL_LOOPS_PERMITTED at 0): the modal-dismissal test must see
+        # JUCE's own ASYNC cancellation land - that async IS the shipped
+        # behaviour, and a test that cannot pump the loop cannot assert it.
+        # runDispatchLoopUntil is used in tests only; no product target
+        # defines this flag, and the product code paths were re-audited: they
+        # never call runModalLoop/enterModalState-with-nesting anywhere
+        # outside the two becomeModal() sites (task 4 review).
+        JUCE_MODAL_LOOPS_PERMITTED=1)
+
+target_link_libraries(lingoflow_ui_tests
+    PRIVATE
+        Catch2::Catch2WithMain
+        lingoflow::core
+        juce::juce_gui_basics
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags)
+
+if(MSVC)
+    target_compile_options(lingoflow_ui_tests PRIVATE /W4 /utf-8 /MP8)
+else()
+    target_compile_options(lingoflow_ui_tests PRIVATE -Wall -Wextra)
+endif()
+
+catch_discover_tests(lingoflow_ui_tests)
+
 # --- realtime allocation gate ---------------------------------------
 # A separate executable, because it replaces global operator new to count heap
 # allocations. Isolated so no other suite's behaviour changes.

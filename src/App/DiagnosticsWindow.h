@@ -6,6 +6,17 @@
 // drawn as aligned label/value tables - not a wall of monospace text. Monospace
 // survives in exactly one place: the raw event list, which IS a log.
 //
+// Since the venue layout pass (task 4 §5) the cards live in a
+// ui::ScrollablePage: the surface is as tall as its content and scrolls
+// vertically inside a window-sized frame, so nothing below the fold is cut
+// off any more. The raw list prints EVERY ring line now - earlier only the
+// tail that fit was drawn, and the events above the fold were unreachable.
+// A reader who scrolled up into history stays there while new events arrive;
+// a reader watching the live tail is followed (setFollowsNewContent).
+//
+// The buttons and the note line sit on a fixed strip OUTSIDE the scroll -
+// Export and the raw toggle stay reachable wherever the reading position is.
+//
 // Same widget discipline as every other window (tasks 014/015/019): paint-only.
 // Every row is pre-built by buildDiagnosticsPanel() from public controller
 // reads; this file positions text and never computes a value. The card
@@ -25,24 +36,37 @@
 
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
+#include "App/UiWidgets.h"
 
 namespace liveai {
 
-class DiagnosticsContent final : public juce::Component, private juce::Timer
+/// The scrolled surface: owns the panel snapshot and paints every card. Its
+/// WIDTH and HEIGHT are managed by the ui::ScrollablePage that hosts it (the
+/// page asks preferredHeight() for the width the viewport offers).
+class DiagnosticsContent final : public ui::ScrollablePage::Body, private juce::Timer
 {
 public:
     explicit DiagnosticsContent(ApplicationController& controller);
-    void paint(juce::Graphics& g) override;
+
+    void paintContent(juce::Graphics& g, const juce::Rectangle<int>& area) override;
     void resized() override;
 
     /// Recompute every section from the model. Public because the frame calls
     /// it on reopen (the same rule the settings dialog uses for its refresh).
     void rebuild();
 
+    /// The raw-details toggle lives on the fixed strip (the frame owns it);
+    /// the expanded flag is this surface's layout fact.
+    void setShowRaw(bool show);
+    bool isShowingRaw() const noexcept { return showRaw_; }
+
+    /// The scroll extent for the given width - the ui::ScrollablePage measure
+    /// callback. Mirrors resized() by construction: both walk the same card
+    /// heights from the same row counts.
+    int preferredHeight(int width) const;
+
 private:
     void timerCallback() override;
-    void exportPressed();
-    void rawToggled();
 
     /// One label/value row inside a card; state words colour themselves via
     /// the shared stateColour mapping (the same words, the same meanings).
@@ -53,30 +77,59 @@ private:
 
     ApplicationController& controller_;
     DiagnosticsPanel panel_;
-    std::string actionNote_;
     bool showRaw_ = false;
 
     juce::Rectangle<int> audioCard_, translationCard_, subtitlesCard_, runtimeCard_,
                          latencyCard_, rawCard_;
 
-    juce::Label noteLabel_;
-    juce::TextButton exportButton_ { "Export diagnostics" };
-    juce::TextButton rawButton_ { "Show raw details" };
-
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DiagnosticsContent)
 };
 
+/// The fixed strip around the scrolled surface: the Export / raw buttons and
+/// the note line. They live OUTSIDE the viewport on purpose (venue task 4 §5:
+/// "нижние элементы должны оставаться доступными") - the action buttons of a
+/// window must not depend on where the reading position is.
+class DiagnosticsFrame final : public juce::Component
+{
+public:
+    explicit DiagnosticsFrame(ApplicationController& controller);
+
+    DiagnosticsContent& surface() noexcept { return *content_; }
+
+private:
+    void exportPressed();
+    void rawToggled();
+
+    void resized() override;
+
+    ApplicationController& controller_;
+    ui::ScrollablePage* page_ = nullptr;         ///< owned by this
+    DiagnosticsContent* content_ = nullptr;      ///< owned by the page's viewport
+
+    juce::TextButton exportButton_ { "Export diagnostics" };
+    juce::TextButton rawButton_ { "Show raw details" };
+    juce::Label noteLabel_;
+    std::string actionNote_;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DiagnosticsFrame)
+};
+
 /// Thin frame like the other two windows: closing hides, reopening refreshes.
+/// Application-modal while open (venue task 4 §4) - the same mechanism and
+/// the same no-nested-loop promise as the settings dialog.
 class DiagnosticsWindow final : public juce::DocumentWindow
 {
 public:
-    explicit DiagnosticsWindow(ApplicationController& controller);
+    DiagnosticsWindow(ApplicationController& controller, juce::Component& ownerWindow);
 
     void reopen();
     void closeButtonPressed() override;
 
 private:
-    DiagnosticsContent* content_ = nullptr;   ///< owned by the DocumentWindow
+    void becomeModal();
+
+    DiagnosticsContent* content_ = nullptr;   ///< owned through the frame's viewport
+    juce::Component& ownerWindow_;            ///< control returns here on dismissal
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DiagnosticsWindow)
 };
