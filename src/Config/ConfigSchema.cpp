@@ -71,6 +71,14 @@ constexpr double kMaxToneLevelDb = 0.0;
 
 const std::set<int> kSupportedSampleRates{ 44100, 48000, 88200, 96000 };
 
+// the window section bounds (schema version 4). These are the STRUCTURAL
+// garbage filter only: a coordinate or a size outside them cannot belong to
+// any real desktop, so the number is corrupt data, not a forgotten monitor.
+// What is still PLACEABLE on the displays of THIS start is decided where the
+// displays are known (App/WindowGeometry.h) - Config has no screens, and a
+// window rectangle that is merely off today's monitor is valid data.
+constexpr int kMaxWindowExtent = 65536;  ///< absolute bound, coordinates and sizes
+
 bool hasControlCharacter(std::string_view text)
 {
     return std::any_of(text.begin(), text.end(),
@@ -605,6 +613,29 @@ ConfigProblems validate(const AppConfig& candidate)
         problems.push_back(ConfigProblem{ "developer.wavInputPath",
                                           "developer mode asks for a WAV source but names no file" });
 
+    // Window geometry (schema version 4): the whole rectangle is ONE value -
+    // a half-restored window (kept position, repaired size or the other way)
+    // is worse than a fully discarded one, so every problem in the section is
+    // reported under "window" and the repair drops the whole section back to
+    // "unset". A zero size on both axes is the legitimate never-saved state;
+    // negative or above-any-desktop values, and a rectangle set on one axis
+    // only, are corrupt data.
+    const auto& window = candidate.window;
+
+    const bool halfRectangle = (window.width == 0) != (window.height == 0);
+
+    if (halfRectangle
+        || window.width < 0 || window.width > kMaxWindowExtent
+        || window.height < 0 || window.height > kMaxWindowExtent
+        || window.x < -kMaxWindowExtent || window.x > kMaxWindowExtent
+        || window.y < -kMaxWindowExtent || window.y > kMaxWindowExtent)
+    {
+        problems.push_back(ConfigProblem{
+            "window",
+            halfRectangle ? "the stored window size is half a rectangle"
+                          : "the stored window rectangle is outside the range any desktop could hold" });
+    }
+
     return problems;
 }
 
@@ -690,6 +721,15 @@ std::string toJsonText(const AppConfig& settings)
             { "mockTranslation", settings.developer.mockTranslation },
             { "mockLatencyMs", settings.developer.mockLatencyMs },
             { "loopback", settings.developer.loopback } } },
+        // schema version 4: the operator window's saved geometry (venue task 5).
+        // The numbers are the application's own logical screen coordinates from
+        // the last clean close; the writer never judges them, the reader never
+        // trusts them blindly - the restore policy is App/WindowGeometry.h.
+        { "window",
+          { { "x", settings.window.x },
+            { "y", settings.window.y },
+            { "width", settings.window.width },
+            { "height", settings.window.height } } },
     };
 
     return root.dump(2) + "\n";
@@ -746,7 +786,7 @@ bool fromJsonText(std::string_view text,
     scanForSecretKeys(root, "");
 
     static const std::set<std::string> kRootKeys{ "schemaVersion", "audio", "translation", "ndi", "diagnostics",
-                                                  "developer" };
+                                                  "developer", "window" };
     reportUnknownKeys(root, "", kRootKeys, problems);
 
     readNumber<std::uint32_t>(root, "schemaVersion", "schemaVersion", out.schemaVersion, problems);
@@ -878,6 +918,22 @@ bool fromJsonText(std::string_view text,
         readBool(*section, "loopback", "developer.loopback", developer.loopback, problems);
     }
 
+    // Window geometry (schema version 4): absent section keeps the default
+    // "unset" rectangle, the path the FIRST launch and every pre-v4 file take.
+    // The numbers are stored raw; whether they describe a window the current
+    // displays can show is decided later (App/WindowGeometry.h), never here.
+    if (const auto* section = findSection(root, "window", problems); section != nullptr)
+    {
+        static const std::set<std::string> kKeys{ "x", "y", "width", "height" };
+        reportUnknownKeys(*section, "window", kKeys, problems);
+
+        auto& window = out.window;
+        readNumber<int>(*section, "x", "window.x", window.x, problems);
+        readNumber<int>(*section, "y", "window.y", window.y, problems);
+        readNumber<int>(*section, "width", "window.width", window.width, problems);
+        readNumber<int>(*section, "height", "window.height", window.height, problems);
+    }
+
     // Values that parsed but are not usable: keep the file as it is, restore the
     // default for every offending field and report each one instead of hiding it.
     struct Repair
@@ -970,6 +1026,7 @@ bool fromJsonText(std::string_view text,
         { "ndi.backgroundPaddingPx",
           [](AppConfig& c, const AppConfig& d) { c.ndi.subtitles.style.backgroundPaddingPx = d.ndi.subtitles.style.backgroundPaddingPx; } },
         { "diagnostics.logLevel", [](AppConfig& c, const AppConfig& d) { c.diagnostics.logLevel = d.diagnostics.logLevel; } },
+        { "window", [](AppConfig& c, const AppConfig& d) { c.window = d.window; } },
         { "developer.audioSource",
           [](AppConfig& c, const AppConfig& d)
           {

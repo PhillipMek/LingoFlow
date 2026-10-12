@@ -537,6 +537,58 @@ TEST_CASE("ApplicationController: settings from the pre-rename folder migrate on
     CHECK(livetest::readFile(current).find("512") != std::string::npos);
 }
 
+TEST_CASE("ApplicationController: persisting window geometry touches no other setting",
+          "[app][config][window]")
+{
+    // Venue task 5: the close-time write lands on top of the operator's whole
+    // configuration, and "the rest is untouched" is a fact the FILE must
+    // prove. The baseline differs from the defaults in every section, so any
+    // collateral change shows up as a diff, and a refused geometry must leave
+    // both the memory and the file exactly where they were.
+    QuietLog quiet;
+    livetest::TempDirectory temp;
+    ApplicationController controller;
+    std::string note;
+    REQUIRE(controller.loadSettings(temp.file("config.json"), note));
+
+    AppConfig baseline = config::defaults();
+    baseline.audio.inputDeviceId = "SG-A16";
+    baseline.audio.bufferFrames = 960;
+    baseline.translation.jitterBufferMs = 400;
+    baseline.ndi.streamName = "venue-A";
+    baseline.diagnostics.logLevel = "debug";
+    REQUIRE(controller.updateSettings(baseline, note));
+
+    const AppConfig before = controller.config().current();
+
+    const WindowSettings geometry { 200, 100, 1280, 800 };
+    REQUIRE(controller.persistWindowGeometry(geometry, note));
+
+    const AppConfig after = controller.config().current();
+    CHECK(after.window == geometry);
+    CHECK(after.audio == before.audio);
+    CHECK(after.translation == before.translation);
+    CHECK(after.ndi == before.ndi);
+    CHECK(after.diagnostics == before.diagnostics);
+    CHECK(after.developer == before.developer);
+
+    // The disk carries the same truth: a fresh load sees the geometry AND every
+    // operator field - the write is real, not an in-memory illusion.
+    ApplicationController reopened;
+    REQUIRE(reopened.loadSettings(temp.file("config.json"), note));
+    CHECK(reopened.config().current() == after);
+
+    // A geometry the schema refuses (a width no desktop could ever hold) fails
+    // the whole-candidate rule: nothing half-applied, memory or file.
+    const WindowSettings broken { 0, 0, 999999, 800 };
+    CHECK_FALSE(controller.persistWindowGeometry(broken, note));
+    CHECK(controller.config().current().window == geometry);
+
+    ApplicationController afterReopen;
+    REQUIRE(afterReopen.loadSettings(temp.file("config.json"), note));
+    CHECK(afterReopen.config().current() == after);
+}
+
 // ------------------------------------------------------------- stop lifecycle
 //
 // The venue report pinned three facts this section guards: Start/Stop must not

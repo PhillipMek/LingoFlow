@@ -380,6 +380,22 @@ new code is written against behaviour that already has proof, not against commen
   translation row): the card stack needs ~700 px where it used to demand
   ~1130, and START/STOP - the controls a live show runs on - are pinned and
   can never sit below the fold again.
+ * **The main window remembers its place** (venue task 5). The rectangle is a
+   `window` section of config.json (schema v4) - the single Settings area, its
+   validation, its atomic write, nothing parallel. The frame tracks its
+   normal-state bounds on `resized`/`moved` (memory only, message thread; a
+   maximised frame keeps the pre-maximize rectangle, the maximise STATE is not
+   persisted), the application persists once at shutdown - disk I/O on the
+   message thread, never the audio callback - and the next start resolves the
+   stored numbers through the portable policy in `App/WindowGeometry` BEFORE
+   the window is first shown: sizes clamp to the app's own resize limits, a
+   position no current display can reach (a monitor that is gone, a desktop
+   that moved) slides onto the nearest display at the same size, garbage or an
+   absent section falls back to the default centred start, and every deviation
+   is logged, not hidden. Measured edge: a rectangle stored exactly at the
+   size floor settles one frame-width smaller in client terms (a JUCE native
+   peer re-derivation); the pinned header, note and START/STOP were verified
+   on screen at that size, and the stored number converges from there.
 * **Typed text is real today, and the seam is still the string pair**:
   `Translation/TextPipeline.h` turns the sink's partial/final strings into
   `TranslationTextEvent`s with a product-owned sequence and arrival clock, a

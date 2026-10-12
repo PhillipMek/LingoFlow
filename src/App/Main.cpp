@@ -399,6 +399,20 @@ public:
 
     void shutdown() override
     {
+        // Venue task 5: closing the application IS the persist moment for the
+        // window geometry. This runs on the message thread with the frame
+        // still alive - the realtime audio callback never reaches this path
+        // and never touches this disk, which is exactly why the write lives
+        // here and not in resized(). Smoke has no window, so a CI run writes
+        // no geometry. A refused write is logged by the controller and cannot
+        // block the shutdown: the next start falls back to the last stored
+        // rectangle or to the application's own defaults.
+        if (window_ != nullptr)
+        {
+            std::string geometryError;
+            (void)controller_.persistWindowGeometry(window_->geometryToPersist(), geometryError);
+        }
+
         window_.reset();
         controller_.stop();
         liveai::log::info(kLogComponent, "application shut down");

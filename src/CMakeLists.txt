@@ -98,7 +98,9 @@ add_library(lingoflow_core STATIC
     App/TranslationStreamer.cpp
     App/TranslationStreamer.h
     App/UiModel.cpp
-    App/UiModel.h)
+    App/UiModel.h
+    App/WindowGeometry.cpp
+    App/WindowGeometry.h)
 
 add_library(lingoflow::core ALIAS lingoflow_core)
 

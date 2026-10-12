@@ -29,7 +29,14 @@ namespace liveai {
 /// target language is Off (bypass the original / silence the output). A v2 or
 /// v1 file loads unchanged: the key is absent, the default "bypass" survives,
 /// exactly the migration that made v1 files work under v2.
-inline constexpr std::uint32_t kConfigSchemaVersion = 3;
+/// v4 (2026-10-12): the window section - the operator window's size and
+/// position between launches (venue task 5). A v3, v2 or v1 file loads
+/// unchanged the same way: the section is absent, its default is "no geometry
+/// saved" (zero size), and the application places the window itself. Whether
+/// a stored rectangle is still visible and inside the window limits is a
+/// question about the CURRENT displays, which this struct cannot know - the
+/// App layer (App/WindowGeometry.h) decides that at restore time.
+inline constexpr std::uint32_t kConfigSchemaVersion = 4;
 
 /// The target-language list carries this one entry that is not a language:
 /// selecting it turns translation OFF. The value lives in
@@ -214,6 +221,30 @@ struct DeveloperSettings
     friend constexpr bool operator==(const DeveloperSettings&, const DeveloperSettings&) = default;
 };
 
+/// The main window's saved geometry (venue task 5). Pure screen coordinates
+/// in the application's own logical-pixel space, stored exactly as the window
+/// had them when it closed; nothing else. The schema check is STRUCTURAL
+/// garbage only (ranges, half-a-rectangle): what "reasonable" means depends
+/// on the monitors that exist at the NEXT start, and Config has no screens -
+/// the on-screen policy is App/WindowGeometry.h. Zero width AND zero height
+/// together mean "never saved": the application sizes and places the window
+/// itself. A half rectangle (one size zero, one not) is corrupt data.
+struct WindowSettings
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;      ///< 0 with height 0: no geometry stored yet
+    int height = 0;
+
+    /// True when the pair of sizes carries a stored rectangle at all.
+    constexpr bool isSet() const noexcept
+    {
+        return width > 0 && height > 0;
+    }
+
+    friend constexpr bool operator==(const WindowSettings&, const WindowSettings&) = default;
+};
+
 struct AppConfig
 {
     std::uint32_t schemaVersion = kConfigSchemaVersion;
@@ -223,6 +254,7 @@ struct AppConfig
     NdiSettings ndi;
     DiagnosticsSettings diagnostics;
     DeveloperSettings developer;
+    WindowSettings window;
 
     /// Used by tests, by change detection and by "did the load really change
     /// anything" checks. Comparison is exact: these are operator settings, not

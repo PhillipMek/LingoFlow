@@ -272,6 +272,19 @@ public:
     /// Writes the current settings atomically through the attached store.
     bool saveSettings(std::string& error);
 
+    /// Persists the main window's geometry between launches (venue task 5). The
+    /// window frame lives in the JUCE shell, so the shell calls this on its way
+    /// out with the rectangle it measured; the storage stays owned here, in the
+    /// single Settings area. Only the window section of the current
+    /// configuration changes - every other section is carried over untouched,
+    /// and the whole candidate still goes through schema validation and the
+    /// atomic store, so a refused or corrupt write cannot half-apply. This is
+    /// deliberately NOT updateSettings(): geometry is UI state no subsystem
+    /// consumes, so the engine/session/NDI live-apply path is never entered.
+    /// Call it on the message thread (shutdown), never from the audio callback
+    /// - the write is disk I/O.
+    bool persistWindowGeometry(const WindowSettings& geometry, std::string& error);
+
     /// The version string printed into the diagnostics export header. Main.cpp
     /// (the JUCE shell that owns the build metadata) sets it; the honest default
     /// is "unknown" - the core does not invent build numbers.

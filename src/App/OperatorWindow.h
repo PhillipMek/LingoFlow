@@ -46,6 +46,7 @@
 #include "App/ApplicationController.h"
 #include "App/UiModel.h"
 #include "App/UiWidgets.h"
+#include "App/WindowGeometry.h"
 #include "Audio/LevelMeter.h"
 
 namespace liveai {
@@ -236,7 +237,10 @@ private:
 };
 
 /// The DocumentWindow wrapper: nothing but a frame, the title bar and the quit
-/// route - all substance lives in OperatorContent.
+/// route - all substance lives in OperatorContent. Its one own decision is
+/// venue task 5: the frame REMEMBERS its normal-state rectangle (resized/moved
+/// on the message thread, memory only, never disk) so the application can
+/// persist it on the way out and come back to the same size and place.
 class OperatorWindow final : public juce::DocumentWindow
 {
 public:
@@ -244,7 +248,30 @@ public:
 
     void closeButtonPressed() override;
 
+    /// The rectangle to persist at shutdown: the last NON-maximised geometry
+    /// of this run - closing while maximised therefore returns the window at
+    /// the size the operator had before the maximize. The maximise state
+    /// itself is not persisted (and not stored in the settings file): JUCE
+    /// 9.0.3 exposes no public query for it, and the one OS question this
+    /// class asks - "is the frame zoomed right now" - exists to decide
+    /// whether the current rectangle may be recorded at all, nothing else.
+    WindowSettings geometryToPersist() const noexcept { return geometry_; }
+
+protected:
+    /// Layout first (the superclass owns the decorations), then the geometry
+    /// record - the DocumentWindow docs are explicit that overriding these
+    /// means calling the superclass version.
+    void resized() override;
+    void moved() override;
+
 private:
+    void recordNormalGeometry();
+
+    /// Seeded with the default size; the constructor's placement fires
+    /// resized(), so the first real value is recorded before the window is
+    /// ever visible.
+    WindowSettings geometry_ { 0, 0, kMainWindowDefaultWidth, kMainWindowDefaultHeight };
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OperatorWindow)
 };
 

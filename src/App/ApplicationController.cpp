@@ -1619,6 +1619,27 @@ bool ApplicationController::saveSettings(std::string& error)
     return config_.save(error);
 }
 
+bool ApplicationController::persistWindowGeometry(const WindowSettings& geometry, std::string& error)
+{
+    // The one mutation is the window section; updateWith copies the current
+    // configuration, so every other operator setting travels into the write
+    // exactly as it was (the task's "geometry must not touch the rest",
+    // asserted in tests/unit/TestApplicationController.cpp).
+    if (!config_.updateWith(error, [geometry](AppConfig& cfg) { cfg.window = geometry; }))
+    {
+        log::warning(kComponent, "window geometry refused: " + error);
+        return false;
+    }
+
+    if (!config_.save(error))
+    {
+        log::warning(kComponent, "window geometry not persisted: " + error);
+        return false;
+    }
+
+    return true;
+}
+
 void ApplicationController::onTranslatedAudio(const float* samples, int frameCount, int sampleRate)
 {
     // Worker/network thread. This is the delivery side of the translation contract

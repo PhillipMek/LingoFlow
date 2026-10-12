@@ -1,3 +1,17 @@
+// Venue task 5 asks one Win32 question (IsZoomed on the native frame - see
+// OperatorWindow.h). Same rule as Main.cpp: the Windows headers come before
+// JUCE pulls its own, and NOMINMAX keeps the min/max macros away from the
+// std::clamp in this file.
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "App/OperatorWindow.h"
 
 #include <algorithm>
@@ -9,6 +23,7 @@
 #include "App/DiagnosticsWindow.h"
 #include "App/SettingsWindow.h"
 #include "Config/ConfigSchema.h"
+#include "Utils/Log.h"
 
 namespace liveai {
 namespace {
@@ -1128,6 +1143,58 @@ void OperatorContent::resized()
 
 // ============================================================================ OperatorWindow
 
+namespace {
+
+/// Snapshot the current displays into the portable DisplayRect list the
+/// restore policy reads. Converting juce::Displays::Display here - and only
+/// here - keeps every off-screen / multi-monitor decision in WindowGeometry,
+/// where it is unit-testable with a synthetic monitor layout (the real thing
+/// cannot be fabricated in an automated run).
+std::vector<DisplayRect> currentDisplayRects()
+{
+    const auto& desktop = juce::Desktop::getInstance();
+    const auto& displays = desktop.getDisplays();
+
+    std::vector<DisplayRect> rects;
+    rects.reserve(static_cast<std::size_t>(displays.displays.size()));
+
+    for (const auto& display : displays.displays)
+    {
+        // userBounds is the part of the display the window may occupy (task
+        // bar excluded), in logical pixels - the same space Component bounds
+        // and getBounds() use.
+        const juce::Rectangle<int> area = display.userBounds.toNearestInt();
+
+        rects.push_back(DisplayRect{ area.getX(), area.getY(), area.getWidth(), area.getHeight(),
+                                     display.isMain });
+    }
+
+    return rects;
+}
+
+/// True while the native frame is maximised or minimised. JUCE 9.0.3 has no
+/// public isMaximised() (checked against the vendored tree), so the one place
+/// that must not record a special-state rectangle as the "saved size" asks
+/// the OS via IsZoomed; minimisation needs no OS question - the peer's own
+/// documented flag covers it, and a minimised window's bounds are the system
+/// parking place, not the operator's geometry. No peer yet (the constructor's
+/// first layout pass) means no special state: the placement being applied IS
+/// the geometry worth recording.
+bool frameInSpecialState(const juce::Component& window)
+{
+    auto* peer = window.getPeer();
+    if (peer == nullptr)
+        return false;
+
+#ifdef _WIN32
+    if (IsZoomed(static_cast<HWND>(peer->getNativeHandle())) != FALSE)
+        return true;
+#endif
+    return peer->isMinimised();
+}
+
+} // namespace
+
 OperatorWindow::OperatorWindow(ApplicationController& controller)
     : juce::DocumentWindow(JUCE_APPLICATION_NAME_STRING,
                            ink::background,
@@ -1146,11 +1213,73 @@ OperatorWindow::OperatorWindow(ApplicationController& controller)
     // the merged translation row) needs about 700 px instead of the old 1128,
     // so the default 980x660 - outer ~691 with the title bar - fits a
     // 1366x768 work area, and the 540 floor keeps header, note and START/STOP
-    // on screen everywhere: the cards scroll, the command bar never does.
-    setResizeLimits(720, 540, 4000, 4000);
-    setSize(980, 660);
-    centreWithSize(getWidth(), getHeight());
+    // on screen everywhere: the cards scroll, the command bar never does. The
+    // numbers are the shared contract in App/WindowGeometry.h, so the restore
+    // below clamps against exactly what the frame enforces.
+    setResizeLimits(kMainWindowMinWidth, kMainWindowMinHeight, kMainWindowMaxWidth, kMainWindowMaxHeight);
+
+    // Venue task 5: come back where the operator left the window. The stored
+    // geometry (single Settings area, config.json) is resolved against the
+    // displays that exist RIGHT NOW - a remembered spot with no monitor under
+    // it, or a size outside the app limits, comes back on-screen and legal
+    // instead of invisible. Everything happens BEFORE setVisible: the window
+    // appears once, at its final rectangle, with no post-show resize jump.
+    const auto placement = resolveWindowPlacement(controller.config().current().window,
+                                                  currentDisplayRects());
+
+    if (placement.fromSavedGeometry)
+        setBounds(placement.x, placement.y, placement.width, placement.height);
+    else
+    {
+        setSize(placement.width, placement.height);
+        centreWithSize(getWidth(), getHeight());
+    }
+
+    if (!placement.fromSavedGeometry || placement.sizeClamped || placement.movedOnScreen)
+        log::info("ui", "main window: " + placement.describe());
+
     setVisible(true);
+
+    // Measured on the live build (venue task 5): sizes above the floor round-trip
+    // pixel-exact; a rectangle stored EXACTLY at the floor lands one frame width
+    // smaller in CLIENT terms (the native peer re-derives component bounds from
+    // the window rect after creation - the file then converges to that fixed
+    // point and every later start is identical). The task-4 layout absorbs it:
+    // the pinned header, note and START/STOP were verified on screen at that
+    // size (UIA bounding rects inside the frame), only the scrollable card
+    // column gets a slightly shorter viewport. A synchronous re-assert here was
+    // tried and cannot work - the peer's own correction arrives later, on the
+    // message queue; the floor is the constrainer's job for every INTERACTIVE
+    // resize, which is where it actually guards the layout.
+}
+
+void OperatorWindow::resized()
+{
+    juce::DocumentWindow::resized();   // mandatory: the superclass lays out the decorations
+    recordNormalGeometry();
+}
+
+void OperatorWindow::moved()
+{
+    juce::Component::moved();
+    recordNormalGeometry();
+}
+
+void OperatorWindow::recordNormalGeometry()
+{
+    // Track only the NORMAL-state rectangle. A maximised close would
+    // otherwise store a whole-screen geometry that restores the next launch
+    // as an oversized window covering the operator's other work - the
+    // remembered intent is the size the window was before someone pressed
+    // maximize, and that is exactly what survives the close.
+    if (frameInSpecialState(*this))
+        return;
+
+    const auto bounds = getBounds();
+    if (bounds.getWidth() <= 0 || bounds.getHeight() <= 0)
+        return;   // the frame's first layout pass runs before any real size exists
+
+    geometry_ = WindowSettings{ bounds.getX(), bounds.getY(), bounds.getWidth(), bounds.getHeight() };
 }
 
 void OperatorWindow::closeButtonPressed()

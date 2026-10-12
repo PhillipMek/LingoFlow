@@ -56,6 +56,7 @@ add_executable(lingoflow_tests
     unit/TestTextPipeline.cpp
     unit/TestTranslationStreamer.cpp
     unit/TestUiModel.cpp
+    unit/TestWindowGeometry.cpp
     unit/TestWavFile.cpp
     integration/TestFaultInjection.cpp
     integration/TestTranslationEndToEnd.cpp)

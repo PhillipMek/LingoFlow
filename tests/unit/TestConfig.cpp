@@ -5,6 +5,7 @@
 #include <fstream>
 #include <limits>
 #include <string>
+#include <vector>
 
 #include "Config/ConfigSchema.h"
 #include "Config/ConfigStore.h"
@@ -61,6 +62,7 @@ AppConfig makeConfig()
     cfg.ndi.subtitles.style.backgroundPaddingPx = 8;
     cfg.diagnostics.logLevel = "warning";
     cfg.diagnostics.writeLogFile = false;
+    cfg.window = WindowSettings{ -1600, 220, 1280, 800 };   // v4: the left-hand monitor of the venue rig
     return cfg;
 }
 
@@ -153,6 +155,120 @@ TEST_CASE("ConfigSchema: a v1 settings file grows the v2 defaults, not problems"
 
     const auto fresh = config::defaults();
     CHECK(restored.audio.sampleRate == fresh.audio.sampleRate);   // every other section defaults too
+}
+
+TEST_CASE("ConfigSchema: a v3 settings file grows the v4 window default, not problems",
+          "[config][schema][window][migration]")
+{
+    // The same migration that made v1 files survive under v2 and v2 under v3,
+    // used once more (venue task 5): an installation that never stored a
+    // window gets a clean "never saved", loads without a single problem, and
+    // the application places the window itself. Geometry is added to the
+    // file; it is never imposed on the file.
+    const std::string v3Text =
+        R"({"schemaVersion":3,"audio":{"sampleRate":48000,"bufferFrames":480},)"
+        R"("ndi":{"enabled":false,"streamName":"LingoFlow"},)"
+        R"("diagnostics":{"logLevel":"info","writeLogFile":true}})";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(v3Text, restored, problems, error));
+
+    CHECK(problems.empty());
+    CHECK(restored.window == config::defaults().window);
+    CHECK_FALSE(restored.window.isSet());
+    CHECK(restored.audio.sampleRate == 48000);   // the rest of the v3 file still lands
+
+    // And the unset default is something this build can write back: a config
+    // that cannot be saved would turn the first geometry persist into a
+    // refused shutdown.
+    CHECK(config::validate(config::defaults()).empty());
+}
+
+TEST_CASE("ConfigSchema: a corrupt window rectangle is repaired, never kept half",
+          "[config][schema][window][corrupt]")
+{
+    // Two repair paths, and the test keeps them straight (the distinction is
+    // the existing schema contract, not a window special case):
+    //
+    //   * a field of the WRONG TYPE is read per field - readNumber ignores it,
+    //     that ONE key keeps the fallback, the section is otherwise intact;
+    //   * a value that parses but is not a usable RECTANGLE (range, a negative
+    //     size, a half rectangle) is reported under "window" and the repair
+    //     drops the WHOLE section to "unset" - because a sane position mixed
+    //     with a garbage size is a window the operator never had, and the
+    //     restore policy must not be handed a lie.
+    //
+    // Both paths end in a rectangle this build can write back and that the
+    // App layer can always resolve to an on-screen window.
+    const std::vector<std::string> sectionRepairs = {
+        R"({"window":{"x":100,"y":200,"width":0,"height":800}})",        // half a rectangle
+        R"({"window":{"x":100,"y":200,"width":-50,"height":800}})",      // a negative size
+        R"({"window":{"x":1000000,"y":200,"width":800,"height":600}})",  // a coordinate no desktop holds
+        R"({"window":{"x":100,"y":200,"width":99999,"height":600}})",    // a size no display renders
+    };
+
+    for (const auto& text : sectionRepairs)
+    {
+        INFO(text);
+        AppConfig restored;
+        ConfigProblems problems;
+        std::string error;
+        REQUIRE(config::fromJsonText(text, restored, problems, error));
+
+        CHECK(restored.window == config::defaults().window);   // the whole section, all four fields
+
+        bool reported = false;
+        for (const auto& problem : problems)
+            reported = reported || problem.field == "window";
+        CHECK(reported);
+    }
+
+    // A field that is simply not a number: that key falls back, the rectangle
+    // stays usable, and it is reported (never silently dropped).
+    {
+        AppConfig restored;
+        ConfigProblems problems;
+        std::string error;
+        REQUIRE(config::fromJsonText(R"({"window":{"x":"left","y":200,"width":800,"height":600}})",
+                                     restored, problems, error));
+
+        CHECK(restored.window.x == config::defaults().window.x);   // the bad key fell back
+        CHECK(restored.window.width == 800);                       // the good keys survived
+        CHECK(config::validate(restored).empty());                 // and what survived is valid
+
+        bool reported = false;
+        for (const auto& problem : problems)
+            reported = reported || problem.field == "window.x";
+        CHECK(reported);
+    }
+
+    // The section itself not being an object: kept at the default, reported.
+    {
+        AppConfig restored;
+        ConfigProblems problems;
+        std::string error;
+        REQUIRE(config::fromJsonText(R"({"window":42})", restored, problems, error));
+        CHECK(restored.window == config::defaults().window);
+    }
+}
+
+TEST_CASE("ConfigSchema: the window check filters garbage, it does not judge placement",
+          "[config][schema][window]")
+{
+    // Config has no screens: a rectangle no CURRENT build of this program
+    // could reach is still an honest memory of yesterday's venue, and the
+    // schema's job is to keep it byte-exact for the policy that decides what
+    // to do with it (App/WindowGeometry, TestWindowGeometry.cpp). Rejecting
+    // it here would be the parallel-brain bug: two components each thinking
+    // they own "reasonable".
+    AppConfig cfg = config::defaults();
+    cfg.window = WindowSettings{ 40000, -40000, 4000, 4000 };   // huge but inside the garbage bound
+    CHECK(config::validate(cfg).empty());
+
+    cfg.window = WindowSettings{ -65536, -65536, 720, 540 };    // exactly on the bound: still data, not damage
+    CHECK(config::validate(cfg).empty());
 }
 
 TEST_CASE("ConfigSchema: subtitle video values are validated and repaired field by field",
@@ -263,6 +379,7 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.ndi.subtitles == original.ndi.subtitles);   // the whole v2 block, field for field
     CHECK(restored.diagnostics.logLevel == original.diagnostics.logLevel);
     CHECK(restored.diagnostics.writeLogFile == original.diagnostics.writeLogFile);
+    CHECK(restored.window == original.window);   // v4: a negative x is a real venue position, not damage
 }
 
 TEST_CASE("ConfigSchema: developer fields round-trip", "[config][schema][developer]")
@@ -757,6 +874,7 @@ TEST_CASE("ConfigStore: round-trip through a real file", "[config][store][roundt
     CHECK(loaded.config.translation.instructions == settings.translation.instructions);
     CHECK(loaded.config.diagnostics.logLevel == "warning");
     CHECK(loaded.config.ndi.streamName == settings.ndi.streamName);
+    CHECK(loaded.config.window == settings.window);   // v4: the saved rectangle survives a real file
 }
 
 TEST_CASE("ConfigStore: missing file means defaults, and nothing is written", "[config][store]")
