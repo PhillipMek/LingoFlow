@@ -380,15 +380,20 @@ void DiagnosticsFrame::resized()
 {
     // The fixed strip at the bottom, the scroll above it: the buttons and the
     // note never scroll away (venue task 4 §5 - "нижние элементы должны
-    // оставаться доступными").
+    // оставаться доступными"). The strip carries the same left/right inset as
+    // the card column inside the viewport (kMargin, applied by the body's own
+    // reduced()) - a review pass caught that the buttons were missing it and
+    // sat flush to the window edge while the cards floated 16 px in.
     auto bounds = getLocalBounds();
     auto bottom = bounds.removeFromBottom(kMargin + kButtonH + kCardGap + kNoteH + kMargin);
     bottom.removeFromTop(kMargin);
+    bottom = bottom.reduced(kMargin, 0);
 
     auto buttons = bottom.removeFromTop(kButtonH);
     exportButton_.setBounds(buttons.removeFromLeft(180));
     buttons.removeFromLeft(kCardGap);
     rawButton_.setBounds(buttons.removeFromLeft(160));
+    bottom.removeFromTop(kCardGap);
 
     noteLabel_.setBounds(bottom.withHeight(kNoteH));
 
