@@ -458,7 +458,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     slider(marginSlider_, 0, 40, 1, subtitlesBody);
     caption(blockWidthCaption_, "Max text block width (%)", subtitlesBody);
     slider(blockWidthSlider_, 25, 100, 5, subtitlesBody);
-    caption(maxLinesCaption_, "Max lines (font shrinks to fit first)", subtitlesBody);
+    caption(maxLinesCaption_, "Max lines (NDI video shows one line)", subtitlesBody);
     slider(maxLinesSlider_, 1, 6, 1, subtitlesBody);
     caption(lineSpacingCaption_, "Line spacing (%)", subtitlesBody);
     slider(lineSpacingSlider_, 0, 100, 5, subtitlesBody);

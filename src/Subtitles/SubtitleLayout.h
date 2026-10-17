@@ -31,6 +31,23 @@
 //      percentage, the horizontal placement centers/lefts/rights the block
 //      inside the frame's safe area (a fixed percentage inset - subtitles
 //      must never touch the very edge of a broadcast frame).
+//
+// The NDI video rule set (LayoutMode::singleLineTrimHead) is a SEPARATE mode
+// the same entry point selects, because burned-in NDI captions must stay
+// visually stable no matter how much text has accumulated: ONE row at the
+// configured font size. Rules 2-4 above are replaced by a single rule: the
+// caption joins its words into one row (any ASCII whitespace becomes a
+// single space - no newline can reach the rasterizer), the font NEVER
+// adapts to the text (no shrink, ever), and when the row measures wider
+// than the block, the OLDEST characters leave its head - the longest
+// suffix whose MEASURED width fits is shown, so the newest words on the
+// right are always on screen. The cut walks whole displayed clusters: a
+// multibyte UTF-8 character is never split, a combining mark never parts
+// from its base, ZWJ emoji sequences and regional-indicator flags ride as
+// single units. This is a bounded approximation of UAX #29 (no Hangul jamo
+// composition, no Indic spacing-mark rules) - recorded honestly in the
+// implementation, and every cut it makes is safe. The geometry rules (1
+// and 5) stay in force: line height, anchors and alignment do not move.
 
 #include <functional>
 #include <string>
@@ -45,6 +62,17 @@ namespace subtitles {
 /// Width of one text run at one font size, in frame pixels. The rasterizer
 /// supplies a real font-engine implementation; tests supply arithmetic.
 using LineMeasurer = std::function<float(std::string_view line, float fontPx)>;
+
+/// Which rule set lays out the caption. The mode is chosen by the CALLER,
+/// never by a global default: the delivered fit-to-block rules stay what an
+/// unmarked call does, and the NDI burned-in video renderer asks for the
+/// single-line trim explicitly (the operator screen and every other consumer
+/// keeps the rules it has always had).
+enum class LayoutMode
+{
+    fitToBlock = 0,      ///< wrap, bounded shrink, ellipsis: the delivered rules 1-5
+    singleLineTrimHead   ///< one fixed-size row; characters leave the head to fit
+};
 
 /// The outcome of laying out one caption. All values are in frame pixels.
 struct LaidOutCaption
@@ -62,8 +90,9 @@ struct LaidOutCaption
     float backgroundPaddingPx = 0.0f;
     float boxX = 0.0f, boxY = 0.0f, boxWidth = 0.0f, boxHeight = 0.0f; ///< block + padding
 
-    bool shrunk = false;      ///< rule 3 acted
-    bool ellipsized = false;  ///< rule 4 acted - the caption did not fully fit
+    bool shrunk = false;      ///< rule 3 acted (fitToBlock only; the single-line mode never shrinks)
+    bool ellipsized = false;  ///< rule 4 acted - the caption did not fully fit (fitToBlock only)
+    bool headTrimmed = false; ///< single-line mode only: characters left the head so the row fits
     bool clipped = false;     ///< frame too small for even the floor layout: the block was clamped
 
     friend constexpr bool operator==(const LaidOutCaption&, const LaidOutCaption&) = default;
@@ -84,14 +113,15 @@ constexpr float kMinFontScale = 0.6f;
 /// Each shrink step is 90% of the previous size (five steps reach the floor).
 constexpr float kShrinkStep = 0.9f;
 
-/// Lays out `text` for a frame of width x height. An empty text yields an
-/// empty result (zero lines, zero block) - the caller renders the frame's
-/// transparent background and nothing else.
+/// Lays out `text` for a frame of width x height under `mode`'s rules. An
+/// empty text yields an empty result (zero lines, zero block) - the caller
+/// renders the frame's transparent background and nothing else.
 LaidOutCaption layoutCaption(const SubtitleStyle& style,
                              int frameWidth,
                              int frameHeight,
                              const LineMeasurer& measure,
-                             std::string_view text);
+                             std::string_view text,
+                             LayoutMode mode = LayoutMode::fitToBlock);
 
 } // namespace subtitles
 } // namespace liveai

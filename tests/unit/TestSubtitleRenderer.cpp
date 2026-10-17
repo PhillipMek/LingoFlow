@@ -19,6 +19,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_message.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <string>
 
@@ -355,6 +356,175 @@ TEST_CASE("SubtitleRenderer: live settings changes take effect on the next rende
             if (p.alpha(x, y) == 255 && p.green(x, y) == 255 && p.red(x, y) == 0)
             { ++green; break; }
     CHECK(green > 0);                          // ...and the new colour is on screen
+}
+
+// ---------------------------------------------------------- NDI single-line mode
+// The renderer passes the captions through layoutCaption's singleLineTrimHead
+// mode: one row, the configured font size, the oldest characters trimmed off
+// the head. These are the GDI+-measured proofs of that promise.
+
+TEST_CASE("SubtitleRenderer: NDI captions are one fixed-size row trimmed at the head",
+          "[subtitles][render][singleline]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+
+    RenderedSubtitleFrame shortFrame;
+    std::string error;
+    REQUIRE(renderer.render("Short line", shortFrame, error));
+    REQUIRE(shortFrame.layout.lines.size() == 1);
+    CHECK(shortFrame.layout.lines[0] == "Short line");
+    CHECK_FALSE(shortFrame.layout.headTrimmed);
+    CHECK(shortFrame.layout.fontPx == 48.0f);   // the configured size at 1080p
+
+    // Far more text than 85% of a 1920 px row at 48 px can ever show.
+    const std::string longCaption =
+        "The interpreter kept speaking about economics and logistics and medicine "
+        "while the translated caption grew well past what this single row can show";
+
+    RenderedSubtitleFrame longFrame;
+    REQUIRE(renderer.render(longCaption, longFrame, error));
+
+    CHECK(longFrame.layout.lines.size() == 1);                   // always one row
+    CHECK(longFrame.layout.fontPx == shortFrame.layout.fontPx);  // the size never adapts
+    CHECK_FALSE(longFrame.layout.shrunk);
+    CHECK_FALSE(longFrame.layout.ellipsized);
+    CHECK(longFrame.layout.headTrimmed);
+    CHECK(longFrame.layout.lineHeightPx == shortFrame.layout.lineHeightPx);
+    CHECK(longFrame.layout.blockHeight == shortFrame.layout.blockHeight);  // stable geometry
+
+    const std::string& shown = longFrame.layout.lines.front();
+    CHECK(shown.size() < longCaption.size());
+    CHECK(longCaption.ends_with(shown));        // the newest characters survive
+    CHECK(shown.find('\n') == std::string::npos);
+    CHECK(shown.find('\t') == std::string::npos);
+
+    // The trim rests on the GDI+ measurement: the painted row is inside its block.
+    CHECK(longFrame.layout.maxLineWidth <= 1920.0f * 0.85f + 0.01f);
+    CHECK(scan(longFrame).opaqueWhite > 100);   // and it really painted the suffix
+}
+
+TEST_CASE("SubtitleRenderer: Cyrillic trimming lands on character boundaries, never mid-sequence",
+          "[subtitles][render][singleline][fonts]")
+{
+    SubtitleRenderer renderer;
+    renderer.applySettings(settings1080());
+
+    const std::string caption =
+        "Переводчик говорил об экономике и логистике, а строка субтитров выросла "
+        "настолько что в неё уже не помещались даже самые свежие слова переводчика";
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render(caption, frame, error));
+
+    REQUIRE(frame.layout.lines.size() == 1);
+    const std::string& shown = frame.layout.lines.front();
+    CHECK(frame.layout.headTrimmed);
+    CHECK(caption.ends_with(shown));
+
+    // The first byte of the row is a lead byte - no multibyte character was
+    // cut in half at the head edge.
+    REQUIRE(!shown.empty());
+    CHECK((static_cast<unsigned char>(shown.front()) & 0xC0) != 0x80);
+
+    // And the whole row decodes as complete UTF-8 sequences.
+    std::size_t i = 0;
+    while (i < shown.size())
+    {
+        const unsigned char lead = static_cast<unsigned char>(shown[i]);
+        const std::size_t len = (lead & 0xE0) == 0xC0 ? 2u
+                              : (lead & 0xF0) == 0xE0 ? 3u
+                              : (lead & 0xF8) == 0xF0 ? 4u : 1u;
+        REQUIRE(i + len <= shown.size());
+        i += len;
+    }
+    CHECK(frame.layout.maxLineWidth <= 1920.0f * 0.85f + 0.01f);
+    CHECK(scan(frame).opaqueWhite > 100);
+}
+
+TEST_CASE("SubtitleRenderer: a caption carrying line breaks still renders one row",
+          "[subtitles][render][singleline]")
+{
+    SubtitleRenderer renderer;
+    renderer.applySettings(settings1080());
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render("first\r\nsecond\t\tthird", frame, error));
+    REQUIRE(frame.layout.lines.size() == 1);
+    CHECK(frame.layout.lines.front() == "first second third");
+    CHECK(scan(frame).opaqueWhite > 100);
+
+    // A whitespace-only caption is the transparent frame: the same clearing
+    // promise the empty caption carries, reached through the layout, not a crash.
+    RenderedSubtitleFrame blank;
+    REQUIRE(renderer.render("  \n\t ", blank, error));
+    CHECK(blank.layout.lines.empty());
+    CHECK(scan(blank).transparent == static_cast<std::size_t>(blank.width) * blank.height);
+}
+
+TEST_CASE("SubtitleRenderer: geometry changes keep one row and the proportional font",
+          "[subtitles][render][singleline]")
+{
+    const std::string caption =
+        "One sentence measured at two resolutions: the row count and the style "
+        "scale are the settings' answer, never the caption length's answer";
+
+    SubtitleRenderer full;
+    full.applySettings(settings1080());
+    SubtitleRenderer small;
+    auto smallSettings = settings1080();
+    smallSettings.video.width = 1280;
+    smallSettings.video.height = 720;
+    small.applySettings(smallSettings);
+
+    RenderedSubtitleFrame big, little;
+    std::string error;
+    REQUIRE(full.render(caption, big, error));
+    REQUIRE(small.render(caption, little, error));
+
+    CHECK(big.layout.lines.size() == 1);
+    CHECK(little.layout.lines.size() == 1);
+    CHECK(little.layout.fontPx == Catch::Approx(big.layout.fontPx * (720.0f / 1080.0f)).epsilon(0.001f));
+    CHECK(big.layout.maxLineWidth <= 1920.0f * 0.85f + 0.01f);
+    CHECK(little.layout.maxLineWidth <= 1280.0f * 0.85f + 0.01f);
+}
+
+TEST_CASE("SubtitleRenderer: a pathological word and a degenerate block stay honest",
+          "[subtitles][render][singleline]")
+{
+    SubtitleRenderer renderer;
+    renderer.applySettings(settings1080());
+    RenderedSubtitleFrame frame;
+    std::string error;
+
+    // 5000 characters in one word: the trim is a binary search over cluster
+    // starts, so this completes promptly with exactly one fitted row.
+    const std::string word(5000, 'a');
+    REQUIRE(renderer.render(word, frame, error));
+    REQUIRE(frame.layout.lines.size() == 1);
+    CHECK(frame.layout.fontPx == 48.0f);
+    CHECK(frame.layout.headTrimmed);
+    CHECK(frame.layout.maxLineWidth <= 1920.0f * 0.85f + 0.01f);
+    CHECK(word.ends_with(frame.layout.lines.front()));
+
+    // A block narrower than the newest single character: the character rides
+    // (UTF-8 intact), the frame reports the clamp, and nothing hangs.
+    auto narrow = settings1080();
+    narrow.style.blockWidthPercent = 1;   // 19.2 px < any Cyrillic glyph at 48 px
+    renderer.applySettings(narrow);
+    RenderedSubtitleFrame lastChar;
+    REQUIRE(renderer.render("абвгд", lastChar, error));
+    REQUIRE(lastChar.layout.lines.size() == 1);
+    CHECK(lastChar.layout.lines.front() == "\xd0\xb4");   // "д", whole two-byte sequence
+    CHECK(lastChar.layout.headTrimmed);
+    CHECK(std::isfinite(lastChar.layout.blockX));
+    CHECK(std::isfinite(lastChar.layout.blockY));
 }
 
 #else // !_WIN32

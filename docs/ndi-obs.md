@@ -21,10 +21,19 @@ One NDI source ("LingoFlow" by default, or your stream name) carrying:
   always, by design - two senders with one name collide on the network).
 
 Appearance (font, size, colours, outline, shadow, box, alignment, margins,
-max lines, line spacing), resolution and frame rate are edited live under
+line spacing), resolution and frame rate are edited live under
 Settings → Subtitles / NDI; the checkerboard preview shows the transparency
 before anything goes on air. Appearance/geometry changes apply to the running
 source; only the stream name and the enabled switch need Stop + Start.
+
+The burned-in video always shows ONE row at the configured font size: as a
+caption grows past the block width the OLDEST characters leave the left edge
+and the newest suffix stays visible. The font never shrinks under text
+length, the text never wraps, and the row's height and vertical position are
+constant (the trim cuts whole characters only - accents, Cyrillic, emoji
+sequences and flag pairs are never split). The `maxLines` style field is
+retained in the configuration and applies to the wrapped layout mode, but
+the NDI video output is single-line whatever it says.
 
 ## Enabling it in LingoFlow
 

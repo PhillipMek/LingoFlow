@@ -205,7 +205,14 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     const LineMeasurer measure = [&](std::string_view line, float fontPx) {
         return measureRun(family, line, fontPx);
     };
-    out.layout = layoutCaption(settings_.style, width, height, measure, captionText);
+    // Burned-in NDI captions are laid out in the single-line mode: the
+    // configured font size never shrinks, the caption never wraps, and when
+    // the row outgrows the block the OLDEST characters leave its left edge
+    // (the newest words are what the audience cannot get back). The trim is
+    // driven by the same GDI+ measurement the paint below uses, so "fits"
+    // is measured truth, not a character estimate.
+    out.layout = layoutCaption(settings_.style, width, height, measure, captionText,
+                               LayoutMode::singleLineTrimHead);
     if (out.layout.lines.empty())
         return true;   // whitespace-only caption: transparent like the empty one
 
