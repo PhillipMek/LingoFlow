@@ -255,7 +255,7 @@ TEST_CASE("SubtitleLayout: live NDI mode preserves complete UTF-8 characters whi
 
     REQUIRE(laid.lines.size() == 1);
     CHECK(laid.fontPx == 48.0f);
-    CHECK(laid.lines.front().find("\xD0") != std::string::npos
-          || laid.lines.front().find("\xD1") != std::string::npos);
+    const auto firstByte = static_cast<unsigned char>(laid.lines.front().front());
+    CHECK((firstByte & 0xC0) != 0x80); // first byte is not a UTF-8 continuation byte
     CHECK(fakeMeasure(laid.lines.front(), laid.fontPx) <= kW * 0.25f + 0.001f);
 }
