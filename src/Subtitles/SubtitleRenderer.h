@@ -63,7 +63,8 @@ public:
     /// Returns false only when nothing was painted: the caller keeps its last
     /// frame (or the transparent one), counts the error and keeps audio alive;
     /// the message is an operator-actionable sentence.
-    bool render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error);
+    bool render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error,
+                CaptionLayoutMode mode = CaptionLayoutMode::adaptive);
 
     /// Updates the settings for the NEXT render (no lock inside this object:
     /// the owner confining it to one thread owns the handover - the video

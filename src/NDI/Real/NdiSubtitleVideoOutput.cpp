@@ -295,7 +295,7 @@ void NdiSubtitleVideoOutput::renderLoop()
                 renderer.applySettings(settings);
                 subtitles::RenderedSubtitleFrame& target = slots[drawSlot];
                 std::string error;
-                if (renderer.render(caption, target, error))
+                if (renderer.render(caption, target, error, subtitles::CaptionLayoutMode::singleLineTail))
                 {
                     drawnCaptionVersion = captionVersion;
                     drawnSettingsVersion = settingsVersion;

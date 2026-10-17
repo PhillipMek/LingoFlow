@@ -155,7 +155,8 @@ bool SubtitleRenderer::available()
 #endif
 }
 
-bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error)
+bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error,
+                              CaptionLayoutMode mode)
 {
     error.clear();
     const int width = settings_.video.width;
@@ -205,8 +206,7 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     const LineMeasurer measure = [&](std::string_view line, float fontPx) {
         return measureRun(family, line, fontPx);
     };
-    out.layout = layoutCaption(settings_.style, width, height, measure, captionText,
-                               CaptionLayoutMode::singleLineTail);
+    out.layout = layoutCaption(settings_.style, width, height, measure, captionText, mode);
     if (out.layout.lines.empty())
         return true;   // whitespace-only caption: transparent like the empty one
 
