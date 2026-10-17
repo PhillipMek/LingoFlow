@@ -220,3 +220,42 @@ TEST_CASE("SubtitleLayout: degenerate inputs refuse quietly", "[subtitles][layou
     const auto one = layoutCaption(style, kW, kH, measurer, "x");
     CHECK(one.lines.size() == 1);
 }
+
+
+TEST_CASE("SubtitleLayout: live NDI mode keeps fixed font and clips the beginning to one line",
+          "[subtitles][layout][ndi]")
+{
+    SubtitleStyle style = testStyle();
+    style.fontSizePx = 48;
+    style.maxLines = 2;
+    const std::string text = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+    const auto laid = layoutCaption(style, kW, kH, measurer, text,
+                                    CaptionLayoutMode::singleLineTail);
+
+    REQUIRE(laid.lines.size() == 1);
+    CHECK(laid.fontPx == 48.0f);
+    CHECK_FALSE(laid.shrunk);
+    CHECK_FALSE(laid.ellipsized);
+    CHECK(laid.clipped);
+    CHECK(laid.lines.front().size() < text.size());
+    CHECK(laid.lines.front() == text.substr(text.size() - laid.lines.front().size()));
+    CHECK(fakeMeasure(laid.lines.front(), laid.fontPx) <= kW * 0.25f + 0.001f);
+}
+
+TEST_CASE("SubtitleLayout: live NDI mode preserves complete UTF-8 characters while clipping",
+          "[subtitles][layout][ndi]")
+{
+    SubtitleStyle style = testStyle();
+    style.fontSizePx = 48;
+    const std::string text = "Начало длинной строки — продолжающаяся фраза";
+
+    const auto laid = layoutCaption(style, kW, kH, measurer, text,
+                                    CaptionLayoutMode::singleLineTail);
+
+    REQUIRE(laid.lines.size() == 1);
+    CHECK(laid.fontPx == 48.0f);
+    CHECK(laid.lines.front().find("\xD0") != std::string::npos
+          || laid.lines.front().find("\xD1") != std::string::npos);
+    CHECK(fakeMeasure(laid.lines.front(), laid.fontPx) <= kW * 0.25f + 0.001f);
+}

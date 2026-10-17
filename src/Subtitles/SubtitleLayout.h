@@ -46,6 +46,15 @@ namespace subtitles {
 /// supplies a real font-engine implementation; tests supply arithmetic.
 using LineMeasurer = std::function<float(std::string_view line, float fontPx)>;
 
+/// Adaptive layout is used by default. singleLineTail is intended for live NDI
+/// captions: preserve the configured font size, never wrap, and crop from the
+/// beginning when the accumulated text exceeds the available width.
+enum class CaptionLayoutMode
+{
+    adaptive,
+    singleLineTail
+};
+
 /// The outcome of laying out one caption. All values are in frame pixels.
 struct LaidOutCaption
 {
@@ -91,7 +100,8 @@ LaidOutCaption layoutCaption(const SubtitleStyle& style,
                              int frameWidth,
                              int frameHeight,
                              const LineMeasurer& measure,
-                             std::string_view text);
+                             std::string_view text,
+                             CaptionLayoutMode mode = CaptionLayoutMode::adaptive);
 
 } // namespace subtitles
 } // namespace liveai

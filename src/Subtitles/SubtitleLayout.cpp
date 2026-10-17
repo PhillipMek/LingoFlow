@@ -119,13 +119,50 @@ std::vector<std::string> wrap(const std::string_view text,
     return lines;
 }
 
+
+/// Returns the longest suffix that fits at the supplied font size. The search
+/// works on UTF-8 code-point boundaries, so clipping never corrupts a character.
+/// Binary search avoids repeatedly measuring every possible suffix of a long
+/// accumulated live caption.
+std::string fitTail(std::string_view text, float limitPx, float fontPx,
+                    const LineMeasurer& measure)
+{
+    while (!text.empty() && text.front() == ' ')
+        text.remove_prefix(1);
+    while (!text.empty() && text.back() == ' ')
+        text.remove_suffix(1);
+    if (text.empty())
+        return {};
+
+    const auto offsets = codepointOffsets(text);
+    std::size_t low = 0;
+    std::size_t high = offsets.size() - 1;
+    while (low < high)
+    {
+        const std::size_t mid = low + (high - low) / 2;
+        const std::string_view suffix = text.substr(offsets[mid]);
+        if (measure(suffix, fontPx) <= limitPx)
+            high = mid;
+        else
+            low = mid + 1;
+    }
+
+    // In a normal video frame at least one glyph fits. If a pathological
+    // geometry is narrower than even the last glyph, retain that whole glyph;
+    // the renderer clips its pixels at the frame boundary.
+    if (low >= offsets.size() - 1)
+        low = offsets.size() - 2;
+    return std::string(text.substr(offsets[low]));
+}
+
 } // namespace
 
 LaidOutCaption layoutCaption(const SubtitleStyle& style,
                              int frameWidth,
                              int frameHeight,
                              const LineMeasurer& measure,
-                             std::string_view text)
+                             std::string_view text,
+                             CaptionLayoutMode mode)
 {
     LaidOutCaption out;
     if (frameWidth <= 0 || frameHeight <= 0)
@@ -136,20 +173,36 @@ LaidOutCaption layoutCaption(const SubtitleStyle& style,
     const float limitPx = static_cast<float>(frameWidth) * static_cast<float>(style.blockWidthPercent) / 100.0f;
     const int maxLines = (std::max)(1, style.maxLines);
 
-    // Rules 1-3: wrap at the configured size, shrinking (bounded) until the
-    // caption fits the line count.
     float fontPx = baseFontPx;
-    std::vector<std::string> lines = wrap(text, limitPx, fontPx, measure);
-    while (lines.size() > static_cast<std::size_t>(maxLines) && fontPx > baseFontPx * kMinFontScale)
+    std::vector<std::string> lines;
+
+    if (mode == CaptionLayoutMode::singleLineTail)
     {
-        fontPx *= kShrinkStep;
+        // Live NDI captions must remain typographically stable. Keep the
+        // configured font size and one line; as text accumulates, discard its
+        // oldest prefix rather than shrinking or introducing line breaks.
+        const std::string visible = fitTail(text, limitPx, fontPx, measure);
+        if (!visible.empty())
+            lines.push_back(visible);
+        out.clipped = visible.size() < text.size();
+    }
+    else
+    {
+        // Adaptive layout: wrap at the configured size, shrinking (bounded)
+        // until the caption fits the configured line count.
         lines = wrap(text, limitPx, fontPx, measure);
-        out.shrunk = true;
+        while (lines.size() > static_cast<std::size_t>(maxLines) && fontPx > baseFontPx * kMinFontScale)
+        {
+            fontPx *= kShrinkStep;
+            lines = wrap(text, limitPx, fontPx, measure);
+            out.shrunk = true;
+        }
     }
 
-    // Rule 4: still over the limit at the floor font - ellipsize the tail so
-    // the block cannot overflow, measuring the cut so "…" itself fits.
-    if (lines.size() > static_cast<std::size_t>(maxLines))
+    // Adaptive layout only: at the floor font, ellipsize the tail so the block
+    // cannot overflow. The live single-line mode clips the oldest prefix.
+    if (mode == CaptionLayoutMode::adaptive
+        && lines.size() > static_cast<std::size_t>(maxLines))
     {
         out.ellipsized = true;
         std::vector<std::string> kept(lines.begin(), lines.begin() + maxLines - 1);

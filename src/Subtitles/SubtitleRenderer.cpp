@@ -205,7 +205,8 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     const LineMeasurer measure = [&](std::string_view line, float fontPx) {
         return measureRun(family, line, fontPx);
     };
-    out.layout = layoutCaption(settings_.style, width, height, measure, captionText);
+    out.layout = layoutCaption(settings_.style, width, height, measure, captionText,
+                               CaptionLayoutMode::singleLineTail);
     if (out.layout.lines.empty())
         return true;   // whitespace-only caption: transparent like the empty one
 
