@@ -458,8 +458,6 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     slider(marginSlider_, 0, 40, 1, subtitlesBody);
     caption(blockWidthCaption_, "Max text block width (%)", subtitlesBody);
     slider(blockWidthSlider_, 25, 100, 5, subtitlesBody);
-    caption(maxLinesCaption_, "Max lines (NDI video shows one line)", subtitlesBody);
-    slider(maxLinesSlider_, 1, 6, 1, subtitlesBody);
     caption(lineSpacingCaption_, "Line spacing (%)", subtitlesBody);
     slider(lineSpacingSlider_, 0, 100, 5, subtitlesBody);
 
@@ -992,7 +990,10 @@ subtitles::SubtitleSettings SettingsContent::readSubtitleDraft() const
     style.backgroundEnabled = backgroundToggle_.getToggleState();
     style.edgeMarginPercent = static_cast<int> (marginSlider_.getValue());
     style.blockWidthPercent = static_cast<int> (blockWidthSlider_.getValue());
-    style.maxLines = static_cast<int> (maxLinesSlider_.getValue());
+    // style.maxLines is not edited: the NDI product path lays out one fixed-size
+    // row and ignores it (deprecated in SubtitleStyle). The draft started from
+    // the saved config, so the field carries through untouched - old config.json
+    // files keep loading without an "unknown key" complaint.
     style.lineSpacingPercent = static_cast<int> (lineSpacingSlider_.getValue());
 
     // Colours: the R/G/B editor owns them and writes into subtitleDraft_, so
@@ -1074,7 +1075,8 @@ void SettingsContent::fillSubtitleWidgets(const subtitles::SubtitleSettings& s)
                                      juce::NotificationType::dontSendNotification);
     marginSlider_.setValue(s.style.edgeMarginPercent, juce::NotificationType::dontSendNotification);
     blockWidthSlider_.setValue(s.style.blockWidthPercent, juce::NotificationType::dontSendNotification);
-    maxLinesSlider_.setValue(s.style.maxLines, juce::NotificationType::dontSendNotification);
+    // maxLines has no widget any more (the NDI product path shows one
+    // fixed-size row); the draft carries the saved value through untouched.
     lineSpacingSlider_.setValue(s.style.lineSpacingPercent, juce::NotificationType::dontSendNotification);
     hAlignChoice_.setSelectedId(static_cast<int> (s.style.horizontalAlign) + 1,
                                 juce::NotificationType::dontSendNotification);
@@ -1363,8 +1365,6 @@ int SettingsContent::layoutSubtitlesPage(int width)
     marginSlider_.setBounds(rb.removeFromTop(24));
     blockWidthCaption_.setBounds(rb.removeFromTop(kCaptionH));
     blockWidthSlider_.setBounds(rb.removeFromTop(24));
-    maxLinesCaption_.setBounds(rb.removeFromTop(kCaptionH));
-    maxLinesSlider_.setBounds(rb.removeFromTop(24));
     lineSpacingCaption_.setBounds(rb.removeFromTop(kCaptionH));
     lineSpacingSlider_.setBounds(rb.removeFromTop(24));
     rb.removeFromTop(kRowGap);

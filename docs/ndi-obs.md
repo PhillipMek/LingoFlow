@@ -32,8 +32,9 @@ and the newest suffix stays visible. The font never shrinks under text
 length, the text never wraps, and the row's height and vertical position are
 constant (the trim cuts whole characters only - accents, Cyrillic, emoji
 sequences and flag pairs are never split). The `maxLines` style field is
-retained in the configuration and applies to the wrapped layout mode, but
-the NDI video output is single-line whatever it says.
+deprecated: it survives in old configuration files for compatibility but no
+longer has a control in the settings dialog - the NDI video output is
+single-line, whatever the field says.
 
 ## Enabling it in LingoFlow
 

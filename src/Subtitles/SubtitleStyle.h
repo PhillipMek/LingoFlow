@@ -82,6 +82,10 @@ struct SubtitleStyle
     VerticalAnchor verticalAnchor = VerticalAnchor::bottom;
     int edgeMarginPercent = 8;        ///< the task's "8% of the frame height from the bottom"
     int blockWidthPercent = 85;       ///< the text block never reads wider than this
+    /// Deprecated: read only by the fitToBlock layout mode (the library default,
+    /// no longer used by the product). The NDI video path lays out ONE
+    /// fixed-size row and ignores this field; the settings UI does not offer it.
+    /// Kept so existing config.json files load without complaint.
     int maxLines = 2;
     int lineSpacingPercent = 25;      ///< leading between baselines, on top of the font height
     bool backgroundEnabled = false;

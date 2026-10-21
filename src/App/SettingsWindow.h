@@ -161,13 +161,13 @@ private:
     /// modal ColourSelector (OK/Cancel - the draft changes only on OK).
     juce::Label fontFamilyCaption_, fontSizeCaption_, outlineWidthCaption_,
                 shadowOffsetCaption_, shadowOpacityCaption_, alignCaption_,
-                marginCaption_, blockWidthCaption_, maxLinesCaption_,
+                marginCaption_, blockWidthCaption_,
                 lineSpacingCaption_, previewCaption_, ndiModeCaption_,
                 ndiResolutionCaption_, ndiFpsCaption_;
     juce::TextEditor fontFamilyEditor_;
     juce::Slider fontSizeSlider_, outlineWidthSlider_, shadowOffsetSlider_,
                  shadowOpacitySlider_, marginSlider_, blockWidthSlider_,
-                 maxLinesSlider_, lineSpacingSlider_;
+                 lineSpacingSlider_;
     juce::ToggleButton shadowToggle_ { "Drop shadow" };
     juce::ToggleButton backgroundToggle_ { "Background box behind the text" };
     juce::ComboBox hAlignChoice_;
