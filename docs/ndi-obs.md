@@ -52,6 +52,27 @@ single-line, whatever the field says.
    on the venue kit it lives in `tools\`): frames counted and
    `N connection(s)` prove the wire; they never claim a display.
 
+## Test broadcast (before the show)
+
+The **Subtitles / NDI** page has a small test row: type a caption, press
+**Test NDI**, and the text goes out on the configured NDI source with the
+SAVED appearance - no show, no session, no audio needed. The point is to
+see your own subtitles in OBS while you tune them.
+
+* The broadcast renders exactly what **Apply settings** stored: change the
+  look, press Save, then test - what the preview draws is what the sender
+  sends.
+* If no transport is running, the test starts one (the configured stream
+  name) and takes it down when it ends. While a show runs, the test only
+  publishes into the live transport - and the next real caption replaces
+  the test line.
+* Press **Stop test** (or close the settings window - the test never
+  outlives its dialog) and the screen clears: the empty frame is the
+  transport's "this line has ended" statement.
+* If the tick **Publish NDI output** is off, the test refuses and says so;
+  enable it and Save first. A refusal by the NDI runtime itself appears in
+  the note line at the bottom of the dialog.
+
 ## Adding it in OBS
 
 Requirements: OBS Studio with an NDI capture plugin - the community-maintained

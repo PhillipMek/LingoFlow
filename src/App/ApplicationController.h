@@ -221,6 +221,34 @@ public:
     void requestStart();
     void requestStop();
 
+    // ------------------------------------------------------- subtitle test (NDI)
+    /// The operator typed a caption in the settings dialog and wants to see
+    /// what the subtitle output ACTUALLY broadcasts with the saved settings -
+    /// no show required. The transport work runs on the lifecycle worker
+    /// (FIFO with start()/stop(), so the GUI is never held up by a sender);
+    /// a not-running transport is started for the duration of the test and
+    /// handed back when the test ends. Checks the dialog can be answered
+    /// without touching the transport (the settings switch, empty text, a
+    /// missing output) refuse on the spot: false, `note` says why. A
+    /// worker-side refusal leaves ndiTestActive() false and words the reason
+    /// in ndiTestError().
+    bool requestNdiTest(const std::string& text, std::string& note);
+
+    /// End the test: publish the empty frame (the video transport's "this
+    /// line has ended" - a clear, transparent picture), then take the sender
+    /// down if the test raised it and no show inherited it. Always safe;
+    /// queued like the start.
+    void requestNdiTestStop();
+
+    /// True between an accepted test publish and its end (test stop, or the
+    /// Start/Stop of a show that takes the wire over).
+    bool ndiTestActive() const noexcept { return ndiTestActive_.load(std::memory_order_relaxed); }
+
+    /// The transport's reason for the most recent refused test (empty after
+    /// every fresh request; the settings dialog polls it to explain a start
+    /// that never became active).
+    std::string ndiTestError() const;
+
     ApplicationState state() const noexcept { return state_.load(std::memory_order_relaxed); }
     bool isRunning() const noexcept { return state_.load(std::memory_order_relaxed) == ApplicationState::running; }
     std::string faultReason() const;
@@ -377,6 +405,14 @@ private:
     bool startNdi(std::string& error);
     void stopNdi() noexcept;
     void publishToNdi(const translation::TranslationTextEvent& event);
+    /// Ends a running subtitle test on the calling thread (the lifecycle
+    /// worker via requestNdiTestStop, or start()/stop() when the show takes
+    /// the wire over). See the header comment on requestNdiTestStop.
+    void endNdiTest();
+    /// Records a worker-side test refusal: the reason hand for ndiTestError,
+    /// the diagnostics line, the log warning. The flags are the worker's to
+    /// clear - the UI only reads them.
+    void refuseNdiTest(const std::string& error);
     void fault(std::string reason);
 
     DiagnosticsManager diagnostics_;
@@ -396,6 +432,17 @@ private:
     /// must outlive the backend that writes through them.
     translation::TextPipeline textPipeline_;
     std::unique_ptr<ndi::INdiOutput> ndiOutput_;
+
+    /// The subtitle test's state (requestNdiTest): the flags are atomics
+    /// because the lifecycle worker writes them and the settings dialog's
+    /// poll reads them; the reason string crosses the same hand, so it
+    /// carries a mutex. Owned=false means the sender belongs to a show (or
+    /// to nothing): the test that did not raise it does not bury it.
+    std::atomic<bool> ndiTestActive_{false};
+    std::atomic<bool> ndiTestSenderOwned_{false};
+    mutable std::mutex ndiTestMutex_;
+    std::string ndiTestError_;
+
     std::unique_ptr<translation::ITranslationBackend> translationBackend_;
 
     /// Lives exactly as long as an open session (startStreaming/stopStreaming);

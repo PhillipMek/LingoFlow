@@ -63,10 +63,16 @@ public:
     /// the presence line is current.
     void refreshFromSettings();
 
+    /// The dialog is going away (the close button, any dismissal): a running
+    /// subtitle test leaves WITH the dialog - the request queues on the
+    /// lifecycle worker, which is drained before the app can die, so the
+    /// test sender never outlives the window that raised it.
+    void stopNdiTestIfActive();
+
     void resized() override;
 
 private:
-    void timerCallback() override;   ///< presence + NDI state only
+    void timerCallback() override;   ///< presence + NDI state + test button truth
 
     /// One atomic commit of the whole draft through the controller funnel.
     void applyPressed();
@@ -75,6 +81,12 @@ private:
     void exportPressed();
     void showNote();
     void loopbackVisuals();   ///< the red sentence while loopback is checked
+
+    /// The Test NDI button's one handler: while no test runs it asks the
+    /// controller to latch the typed caption (an on-the-spot refusal shows
+    /// its note immediately, a queued start is confirmed by the timer);
+    /// while a test runs the same button ends it.
+    void ndiTestPressed();
 
     /// The R/G/B sliders edit whichever of the two colours the swatch buttons
     /// last aimed at (editingTextColour_); no new JUCE module is spent on a
@@ -147,6 +159,19 @@ private:
     juce::ToggleButton ndiToggle_ { "Publish NDI output" };
     juce::Label streamNameCaption_, ndiStateLabel_, ndiHintLabel_;
     juce::TextEditor streamNameEditor_;
+
+    /// The subtitle test broadcast row (ApplicationController::requestNdiTest):
+    /// the typed caption latches onto the wire through the real transport; the
+    /// same button ends the test. ndiTestAwaiting_ remembers the click that
+    /// queued a start; the timer reconciles the button with the controller's
+    /// truth and surfaces a worker-side refusal as the note. ndiTestShown_ is
+    /// the state the title currently shows, so the button is retitled only
+    /// when the truth actually moved.
+    juce::Label ndiTestCaption_, ndiTestHintLabel_;
+    juce::TextEditor ndiTestEditor_;
+    juce::TextButton ndiTestButton_ { "Test NDI" };
+    bool ndiTestAwaiting_ = false;
+    bool ndiTestShown_ = false;
 
     /// Transport draft selections: output mode and the video geometry. Lists
     /// are fixed presets (docs/ndi-protocol.md facts); a hand-edited config

@@ -1440,3 +1440,262 @@ TEST_CASE("ApplicationController: rotations and Off crossings keep the running s
 
     controller.stop();
 }
+
+namespace {
+
+/// Transport-shaped recorder for the subtitle-test seam: it mirrors the real
+/// output's answers (start brings it up, publish is refused while disabled)
+/// and remembers every call, so a test can assert what the wire got, not
+/// merely that something happened.
+class RecordingNdiOutput final : public ndi::INdiOutput
+{
+public:
+    std::string_view name() const noexcept override { return "Recording"; }
+
+    OutputState state() const noexcept override
+    {
+        const std::lock_guard lock(mutex_);
+        return state_;
+    }
+
+    bool start(std::string_view streamName, std::string& error) override
+    {
+        const std::lock_guard lock(mutex_);
+        if (state_ != OutputState::disabled)
+        {
+            error = "already started";
+            return false;
+        }
+        state_ = OutputState::ready;
+        ++starts_;
+        streamName_ = std::string(streamName);
+        return true;
+    }
+
+    void stop() noexcept override
+    {
+        const std::lock_guard lock(mutex_);
+        if (state_ == OutputState::disabled)
+            return;
+        state_ = OutputState::disabled;
+        ++stops_;
+    }
+
+    bool publish(const ndi::SubtitleFrame& frame, std::string& error) override
+    {
+        const std::lock_guard lock(mutex_);
+        if (state_ == OutputState::disabled)
+        {
+            error = "not started";
+            return false;
+        }
+        published_.push_back({ frame.text, frame.final });
+        return true;
+    }
+
+    struct Published
+    {
+        std::string text;
+        bool final = false;
+    };
+
+    std::vector<Published> published() const
+    {
+        const std::lock_guard lock(mutex_);
+        return published_;
+    }
+
+    int starts() const
+    {
+        const std::lock_guard lock(mutex_);
+        return starts_;
+    }
+
+    int stops() const
+    {
+        const std::lock_guard lock(mutex_);
+        return stops_;
+    }
+
+    std::string streamName() const
+    {
+        const std::lock_guard lock(mutex_);
+        return streamName_;
+    }
+
+private:
+    mutable std::mutex mutex_;
+    OutputState state_ = OutputState::disabled;
+    int starts_ = 0;
+    int stops_ = 0;
+    std::string streamName_;
+    std::vector<Published> published_;
+};
+
+AppConfig ndiOnConfig(ApplicationController& controller, const std::string& streamName)
+{
+    auto cfg = controller.config().current();
+    cfg.ndi.enabled = true;
+    cfg.ndi.streamName = streamName;
+    std::string error;
+    REQUIRE(controller.config().update(cfg, error));
+    return cfg;
+}
+
+} // namespace
+
+TEST_CASE("ApplicationController: the subtitle test refuses on the spot when NDI is off or the text is empty",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+
+    // NDI disabled in settings (the default): refuse now, in the operator's
+    // words - never raise a sender behind the switch.
+    std::string note;
+    CHECK_FALSE(controller.requestNdiTest("hello", note));
+    CHECK(note.find("disabled") != std::string::npos);
+    CHECK(recording->starts() == 0);
+    CHECK_FALSE(controller.ndiTestActive());
+
+    // Enabled, but an empty caption is not a test - it is a mistake.
+    ndiOnConfig(controller, "LingoFlow test");
+    CHECK_FALSE(controller.requestNdiTest("", note));
+    CHECK(note.find("caption") != std::string::npos);
+    CHECK(recording->starts() == 0);
+}
+
+TEST_CASE("ApplicationController: the subtitle test raises its own sender, latches the text, and takes it down again",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+    ndiOnConfig(controller, "LingoFlow test");
+
+    std::string note;
+    REQUIRE(controller.requestNdiTest("Hello! Привет!", note));
+
+    // The worker owns the transport work: the UI only queued it. Poll until
+    // the truth lands (the same hand the settings dialog rides).
+    REQUIRE(waitUntil([&] { return controller.ndiTestActive(); }));
+    CHECK(recording->starts() == 1);
+    CHECK(recording->streamName() == "LingoFlow test");
+    const auto published = recording->published();
+    REQUIRE(published.size() == 1);
+    CHECK(published[0].text == "Hello! Привет!");
+    CHECK(published[0].final);   // a test line is a whole line
+
+    controller.requestNdiTestStop();
+    REQUIRE(waitUntil([&] { return recording->stops() == 1; }));
+    CHECK_FALSE(controller.ndiTestActive());
+
+    // The end statement is the empty frame (the transport's "this line has
+    // ended"), published before the sender goes down.
+    const auto after = recording->published();
+    REQUIRE(after.size() == 2);
+    CHECK(after[1].text.empty());
+    CHECK(after[1].final);
+
+    // A second stop is harmless: nothing was active to end.
+    controller.requestNdiTestStop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    CHECK(recording->stops() == 1);
+}
+
+TEST_CASE("ApplicationController: a running show keeps its transport when the test ends",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+    ndiOnConfig(controller, "LingoFlow test");
+
+    REQUIRE(controller.start());
+    CHECK(recording->starts() == 1);   // the show raised the sender
+
+    std::string note;
+    REQUIRE(controller.requestNdiTest("check check", note));
+    REQUIRE(waitUntil([&] { return controller.ndiTestActive(); }));
+    CHECK(recording->starts() == 1);   // no second sender for a test on a running show
+
+    controller.requestNdiTestStop();
+    REQUIRE(waitUntil([&] { return recording->published().size() == 2; }));
+    CHECK_FALSE(controller.ndiTestActive());
+    CHECK(recording->stops() == 0);    // the show still owns the wire
+
+    controller.stop();
+    CHECK(recording->stops() == 1);    // and its teardown buries it
+}
+
+TEST_CASE("ApplicationController: starting a show retires a live test sender",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+    ndiOnConfig(controller, "LingoFlow test");
+
+    std::string note;
+    REQUIRE(controller.requestNdiTest("test caption", note));
+    REQUIRE(waitUntil([&] { return controller.ndiTestActive(); }));
+    CHECK(recording->starts() == 1);
+    CHECK(recording->stops() == 0);
+
+    // The operator hits Start with the test still up: the show's wire is its
+    // own story. The test sender goes down, the show raises one - never a
+    // sender double-started.
+    REQUIRE(controller.start());
+    CHECK_FALSE(controller.ndiTestActive());
+    CHECK(recording->starts() == 2);
+    CHECK(recording->stops() == 1);
+
+    controller.stop();
+    CHECK(recording->stops() == 2);
+}
+
+TEST_CASE("ApplicationController: a transport-side test refusal is worded in ndiTestError",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+
+    // A sender the runtime refuses at start(): disabled state, a false start
+    // with the transport's own sentence - exactly the "NDI runtime missing"
+    // shape the venue would hit.
+    struct StartRefusingOutput final : public ndi::INdiOutput
+    {
+        std::string_view name() const noexcept override { return "Refusing"; }
+        OutputState state() const noexcept override { return OutputState::disabled; }
+        bool start(std::string_view, std::string& error) override
+        {
+            error = "no NDI sender available";
+            return false;
+        }
+        void stop() noexcept override {}
+        bool publish(const ndi::SubtitleFrame&, std::string& error) override
+        {
+            error = "not started";
+            return false;
+        }
+    };
+
+    ApplicationController controller;
+    controller.setNdiOutput(std::make_unique<StartRefusingOutput>());
+    ndiOnConfig(controller, "LingoFlow test");
+
+    std::string note;
+    REQUIRE(controller.requestNdiTest("hello", note));   // queued; the refusal comes from the worker
+    REQUIRE(waitUntil([&] { return !controller.ndiTestError().empty(); }));
+    CHECK_FALSE(controller.ndiTestActive());
+    CHECK(controller.ndiTestError().find("no NDI sender available") != std::string::npos);
+
+    // A fresh request clears the previous reason first: the dialog can tell
+    // "still refused the same way" from a stale note about a different try.
+    REQUIRE(controller.requestNdiTest("again", note));
+    CHECK_FALSE(controller.ndiTestActive());
+}

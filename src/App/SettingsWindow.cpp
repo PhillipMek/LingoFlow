@@ -411,6 +411,18 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     ndiStateLabel_.setFont(ui::uiFont(13.0f));
     subtitlesBody.addAndMakeVisible(ndiStateLabel_);
 
+    caption(ndiTestCaption_, "Test broadcast (uses the SAVED look, no show required)", subtitlesBody);
+    subtitlesBody.addAndMakeVisible(ndiTestEditor_);
+    ndiTestButton_.onClick = [this] { ndiTestPressed(); };
+    styleButton(ndiTestButton_, subtitlesBody);
+    hint(ndiTestHintLabel_,
+         "Type a caption and press Test NDI: the text goes out on the configured NDI "
+         "source with the saved appearance - change the look, press Save, then test. "
+         "Press Stop test (or close this window) to end it: the screen clears and the "
+         "test sender goes down. While a show runs, real captions replace the test "
+         "line as they arrive.",
+         subtitlesBody);
+
     caption(ndiModeCaption_, "Output (one source, chosen media)", subtitlesBody);
     for (std::size_t i = 0; i < std::size(kSubtitleModes); ++i)
         ndiModeChoice_.addItem(juce::String(kSubtitleModes[i].first), static_cast<int> (i) + 1);
@@ -750,6 +762,47 @@ void SettingsContent::showNote()
                          refused ? sink::red : sink::amber);
 }
 
+void SettingsContent::ndiTestPressed()
+{
+    if (controller_.ndiTestActive())
+    {
+        controller_.requestNdiTestStop();
+        ndiTestAwaiting_ = false;
+        ndiTestShown_ = false;
+        ndiTestButton_.setButtonText("Test NDI");
+        return;
+    }
+
+    std::string note;
+    if (controller_.requestNdiTest(ndiTestEditor_.getText().toStdString(), note))
+    {
+        // Queued: the worker confirms within a poll tick. The title is set
+        // optimistically so the click reads as a button, and the timer owns
+        // the correction if the transport says no.
+        ndiTestAwaiting_ = true;
+        ndiTestShown_ = true;
+        ndiTestButton_.setButtonText("Stop test");
+    }
+    else
+    {
+        ndiTestAwaiting_ = false;
+        ndiTestShown_ = false;
+        ndiTestButton_.setButtonText("Test NDI");
+        actionNote_ = std::move(note);
+        showNote();
+    }
+}
+
+void SettingsContent::stopNdiTestIfActive()
+{
+    if (controller_.ndiTestActive())
+        controller_.requestNdiTestStop();
+
+    ndiTestAwaiting_ = false;
+    ndiTestShown_ = false;
+    ndiTestButton_.setButtonText("Test NDI");
+}
+
 void SettingsContent::loopbackVisuals()
 {
     // the UI redesign Р’В§7: the safety sentence is red and explicit while loopback is
@@ -938,6 +991,29 @@ void SettingsContent::timerCallback()
                                  state == "publishing" ? sink::green
                                                        : state == "faulted" ? sink::red
                                                                             : sink::textSecondary);
+    }
+
+    // The test button rides the same poll: whether a test caption is latched
+    // is the lifecycle worker's truth, and the click only queued the request.
+    // A start that never became active was refused on the worker side - say
+    // why, once, through the note line.
+    const bool testActive = controller_.ndiTestActive();
+
+    if (testActive != ndiTestShown_)
+    {
+        ndiTestShown_ = testActive;
+        ndiTestButton_.setButtonText(testActive ? "Stop test" : "Test NDI");
+    }
+
+    if (ndiTestAwaiting_ && !testActive)
+    {
+        const std::string why = controller_.ndiTestError();
+        if (!why.empty())
+        {
+            actionNote_ = "subtitle test refused: " + why;
+            showNote();
+        }
+        ndiTestAwaiting_ = false;
     }
 
     // The preview only re-renders while its tab is actually shown - the render
@@ -1297,6 +1373,13 @@ int SettingsContent::layoutSubtitlesPage(int width)
     ndiStateLabel_.setBounds(b.removeFromTop(20));
     b.removeFromTop(kRowGap);
 
+    ndiTestCaption_.setBounds(b.removeFromTop(kCaptionH));
+    ndiTestEditor_.setBounds(b.removeFromTop(kControlH));
+    ndiTestButton_.setBounds(b.removeFromTop(kButtonH).withWidth(240));
+    b.removeFromTop(4);
+    ndiTestHintLabel_.setBounds(b.removeFromTop(56));
+    b.removeFromTop(kRowGap);
+
     ndiModeCaption_.setBounds(b.removeFromTop(kCaptionH));
     ndiModeChoice_.setBounds(b.removeFromTop(kControlH));
     b.removeFromTop(kRowGap);
@@ -1547,6 +1630,14 @@ void SettingsWindow::closeButtonPressed()
     // dialog ends: the explicit call covers every path the same way. The
     // removal and the focus-return callback then land on the next message-loop
     // pass, one frame - the application loop never stops, so they always run.)
+    //
+    // The subtitle test is the one thing that must NOT outlive the dialog the
+    // operator was standing in: the stop request rides the lifecycle worker,
+    // which is drained before the app can die, so the test sender never keeps
+    // a venue receiver showing a forgotten test caption.
+    if (content_ != nullptr)
+        content_->stopNdiTestIfActive();
+
     if (isCurrentlyModal())
         exitModalState();
 

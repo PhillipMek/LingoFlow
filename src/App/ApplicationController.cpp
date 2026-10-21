@@ -932,6 +932,14 @@ bool ApplicationController::start()
         return false;
     }
 
+    // A running subtitle test belongs to the stopped world: the show takes
+    // the wire over. The test's own sender goes down here and the startNdi
+    // below reopens it with the saved settings; the test caption leaves with
+    // the sender it rode on.
+    ndiTestActive_.store(false, std::memory_order_relaxed);
+    if (ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed))
+        stopNdi();
+
     state_ = ApplicationState::starting;
     log::info(kComponent, "starting");
 
@@ -1081,6 +1089,11 @@ void ApplicationController::stop()
     textPipeline_.waitForDispatch();
 
     stopNdi();
+    // The transport is gone: a live test has nothing left to ride on. The
+    // flags leave with the show, not with the dialog - the settings poll
+    // turns its button back into "Test NDI" on its own.
+    ndiTestActive_.store(false, std::memory_order_relaxed);
+    ndiTestSenderOwned_.store(false, std::memory_order_relaxed);
     stopAudio();
 
     {
@@ -1525,6 +1538,126 @@ void ApplicationController::publishToNdi(const translation::TranslationTextEvent
             diagnostics_.noteError("ndi", error);
         }
     }
+}
+
+// ------------------------------------------------------------------ subtitle test
+bool ApplicationController::requestNdiTest(const std::string& text, std::string& note)
+{
+    {
+        const std::lock_guard lock(ndiTestMutex_);
+        ndiTestError_.clear();
+    }
+
+    // The answers that do not need the transport come back on the spot: the
+    // dialog gets its "why not" in the same click that asked.
+    if (text.empty())
+    {
+        note = "type a caption to test first";
+        return false;
+    }
+    if (!config_.current().ndi.enabled)
+    {
+        note = "NDI is disabled in settings - tick the NDI switch, press Save, then test";
+        return false;
+    }
+    if (ndiOutput_ == nullptr)
+    {
+        note = "no NDI output is configured";
+        return false;
+    }
+
+    const std::string caption = text;   // the exact bytes the operator typed
+    scheduleLifecycle([this, caption]
+    {
+        std::string error;
+        if (ndiOutput_->state() == ndi::OutputState::disabled)
+        {
+            // Nothing is on the wire: the test raises a sender with the SAVED
+            // settings - startNdi pushes the subtitle settings before the
+            // sender opens, so what the receiver shows is what Apply stored.
+            if (!startNdi(error))
+            {
+                refuseNdiTest(error);
+                return;
+            }
+            ndiTestSenderOwned_.store(true, std::memory_order_relaxed);
+        }
+
+        ndi::SubtitleFrame frame;
+        frame.text = caption;
+        frame.final = true;   // a test line is a whole line: nothing may "improve" it
+        if (!ndiOutput_->publish(frame, error))
+        {
+            // Hand back whatever the test had raised; the transport's own
+            // counters and lastFailure already tell the rest of the story.
+            if (ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed)
+                && state_ != ApplicationState::running && state_ != ApplicationState::starting)
+                stopNdi();
+            refuseNdiTest(error.empty() ? "the subtitle transport refused the test frame" : error);
+            return;
+        }
+
+        ndiTestActive_.store(true, std::memory_order_relaxed);
+        diagnostics_.noteEvent("ndi", "subtitle test started");
+        log::info(kComponent, "subtitle test started");
+    });
+
+    note.clear();
+    return true;
+}
+
+void ApplicationController::requestNdiTestStop()
+{
+    scheduleLifecycle([this] { endNdiTest(); });
+}
+
+void ApplicationController::endNdiTest()
+{
+    const bool wasActive = ndiTestActive_.exchange(false, std::memory_order_relaxed);
+    const bool owned = ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed);
+    if (!wasActive && !owned)
+        return;
+
+    if (ndiOutput_ != nullptr && ndiOutput_->state() != ndi::OutputState::disabled)
+    {
+        // The empty text is the transport's "this line has ended" statement:
+        // the video output latches a fully transparent picture. Best effort -
+        // a dying transport says so through its own counters.
+        ndi::SubtitleFrame clear;
+        clear.final = true;
+        std::string error;
+        ndiOutput_->publish(clear, error);
+    }
+
+    if (owned && state_ != ApplicationState::running && state_ != ApplicationState::starting)
+    {
+        stopNdi();   // the test's sender leaves with the test
+        diagnostics_.noteEvent("ndi", "subtitle test stopped (test sender taken down)");
+    }
+    else
+    {
+        // A running (or starting) show has absorbed the transport: the test
+        // never buries a sender a show is standing on - show teardown does.
+        diagnostics_.noteEvent("ndi", "subtitle test stopped");
+    }
+    log::info(kComponent, "subtitle test stopped");
+}
+
+void ApplicationController::refuseNdiTest(const std::string& error)
+{
+    ndiTestActive_.store(false, std::memory_order_relaxed);
+    {
+        const std::lock_guard lock(ndiTestMutex_);
+        ndiTestError_ = error;
+    }
+    diagnostics_.noteError("ndi", "subtitle test refused: " + error);
+    log::warning(kComponent, "subtitle test refused: " + error);
+}
+
+std::string ApplicationController::ndiTestError() const
+{
+    const std::lock_guard lock(ndiTestMutex_);
+    return ndiTestError_;
 }
 
 void ApplicationController::fault(std::string reason)
