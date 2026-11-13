@@ -36,7 +36,12 @@ namespace liveai {
 /// a stored rectangle is still visible and inside the window limits is a
 /// question about the CURRENT displays, which this struct cannot know - the
 /// App layer (App/WindowGeometry.h) decides that at restore time.
-inline constexpr std::uint32_t kConfigSchemaVersion = 4;
+/// v5: the optional input hard gate - audio.gateEnabled and audio.gateThresholdDb.
+/// A v4 (or older) file loads unchanged exactly as every addition before it: both
+/// keys are absent, the defaults say "gate OFF, -40 dBFS", and the input pipeline
+/// behaves precisely as it did before the gate existed. The OFF default is the
+/// compatibility statement, not a disabled feature.
+inline constexpr std::uint32_t kConfigSchemaVersion = 5;
 
 /// The target-language list carries this one entry that is not a language:
 /// selecting it turns translation OFF. The value lives in
@@ -65,6 +70,23 @@ struct AudioSettings
     int outputChannel = 1;
     float inputGainDb = 0.0f;
     float outputGainDb = 0.0f;
+
+    /// Optional hard noise gate on the INCOMING stream only (schema v5). The
+    /// gate closes when the block RMS of the post-gain input falls below
+    /// gateThresholdDb and mutes that block completely; it opens again when the
+    /// level reaches the threshold. Disabled by default - with the flag off the
+    /// input path is the pre-v5 pipeline, byte for byte. The value matches
+    /// audio::HardGate::kDefaultThresholdDb (Config may not include Audio, so
+    /// the two are kept in step by test, not by include: see
+    /// TestHardGate.cpp "engine default equals the settings default").
+    bool gateEnabled = false;
+
+    /// Gate threshold in dBFS (RMS). The schema accepts the
+    /// config::gateThresholdRange() window; -40 dBFS sits above the -60 dBFS
+    /// "signal present" floor the meters publish and below conversational
+    /// level at unity gain - a room-noise cutoff, not a level anyone has to
+    /// dial up first.
+    float gateThresholdDb = -40.0f;
 
     friend constexpr bool operator==(const AudioSettings&, const AudioSettings&) = default;
 };

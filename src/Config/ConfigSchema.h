@@ -39,6 +39,9 @@ namespace config {
     /// Inclusive bounds validate() accepts for the two gain fields, dB.
     std::pair<float, float> gainRange() noexcept;
 
+    /// Inclusive bounds validate() accepts for audio.gateThresholdDb, dBFS RMS.
+    std::pair<float, float> gateThresholdRange() noexcept;
+
     /// Inclusive bounds validate() accepts for translation.jitterBufferMs.
     std::pair<int, int> jitterBufferRange() noexcept;
 

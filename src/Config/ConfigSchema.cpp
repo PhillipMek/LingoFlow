@@ -24,6 +24,12 @@ constexpr int kMaxChannels = 128;  ///< one-based, the bound validate() and the 
 // must never be rejected (it was -60..+12 before, which blocked a spec value).
 constexpr float kMinGainDb = -60.0f;
 constexpr float kMaxGainDb = 24.0f;
+// The input gate threshold window (schema version 5). The stage accepts
+// -120..0 dBFS (audio::HardGate); the settings window is the practical part:
+// -80 is below any room tone the meters would even call signal, -20 is already
+// aggressive for speech RMS. The default -40 dBFS lives in AppConfig.h.
+constexpr float kMinGateThresholdDb = -80.0f;
+constexpr float kMaxGateThresholdDb = -20.0f;
 constexpr int kMaxJitterBufferMs = 1000;
 constexpr int kMinReconnectBackoffMs = 100;
 constexpr int kMaxReconnectBackoffMs = 120000;
@@ -310,6 +316,11 @@ std::pair<float, float> gainRange() noexcept
     return { kMinGainDb, kMaxGainDb };
 }
 
+std::pair<float, float> gateThresholdRange() noexcept
+{
+    return { kMinGateThresholdDb, kMaxGateThresholdDb };
+}
+
 std::pair<int, int> jitterBufferRange() noexcept
 {
     return { 0, kMaxJitterBufferMs };
@@ -401,6 +412,17 @@ ConfigProblems validate(const AppConfig& candidate)
                                           "gain must be finite and between "
                                               + std::to_string(static_cast<int>(kMinGainDb)) + " and "
                                               + std::to_string(static_cast<int>(kMaxGainDb)) + " dB" });
+
+    // The gate threshold rides the same finite-and-window check as the gains; the
+    // enable flag is a boolean the parser alone can get wrong (readBool reports it).
+    const auto gateThresholdInRange = [](float value)
+    { return std::isfinite(value) && value >= kMinGateThresholdDb && value <= kMaxGateThresholdDb; };
+
+    if (!gateThresholdInRange(audio.gateThresholdDb))
+        problems.push_back(ConfigProblem{ "audio.gateThresholdDb",
+                                          "gate threshold must be finite and between "
+                                              + std::to_string(static_cast<int>(kMinGateThresholdDb)) + " and "
+                                              + std::to_string(static_cast<int>(kMaxGateThresholdDb)) + " dB" });
 
     for (const auto& [value, path] : { std::pair{ audio.inputDeviceId, std::string{ "audio.inputDeviceId" } },
                                        std::pair{ audio.outputDeviceId, std::string{ "audio.outputDeviceId" } } })
@@ -670,7 +692,9 @@ std::string toJsonText(const AppConfig& settings)
             { "inputChannel", settings.audio.inputChannel },
             { "outputChannel", settings.audio.outputChannel },
             { "inputGainDb", settings.audio.inputGainDb },
-            { "outputGainDb", settings.audio.outputGainDb } } },
+            { "outputGainDb", settings.audio.outputGainDb },
+            { "gateEnabled", settings.audio.gateEnabled },
+            { "gateThresholdDb", settings.audio.gateThresholdDb } } },
         { "translation",
           { { "inputLanguage", settings.translation.inputLanguage },
             { "outputLanguage", settings.translation.outputLanguage },
@@ -795,7 +819,8 @@ bool fromJsonText(std::string_view text,
     {
         static const std::set<std::string> kKeys{ "inputDeviceId",      "outputDeviceId", "sampleRate",
                                                   "bufferFrames",        "inputChannel",   "outputChannel",
-                                                  "inputGainDb",         "outputGainDb" };
+                                                  "inputGainDb",         "outputGainDb",
+                                                  "gateEnabled",         "gateThresholdDb" };
         reportUnknownKeys(*section, "audio", kKeys, problems);
 
         auto& audio = out.audio;
@@ -807,6 +832,8 @@ bool fromJsonText(std::string_view text,
         readNumber<int>(*section, "outputChannel", "audio.outputChannel", audio.outputChannel, problems);
         readNumber<float>(*section, "inputGainDb", "audio.inputGainDb", audio.inputGainDb, problems);
         readNumber<float>(*section, "outputGainDb", "audio.outputGainDb", audio.outputGainDb, problems);
+        readBool(*section, "gateEnabled", "audio.gateEnabled", audio.gateEnabled, problems);
+        readNumber<float>(*section, "gateThresholdDb", "audio.gateThresholdDb", audio.gateThresholdDb, problems);
     }
 
     if (const auto* section = findSection(root, "translation", problems); section != nullptr)
@@ -960,6 +987,8 @@ bool fromJsonText(std::string_view text,
           } },
         { "audio.inputDeviceId", [](AppConfig& c, const AppConfig& d) { c.audio.inputDeviceId = d.audio.inputDeviceId; } },
         { "audio.outputDeviceId", [](AppConfig& c, const AppConfig& d) { c.audio.outputDeviceId = d.audio.outputDeviceId; } },
+        { "audio.gateThresholdDb",
+          [](AppConfig& c, const AppConfig& d) { c.audio.gateThresholdDb = d.audio.gateThresholdDb; } },
         { "translation.inputLanguage",
           [](AppConfig& c, const AppConfig& d) { c.translation.inputLanguage = d.translation.inputLanguage; } },
         { "translation.outputLanguage",

@@ -27,6 +27,8 @@ AppConfig makeConfig()
     cfg.audio.outputChannel = 4;
     cfg.audio.inputGainDb = -2.5f;
     cfg.audio.outputGainDb = 1.5f;
+    cfg.audio.gateEnabled = true;
+    cfg.audio.gateThresholdDb = -55.0f;
     cfg.translation.inputLanguage = "en";
     cfg.translation.outputLanguage = "ru";
     cfg.translation.instructions = "custom instructions";
@@ -96,6 +98,8 @@ TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[confi
     CHECK(cfg.audio.outputChannel == 1);
     CHECK(cfg.audio.inputGainDb == 0.0f);
     CHECK(cfg.audio.outputGainDb == 0.0f);
+    CHECK_FALSE(cfg.audio.gateEnabled);   // v5: the gate is OFF unless the operator says otherwise
+    CHECK(cfg.audio.gateThresholdDb == -40.0f);
 
     CHECK(cfg.translation.inputLanguage == "en");
     CHECK(cfg.translation.outputLanguage == "ru");
@@ -184,6 +188,113 @@ TEST_CASE("ConfigSchema: a v3 settings file grows the v4 window default, not pro
     // that cannot be saved would turn the first geometry persist into a
     // refused shutdown.
     CHECK(config::validate(config::defaults()).empty());
+}
+
+TEST_CASE("ConfigSchema: a v4 settings file grows the v5 gate defaults, not problems",
+          "[config][schema][migration]")
+{
+    // The migration that made v1 files survive under v2, v2 under v3 and v3 under
+    // v4, used once more: a file written before the gate existed loads with the
+    // gate OFF at the documented threshold, without a single reported problem -
+    // acceptance criterion "the feature is disabled by default" is a storage
+    // property before it is a UI one.
+    const std::string v4Text = R"({
+        "schemaVersion": 4,
+        "audio": { "sampleRate": 48000, "bufferFrames": 480, "inputGainDb": -3.0 },
+        "window": { "x": 10, "y": 20, "width": 1200, "height": 700 }
+    })";
+
+    AppConfig restored;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(v4Text, restored, problems, error));
+
+    CHECK(problems.empty());
+    CHECK_FALSE(restored.audio.gateEnabled);
+    CHECK(restored.audio.gateThresholdDb == -40.0f);
+    CHECK(restored.audio.inputGainDb == -3.0f);     // the rest of the v4 file still lands
+    CHECK(restored.window.width == 1200);
+
+    CHECK(config::validate(restored).empty());
+}
+
+TEST_CASE("ConfigSchema: the gate fields validate, repair per field and round-trip",
+          "[config][schema][gate]")
+{
+    // Bounds: the documented window is accepted, everything outside it is one
+    // named problem - never a guess.
+    const auto [gateMin, gateMax] = config::gateThresholdRange();
+    CHECK(gateMin == -80.0f);
+    CHECK(gateMax == -20.0f);
+
+    auto countProblems = [](const AppConfig& cfg)
+    {
+        std::size_t gate = 0;
+        for (const auto& problem : config::validate(cfg))
+            gate += problem.field == "audio.gateThresholdDb" ? 1 : 0;
+        return gate;
+    };
+
+    auto cfg = config::defaults();
+    CHECK(countProblems(cfg) == 0);
+
+    cfg.audio.gateThresholdDb = gateMin;   // the window is inclusive
+    CHECK(countProblems(cfg) == 0);
+    cfg.audio.gateThresholdDb = gateMax;
+    CHECK(countProblems(cfg) == 0);
+
+    cfg.audio.gateThresholdDb = -100.0f;   // below
+    CHECK(countProblems(cfg) == 1);
+    cfg.audio.gateThresholdDb = -10.0f;    // above
+    CHECK(countProblems(cfg) == 1);
+    cfg.audio.gateThresholdDb = std::numeric_limits<float>::quiet_NaN();
+    CHECK(countProblems(cfg) == 1);
+
+    // A hand-edited file with a bad threshold: the field is repaired to the
+    // documented default and reported, and the enable flag the operator DID set
+    // survives - the repair is per field, not per section.
+    const std::string text = R"({
+        "schemaVersion": 5,
+        "audio": { "gateEnabled": true, "gateThresholdDb": -10.0 }
+    })";
+
+    AppConfig repaired;
+    ConfigProblems problems;
+    std::string error;
+    REQUIRE(config::fromJsonText(text, repaired, problems, error));
+
+    CHECK(repaired.audio.gateEnabled);
+    CHECK(repaired.audio.gateThresholdDb == config::defaults().audio.gateThresholdDb);
+
+    bool reported = false;
+    for (const auto& problem : problems)
+        reported = reported || (problem.field == "audio.gateThresholdDb"
+                                && problem.message.find("default restored") != std::string::npos);
+    CHECK(reported);
+
+    // Wrong types are reported at parse level and the defaults stand.
+    const std::string wrongTypes = R"({
+        "schemaVersion": 5,
+        "audio": { "gateEnabled": "loud", "gateThresholdDb": "quiet" }
+    })";
+
+    AppConfig untouched;
+    ConfigProblems typeProblems;
+    REQUIRE(config::fromJsonText(wrongTypes, untouched, typeProblems, error));
+    CHECK_FALSE(untouched.audio.gateEnabled);
+    CHECK(untouched.audio.gateThresholdDb == -40.0f);
+
+    // Round-trip: an enabled gate travels through the file unchanged (the full
+    // round-trip case above covers the same fields inside the whole struct).
+    AppConfig enabled = config::defaults();
+    enabled.audio.gateEnabled = true;
+    enabled.audio.gateThresholdDb = -62.5f;
+
+    AppConfig restored;
+    ConfigProblems clean;
+    REQUIRE(config::fromJsonText(config::toJsonText(enabled), restored, clean, error));
+    CHECK(clean.empty());
+    CHECK(restored.audio == enabled.audio);
 }
 
 TEST_CASE("ConfigSchema: a corrupt window rectangle is repaired, never kept half",
@@ -364,6 +475,8 @@ TEST_CASE("ConfigSchema: JSON round-trip preserves every field", "[config][schem
     CHECK(restored.audio.outputChannel == original.audio.outputChannel);
     CHECK(restored.audio.inputGainDb == original.audio.inputGainDb);
     CHECK(restored.audio.outputGainDb == original.audio.outputGainDb);
+    CHECK(restored.audio.gateEnabled == original.audio.gateEnabled);
+    CHECK(restored.audio.gateThresholdDb == original.audio.gateThresholdDb);
     CHECK(restored.translation.inputLanguage == original.translation.inputLanguage);
     CHECK(restored.translation.outputLanguage == original.translation.outputLanguage);
     CHECK(restored.translation.instructions == original.translation.instructions);
