@@ -287,6 +287,11 @@ std::size_t longestFittingSuffixStart(std::string_view line,
 
 } // namespace
 
+std::string canonicalCaption(std::string_view text)
+{
+    return joinToSingleLine(text);
+}
+
 LaidOutCaption layoutCaption(const SubtitleStyle& style,
                              int frameWidth,
                              int frameHeight,

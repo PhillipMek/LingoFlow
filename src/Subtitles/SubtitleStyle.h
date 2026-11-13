@@ -64,7 +64,12 @@ std::optional<VerticalAnchor> verticalAnchorFromName(std::string_view name) noex
 
 /// The look of one caption. Defaults are the task's numbers for 1920x1080:
 /// Segoe UI Semibold 48 px, white text, black 2 px outline, no shadow,
-/// centered, 8% bottom margin, 85% block width, 2 lines, no background box.
+/// left-aligned, 8% bottom margin, 85% block width, 2 lines, no background box.
+/// Left alignment is the live-caption default: the NDI single-line row grows
+/// at its tail while the head is trimmed, and a centered block would slide
+/// every already-read word sideways at each update. An operator can still
+/// pick another alignment in the settings; the default just never fights the
+/// streaming behavior.
 /// Segoe UI is the deliberate choice: Microsoft ships it with Cyrillic, Latin,
 /// Greek and Hebrew coverage, and the rasterizer falls back through it when an
 /// operator types a family the machine does not have.
@@ -78,7 +83,7 @@ struct SubtitleStyle
     bool shadowEnabled = false;       ///< optional by the task's design; off is the default
     int shadowOffsetPx = 3;
     int shadowOpacityPercent = 50;
-    HorizontalAlign horizontalAlign = HorizontalAlign::center;
+    HorizontalAlign horizontalAlign = HorizontalAlign::left;
     VerticalAnchor verticalAnchor = VerticalAnchor::bottom;
     int edgeMarginPercent = 8;        ///< the task's "8% of the frame height from the bottom"
     int blockWidthPercent = 85;       ///< the text block never reads wider than this

@@ -113,6 +113,14 @@ constexpr float kMinFontScale = 0.6f;
 /// Each shrink step is 90% of the previous size (five steps reach the floor).
 constexpr float kShrinkStep = 0.9f;
 
+/// The caption as the single-line mode joins it BEFORE any trimming: every
+/// run of ASCII whitespace becomes one separating space, leading and trailing
+/// separators vanish. The trimmed row the layout returns is always a byte
+/// suffix of this answer, so a consumer that recognizes words (the renderer's
+/// fade animation: WHICH word is new?) reads the same canonical row the
+/// rasterizer paints - one rule, one implementation, no drift between them.
+std::string canonicalCaption(std::string_view text);
+
 /// Lays out `text` for a frame of width x height under `mode`'s rules. An
 /// empty text yields an empty result (zero lines, zero block) - the caller
 /// renders the frame's transparent background and nothing else.

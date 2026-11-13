@@ -1,5 +1,7 @@
 #include "Subtitles/SubtitleRenderer.h"
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <string>
@@ -29,6 +31,19 @@ using namespace Gdiplus;
 std::mutex rasterMutex;   ///< serializes every GDI+ entry point (see the header's thread model)
 
 #ifdef _WIN32
+
+/// The fade ramp for one word: 0 at its arrival, 1 once kWordFadeInMs have
+/// passed, linear between. Pure arithmetic on monotonic-clock durations - the
+/// same answer tests and the render thread get from the same (word, time).
+float fadeRamp(std::chrono::steady_clock::duration age)
+{
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(age).count();
+    if (ms <= 0)
+        return 0.0f;
+    if (ms >= SubtitleRenderer::kWordFadeInMs)
+        return 1.0f;
+    return static_cast<float>(ms) / static_cast<float>(SubtitleRenderer::kWordFadeInMs);
+}
 
 /// GDI+ startup, once per process and never shut down: the same deliberate
 /// lifetime choice as the NDI runtime module - tearing a raster library down
@@ -126,19 +141,49 @@ float measureRun(FontFamily& family, std::string_view text, float fontPx)
     return bounds.Width;   // origin is near x=0, so the width IS the ink width
 }
 
-/// Places a line's outline so its bounding box sits at (x, y) with vertical
+/// Places a line's outline so its FONT LAYOUT BOX sits at (x, y) with vertical
 /// centering inside lineHeightPx. Returns false on GDI+ refusal.
+///
+/// The vertical answer is metric, never ink: AddString puts the text at its
+/// origin the way DrawString would put it into a layout rectangle - the
+/// baseline lies a constant distance (cell ascent + half the internal leading)
+/// BELOW the origin, determined by the font and the em size alone. Centering
+/// the tight INK bounds instead - the previous behavior - re-decided the row's
+/// vertical position every time the caption's letters changed their ascenders
+/// or descenders, which is exactly the baseline jitter an arriving word used
+/// to cause. Placing the layout box keeps the baseline pinned no matter which
+/// glyphs are currently on screen. (The horizontal anchor stays ink-based on
+/// purpose: with the left-aligned default, blockX is the fixed safe-area edge,
+/// so the row's first ink is welded to one column as words join at the tail.)
 bool placeLine(FontFamily& family, const std::string& line, float fontPx,
                float x, float y, float lineHeightPx, GraphicsPath& path, std::string& error)
 {
     RectF bounds;
     if (!linePathAtOrigin(family, line, fontPx, path, bounds, error))
         return false;
-    // Shift the (0,0)-built path to the target, centering the ink box vertically.
+    // Shift the (0,0)-built path to the target. The x shift anchors the ink's
+    // left edge; the y shift places the layout box - whose top IS the origin
+    // the path was built at - centered in the line, using the font's own line
+    // spacing so the baseline is a per-(font,size) constant.
+    const UINT emHeight = family.GetEmHeight(FontStyleRegular);
+    const UINT lineSpacing = family.GetLineSpacing(FontStyleRegular);
+    const float layoutBoxPx = emHeight > 0
+                                  ? fontPx * static_cast<float>(lineSpacing) / static_cast<float>(emHeight)
+                                  : 0.0f;
+    Matrix shift;
+    if (layoutBoxPx > 0.0f)
+    {
+        shift.Translate(x - bounds.X, y + (lineHeightPx - layoutBoxPx) / 2.0f);
+    }
+    else
+    {
+        // Metrics the font refused to give (a degenerate family): fall back to
+        // the old ink centering rather than failing the frame - visibly
+        // imperfect, never blank.
+        shift.Translate(x - bounds.X, y + (lineHeightPx - bounds.Height) / 2.0f - bounds.Y);
+    }
     // (The path's own handle is a GpPath: motion goes through a Matrix and the
     // documented GraphicsPath::Transform, not a path-level Translate.)
-    Matrix shift;
-    shift.Translate(x - bounds.X, y + (lineHeightPx - bounds.Height) / 2.0f - bounds.Y);
     return path.Transform(&shift) == Ok;
 }
 
@@ -155,9 +200,26 @@ bool SubtitleRenderer::available()
 #endif
 }
 
-bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error)
+void SubtitleRenderer::setWordFadeEnabled(bool enabled)
+{
+    wordFadeEnabled_ = enabled;
+    if (!enabled)
+        resetFade();   // the next enable starts the timeline from that frame on
+}
+
+void SubtitleRenderer::resetFade()
+{
+    animationPending_ = false;
+    fadeLine_.clear();
+    fadeWords_.clear();
+    fadeSeen_.clear();
+}
+
+bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFrame& out,
+                              std::string& error, std::optional<SteadyTime> atTime)
 {
     error.clear();
+    const SteadyTime now = atTime.value_or(std::chrono::steady_clock::now());
     const int width = settings_.video.width;
     const int height = settings_.video.height;
 
@@ -200,7 +262,10 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     }
 
     if (captionText.empty())
+    {
+        resetFade();   // the sentence ended: the word timeline ends with it
         return true;   // the fully transparent buffer above IS the answer: old text must not linger
+    }
 
     const LineMeasurer measure = [&](std::string_view line, float fontPx) {
         return measureRun(family, line, fontPx);
@@ -214,7 +279,10 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     out.layout = layoutCaption(settings_.style, width, height, measure, captionText,
                                LayoutMode::singleLineTrimHead);
     if (out.layout.lines.empty())
-        return true;   // whitespace-only caption: transparent like the empty one
+    {
+        resetFade();   // whitespace-only caption: transparent like the empty one, timeline too
+        return true;
+    }
 
     // The buffer is fully transparent until drawn on. GDI+ 32bppARGB holds
     // straight (non-premultiplied) alpha, matching fourcc_BGRA - so its drawn
@@ -245,19 +313,120 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
         }
     }
 
-    const Color textColor(255,
-                          static_cast<BYTE>((style.textColorRgb >> 16) & 0xFFu),
-                          static_cast<BYTE>((style.textColorRgb >> 8) & 0xFFu),
-                          static_cast<BYTE>(style.textColorRgb & 0xFFu));
-    const Color outlineColor(255,
-                             static_cast<BYTE>((style.outlineColorRgb >> 16) & 0xFFu),
-                             static_cast<BYTE>((style.outlineColorRgb >> 8) & 0xFFu),
-                             static_cast<BYTE>(style.outlineColorRgb & 0xFFu));
-    const Color shadowColor(static_cast<BYTE>((style.shadowOpacityPercent * 255) / 100), 0, 0, 0);
+    const BYTE shadowBaseAlpha = static_cast<BYTE>((style.shadowOpacityPercent * 255) / 100);
+    const float runOutlineWidth = out.layout.outlineWidthPx > 0.0f ? out.layout.outlineWidthPx : 1.0f;
 
-    SolidBrush textBrush(textColor);
-    Pen outlinePen(outlineColor, out.layout.outlineWidthPx > 0.0f ? out.layout.outlineWidthPx : 1.0f);
-    outlinePen.SetLineJoin(LineJoinRound);
+    // Paints one contiguous run of glyphs at (x, y) with every layer's opacity
+    // scaled by `factor`. The fade-less render uses it once per line at
+    // factor 1.0 and paints exactly what this file painted before the fade
+    // existed; the fade path batches the fully-ramped head of the row into one
+    // such run and gives every still-animating word its own lower factor.
+    auto paintRun = [&](const std::string& run, float x, float y, float factor) -> bool
+    {
+        if (run.empty() || factor <= 0.0f)
+            return true;   // nothing here yet (a word at ramp 0 is not on screen)
+
+        const BYTE alpha = factor >= 1.0f
+                               ? static_cast<BYTE>(255)
+                               : static_cast<BYTE>(factor * 255.0f + 0.5f);
+
+        GraphicsPath path;
+        if (!placeLine(family, run, out.layout.fontPx, x, y, out.layout.lineHeightPx, path, error))
+            return false;
+
+        if (style.shadowEnabled && out.layout.shadowOffsetPx > 0.0f)
+        {
+            // A separately placed path at the offset (GraphicsPath's copy ctor
+            // is protected in the SDK headers; re-deriving the placed outline is
+            // a few hundred microseconds on a thread that exists only to paint).
+            GraphicsPath shadow;
+            if (!placeLine(family, run, out.layout.fontPx,
+                           x + out.layout.shadowOffsetPx, y + out.layout.shadowOffsetPx,
+                           out.layout.lineHeightPx, shadow, error))
+                return false;
+
+            const Color shadowColor(static_cast<BYTE>((shadowBaseAlpha * alpha) / 255), 0, 0, 0);
+            SolidBrush shadowBrush(shadowColor);
+            if (out.layout.outlineWidthPx > 0.0f)
+            {
+                Pen shadowPen(shadowColor, out.layout.outlineWidthPx);
+                shadowPen.SetLineJoin(LineJoinRound);
+                g.DrawPath(&shadowPen, &shadow);
+            }
+            g.FillPath(&shadowBrush, &shadow);
+        }
+
+        if (out.layout.outlineWidthPx > 0.0f)
+        {
+            const Color outlineColor(alpha,
+                                     static_cast<BYTE>((style.outlineColorRgb >> 16) & 0xFFu),
+                                     static_cast<BYTE>((style.outlineColorRgb >> 8) & 0xFFu),
+                                     static_cast<BYTE>(style.outlineColorRgb & 0xFFu));
+            Pen outlinePen(outlineColor, runOutlineWidth);
+            outlinePen.SetLineJoin(LineJoinRound);
+            g.DrawPath(&outlinePen, &path);
+        }
+
+        const Color textColor(alpha,
+                              static_cast<BYTE>((style.textColorRgb >> 16) & 0xFFu),
+                              static_cast<BYTE>((style.textColorRgb >> 8) & 0xFFu),
+                              static_cast<BYTE>(style.textColorRgb & 0xFFu));
+        SolidBrush textBrush(textColor);
+        if (g.FillPath(&textBrush, &path) != Ok)
+        {
+            error = "GDI+ could not fill the caption glyphs";
+            return false;
+        }
+        return true;
+    };
+
+    // ---------------------------------------------------------------- word timeline
+    // The fade animates WORDS of the canonical caption row (the same join the
+    // single-line layout trims, shared through canonicalCaption, so the row on
+    // screen is always a byte-suffix of the timeline's line). Word identity is
+    // the shared prefix of consecutive renders' word lists: growing captions
+    // stamp only their new tail (no restart for anything already on screen),
+    // a replaced caption is all-new (the whole row fades as it arrives), and a
+    // re-render of the same caption moves no stamp - only the clock.
+    animationPending_ = false;
+    if (wordFadeEnabled_)
+    {
+        const std::string canonical = canonicalCaption(captionText);
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> words;
+        for (std::size_t pos = 0; pos < canonical.size();)
+        {
+            if (canonical[pos] == ' ')
+            {
+                ++pos;
+                continue;
+            }
+            const std::size_t start = pos;
+            while (pos < canonical.size() && canonical[pos] != ' ')
+                ++pos;
+            words.emplace_back(static_cast<std::uint32_t>(start),
+                               static_cast<std::uint32_t>(pos - start));
+        }
+
+        std::size_t keep = 0;
+        while (keep < words.size() && keep < fadeWords_.size()
+               && std::string_view(canonical).substr(words[keep].first, words[keep].second)
+                      == std::string_view(fadeLine_).substr(fadeWords_[keep].first,
+                                                            fadeWords_[keep].second))
+            ++keep;
+
+        std::vector<SteadyTime> seen(words.size(), now);   // new/changed words: arriving now
+        for (std::size_t i = 0; i < keep; ++i)
+            seen[i] = fadeSeen_[i];                        // the shared prefix keeps its history
+
+        fadeLine_ = std::move(canonical);
+        fadeWords_ = std::move(words);
+        fadeSeen_ = std::move(seen);
+
+        // Arrival times are non-decreasing by word index, so the newest word
+        // finishing its ramp is exactly the moment the animation is over.
+        animationPending_ = !fadeSeen_.empty() && fadeRamp(now - fadeSeen_.back()) < 1.0f;
+    }
 
     for (std::size_t i = 0; i < out.layout.lines.size(); ++i)
     {
@@ -272,39 +441,67 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
         }
         const float lineY = out.layout.blockY + static_cast<float>(i) * out.layout.lineHeightPx;
 
-        GraphicsPath path;
-        if (!placeLine(family, out.layout.lines[i], out.layout.fontPx, lineX, lineY,
-                       out.layout.lineHeightPx, path, error))
-            return false;
-
-        if (style.shadowEnabled && out.layout.shadowOffsetPx > 0.0f)
+        if (!wordFadeEnabled_ || out.layout.lines.size() != 1 || fadeWords_.empty())
         {
-            // A separately placed path at the offset (GraphicsPath's copy ctor
-            // is protected in the SDK headers; re-deriving the placed outline is
-            // a few hundred microseconds on a thread that exists only to paint).
-            GraphicsPath shadow;
-            if (!placeLine(family, out.layout.lines[i], out.layout.fontPx,
-                           lineX + out.layout.shadowOffsetPx, lineY + out.layout.shadowOffsetPx,
-                           out.layout.lineHeightPx, shadow, error))
+            if (!paintRun(out.layout.lines[i], lineX, lineY, 1.0f))
                 return false;
-
-            SolidBrush shadowBrush(shadowColor);
-            if (out.layout.outlineWidthPx > 0.0f)
-            {
-                Pen shadowPen(shadowColor, out.layout.outlineWidthPx);
-                shadowPen.SetLineJoin(LineJoinRound);
-                g.DrawPath(&shadowPen, &shadow);
-            }
-            g.FillPath(&shadowBrush, &shadow);
+            continue;
         }
 
-        if (out.layout.outlineWidthPx > 0.0f)
-            g.DrawPath(&outlinePen, &path);
-
-        if (g.FillPath(&textBrush, &path) != Ok)
+        // The fade path: this row IS a suffix of the timeline's line (the trim
+        // only ever cuts its head; if the suffix property failed, the world
+        // broke elsewhere - paint the whole row rather than guess placements).
+        const std::string& shown = out.layout.lines[i];
+        if (fadeLine_.size() < shown.size()
+            || fadeLine_.compare(fadeLine_.size() - shown.size(), shown.size(), shown) != 0)
         {
-            error = "GDI+ could not fill the caption glyphs";
-            return false;
+            if (!paintRun(shown, lineX, lineY, 1.0f))
+                return false;
+            continue;
+        }
+        const std::size_t head = fadeLine_.size() - shown.size();
+
+        std::size_t first = 0;   // the first word still (partly) on screen
+        while (first < fadeWords_.size()
+               && static_cast<std::size_t>(fadeWords_[first].first)
+                    + static_cast<std::size_t>(fadeWords_[first].second) <= head)
+            ++first;
+        std::size_t rampedEnd = first;   // words in [first, rampedEnd) are fully opaque
+        while (rampedEnd < fadeWords_.size() && fadeRamp(now - fadeSeen_[rampedEnd]) >= 1.0f)
+            ++rampedEnd;
+
+        if (rampedEnd > first)
+        {
+            // One run for everything that already reached opacity 1: the same
+            // string, the same single path, the same pixels the pre-fade
+            // renderer painted - settled words are not re-laid-out word by word.
+            const std::size_t batchEnd =
+                static_cast<std::size_t>(fadeWords_[rampedEnd - 1].first)
+              + static_cast<std::size_t>(fadeWords_[rampedEnd - 1].second);
+            if (!paintRun(fadeLine_.substr(head, batchEnd - head), lineX, lineY, 1.0f))
+                return false;
+        }
+
+        for (std::size_t w = rampedEnd; w < fadeWords_.size(); ++w)
+        {
+            const float factor = fadeRamp(now - fadeSeen_[w]);
+            if (factor <= 0.0f)
+                continue;   // arriving on the next frames, not on this one
+
+            const std::size_t wordEnd = static_cast<std::size_t>(fadeWords_[w].first)
+                                      + static_cast<std::size_t>(fadeWords_[w].second);
+            const std::size_t visStart = (std::max)(static_cast<std::size_t>(fadeWords_[w].first), head);
+            const std::string word = fadeLine_.substr(visStart, wordEnd - visStart);
+            // The word's left edge, measured: the row prefix ending at this
+            // word minus the word's own ink is its place IN THE REAL ROW (its
+            // spaces and kerning come from the same string the batch draws),
+            // so a fading word sits exactly where its opaque self will sit -
+            // nothing slides sideways when the ramp completes.
+            const std::string prefix = fadeLine_.substr(head, wordEnd - head);
+            const float x = lineX + measureRun(family, prefix, out.layout.fontPx)
+                                  - measureRun(family, word, out.layout.fontPx);
+            if (!paintRun(word, x, lineY, factor))
+                return false;
         }
     }
 

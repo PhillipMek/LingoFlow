@@ -245,6 +245,13 @@ std::string NdiSubtitleVideoOutput::lastFailure() const
 void NdiSubtitleVideoOutput::renderLoop()
 {
     subtitles::SubtitleRenderer renderer;
+    // The audience-facing animation: a word that joins the line fades in over
+    // SubtitleRenderer::kWordFadeInMs instead of punching onto the screen.
+    // The renderer keeps each word's arrival time, so the ramp advances by
+    // RENDERING THE SAME CAPTION AGAIN at the next tick - that is what
+    // animationPending() below asks for. Words already on screen keep their
+    // full opacity: the timeline never restarts under them.
+    renderer.setWordFadeEnabled(true);
 
     std::vector<subtitles::RenderedSubtitleFrame> slots(2);   // double buffer:
     // the SDK header states async-submitted memory stays owned until a
@@ -282,12 +289,15 @@ void NdiSubtitleVideoOutput::renderLoop()
         if (modeHasVideo(settings.mode))
         {
             // Draw only when the picture (caption or style/geometry) changed
-            // since the last render; the steady state re-sends the current
-            // buffer, which is what keeps the receiver's clock fed and the
-            // old text exactly where the audience left it.
+            // since the last render, or a word's fade is still in flight (the
+            // ramp needs its frame even when no caption arrived); the steady
+            // state re-sends the current buffer, which is what keeps the
+            // receiver's clock fed and the old text exactly where the audience
+            // left it.
             const bool needDraw = !haveFrame[drawSlot]
                 || captionVersion != drawnCaptionVersion
-                || settingsVersion != drawnSettingsVersion;
+                || settingsVersion != drawnSettingsVersion
+                || renderer.animationPending();
 
             bool drew = false;
             if (needDraw)

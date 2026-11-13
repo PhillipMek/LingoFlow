@@ -19,6 +19,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_message.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -107,6 +108,49 @@ AlphaStats scan(const RenderedSubtitleFrame& f)
         }
     }
     return s;
+}
+
+/// Ink-extent probes over the whole buffer. The baseline and the left-anchor
+/// tests ask "did the glyphs move?", and these answer it in frame pixels:
+/// the first row with any ink, the last row with any ink, the first column.
+struct InkExtents
+{
+    int topRow = -1, bottomRow = -1;
+    int leftCol = -1;
+};
+
+InkExtents ink(const RenderedSubtitleFrame& f)
+{
+    InkExtents e;
+    const PixelView p = view(f);
+    for (int y = 0; y < f.height; ++y)
+    {
+        bool rowInk = false;
+        for (int x = 0; x < f.width; ++x)
+            if (p.alpha(x, y) > 0)
+            {
+                rowInk = true;
+                break;
+            }
+        if (rowInk)
+        {
+            if (e.topRow < 0)
+                e.topRow = y;
+            e.bottomRow = y;
+        }
+    }
+    for (int x = 0; x < f.width; ++x)
+    {
+        for (int y = 0; y < f.height; ++y)
+            if (p.alpha(x, y) > 0)
+            {
+                e.leftCol = x;
+                break;
+            }
+        if (e.leftCol >= 0)
+            break;
+    }
+    return e;
 }
 
 } // namespace
@@ -525,6 +569,272 @@ TEST_CASE("SubtitleRenderer: a pathological word and a degenerate block stay hon
     CHECK(lastChar.layout.headTrimmed);
     CHECK(std::isfinite(lastChar.layout.blockX));
     CHECK(std::isfinite(lastChar.layout.blockY));
+}
+
+// ------------------------------------------------- baseline stability & left anchor
+// The readability promises of the live caption: a row placed by the FONT's
+// metrics, not by the ink it happens to carry, and anchored to the safe-area
+// left edge. Both are asserted on real pixels, because both were exactly what
+// the streaming updates used to break.
+
+TEST_CASE("SubtitleRenderer: the baseline is pinned - arriving descenders do not move the row",
+          "[subtitles][render][baseline]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+
+    RenderedSubtitleFrame noDesc, withDesc;
+    std::string error;
+    REQUIRE(renderer.render("aaaa", noDesc, error));
+    REQUIRE(renderer.render("aaappp", withDesc, error));   // descenders join the row
+
+    const auto plain = ink(noDesc);
+    const auto desc = ink(withDesc);
+    CHECK(plain.topRow >= 0);
+    // The x-height letters start on the very same pixel row in both frames:
+    // centering the tight ink bounds (the previous behavior) pulled the whole
+    // row up the moment descenders appeared.
+    CHECK(plain.topRow == desc.topRow);
+    // The descender reaches BELOW the fixed baseline instead of relocating it.
+    CHECK(desc.bottomRow > plain.bottomRow);
+
+    // The layout geometry that feeds the placement is content-independent.
+    CHECK(noDesc.layout.blockX == withDesc.layout.blockX);
+    CHECK(noDesc.layout.blockY == withDesc.layout.blockY);
+    CHECK(noDesc.layout.lineHeightPx == withDesc.layout.lineHeightPx);
+}
+
+TEST_CASE("SubtitleRenderer: the shipped default anchors the row to the safe-area left edge",
+          "[subtitles][render][baseline]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;   // the default alignment is left
+    renderer.applySettings(settings);
+
+    RenderedSubtitleFrame shortFrame, grownFrame;
+    std::string error;
+    REQUIRE(renderer.render("word", shortFrame, error));
+    REQUIRE(renderer.render("word words words", grownFrame, error));
+
+    CHECK(shortFrame.layout.blockX == Catch::Approx(1920.0f * kSafeAreaPercent / 100.0f));
+    CHECK(grownFrame.layout.blockX == shortFrame.layout.blockX);
+
+    // Already-read words do not slide sideways when new ones arrive: the ink
+    // starts on the same column for both captions (a centered block moved it).
+    const auto plain = ink(shortFrame);
+    const auto grown = ink(grownFrame);
+    CHECK(plain.leftCol >= 0);
+    CHECK(plain.leftCol == grown.leftCol);
+    CHECK(ink(shortFrame).topRow == ink(grownFrame).topRow);
+}
+
+// --------------------------------------------------------------------- word fade-in
+// setWordFadeEnabled is the transport's opt-in (a one-shot painter must never
+// freeze mid-ramp). The ramp itself is tested with an injected clock, so every
+// assertion below is exact wall-time, not a sleep.
+
+TEST_CASE("SubtitleRenderer: the fade is opt-in and off by default", "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render("static paint", frame, error));
+    CHECK(scan(frame).opaqueWhite > 0);        // one-shot paints arrive finished...
+    CHECK_FALSE(renderer.animationPending());  // ...and never owe a follow-up frame
+}
+
+TEST_CASE("SubtitleRenderer: a word ramps from invisible to opaque across its fade window",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+
+    REQUIRE(renderer.render("one", frame, error, t0));
+    const auto arrival = scan(frame);
+    CHECK(arrival.opaque == 0);   // the frame the word ARRIVED on shows nothing yet
+    CHECK(arrival.transparent == static_cast<std::size_t>(frame.width) * frame.height);
+    CHECK(renderer.animationPending());
+
+    REQUIRE(renderer.render("one", frame, error, t0 + at(120)));
+    const auto mid = scan(frame);
+    CHECK(mid.opaque == 0);       // mid-ramp: every ink pixel carries reduced alpha
+    CHECK(mid.partial > 0);
+    CHECK(mid.partialWhite > 0);  // straight alpha preserved through the animation
+    CHECK(renderer.animationPending());
+
+    REQUIRE(renderer.render("one", frame, error, t0 + at(SubtitleRenderer::kWordFadeInMs)));
+    const auto done = scan(frame);
+    CHECK(done.opaqueWhite > 100);
+    CHECK_FALSE(renderer.animationPending());
+}
+
+TEST_CASE("SubtitleRenderer: new words fade in without restarting the words already on screen",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+
+    REQUIRE(renderer.render("one", frame, error, t0));
+    REQUIRE(renderer.render("one", frame, error, t0 + at(300)));
+    const auto oneAlone = scan(frame);
+    CHECK(oneAlone.opaqueWhite > 100);
+    CHECK_FALSE(renderer.animationPending());
+
+    // "two" arrives at the same instant: it starts invisible while "one" keeps
+    // painting exactly what it painted last frame - no restart, no shift.
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(300)));
+    const auto arriving = scan(frame);
+    CHECK(arriving.opaqueWhite == oneAlone.opaqueWhite);
+    CHECK(renderer.animationPending());
+
+    // The ramp completes: the line grew, nothing about the old word moved.
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(600)));
+    const auto settled = scan(frame);
+    CHECK(settled.opaqueWhite > oneAlone.opaqueWhite);
+    CHECK_FALSE(renderer.animationPending());
+
+    // A replaced caption shares no words: ALL of it is new, it fades from zero.
+    REQUIRE(renderer.render("three", frame, error, t0 + at(600)));
+    CHECK(scan(frame).opaque == 0);
+    CHECK(renderer.animationPending());
+}
+
+TEST_CASE("SubtitleRenderer: the head trim never restarts the animation",
+          "[subtitles][render][fade][singleline]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+
+    const std::string longCaption =
+        "The interpreter kept speaking about economics and logistics and medicine "
+        "while the translated caption grew well past what this single row can show";
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+
+    REQUIRE(renderer.render(longCaption, frame, error, t0));
+    CHECK(scan(frame).opaque == 0);          // the whole row arrived together: all of it is ramping
+    CHECK(renderer.animationPending());
+
+    REQUIRE(renderer.render(longCaption, frame, error, t0 + at(300)));
+    CHECK(scan(frame).opaqueWhite > 100);    // settled at full opacity
+    CHECK_FALSE(renderer.animationPending());
+
+    // One more word pushes the trim further into the head. The words that are
+    // still on screen keep their (old) arrival times; only the newcomer fades.
+    const std::string extended = longCaption + " now";
+    REQUIRE(renderer.render(extended, frame, error, t0 + at(300)));
+    CHECK(scan(frame).opaqueWhite > 0);      // the already-read words did NOT restart...
+    CHECK(renderer.animationPending());      // ...and the new one is the only ramp in flight
+    CHECK(frame.layout.headTrimmed);
+    CHECK(extended.ends_with(frame.layout.lines.front()));
+    CHECK(frame.layout.lines.front().find("now") != std::string::npos);
+
+    REQUIRE(renderer.render(extended, frame, error, t0 + at(600)));
+    CHECK_FALSE(renderer.animationPending());
+    CHECK(scan(frame).opaqueWhite > 0);
+}
+
+TEST_CASE("SubtitleRenderer: a live style change does not restart word animations",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render("one two", frame, error, t0));
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(300)));
+    CHECK_FALSE(renderer.animationPending());
+
+    settings.style.fontSizePx = 64;
+    renderer.applySettings(settings);
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(310)));
+    CHECK_FALSE(renderer.animationPending());      // the words arrived at t0: their ramps are long done
+    CHECK(scan(frame).opaqueWhite > 0);            // fully visible at the new size, not faded again
+}
+
+TEST_CASE("SubtitleRenderer: an ended caption clears the word timeline", "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render("alpha", frame, error, t0));
+    REQUIRE(renderer.render("alpha", frame, error, t0 + at(300)));
+    CHECK(scan(frame).opaqueWhite > 0);
+    CHECK_FALSE(renderer.animationPending());
+
+    // The sentence ended (the transport latches the empty text): transparent
+    // frame, no pending animation, timeline forgotten.
+    REQUIRE(renderer.render("", frame, error, t0 + at(400)));
+    CHECK(scan(frame).transparent == static_cast<std::size_t>(frame.width) * frame.height);
+    CHECK_FALSE(renderer.animationPending());
+
+    // The same words on a new sentence are new words: they fade in again.
+    REQUIRE(renderer.render("alpha", frame, error, t0 + at(500)));
+    CHECK(scan(frame).opaque == 0);
+    CHECK(renderer.animationPending());
 }
 
 #else // !_WIN32

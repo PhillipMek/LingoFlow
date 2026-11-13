@@ -123,7 +123,7 @@ TEST_CASE("ConfigSchema: documented defaults are actually the defaults", "[confi
     CHECK(cfg.ndi.subtitles.style.outlineColorRgb == 0x000000);
     CHECK(cfg.ndi.subtitles.style.outlineWidthPx == 2);
     CHECK_FALSE(cfg.ndi.subtitles.style.shadowEnabled);
-    CHECK(cfg.ndi.subtitles.style.horizontalAlign == subtitles::HorizontalAlign::center);
+    CHECK(cfg.ndi.subtitles.style.horizontalAlign == subtitles::HorizontalAlign::left);
     CHECK(cfg.ndi.subtitles.style.verticalAnchor == subtitles::VerticalAnchor::bottom);
     CHECK(cfg.ndi.subtitles.style.edgeMarginPercent == 8);
     CHECK(cfg.ndi.subtitles.style.blockWidthPercent == 85);
