@@ -28,8 +28,9 @@ FOH/Console -> Waves SoundGrid -> ASIO -> LingoFlow -> OpenAI Realtime Translati
   48 kHz preferred (44.1/88.2 supported end to end); discrete input/output channel
   selection validated against the driver.
 * **Click-free operator controls** - input and output gain trims with glide,
-  separate input/output mute, peak/RMS meters, latching clip indicators,
-  underrun/overrun accounting.
+  separate input/output mute, an optional hard noise gate on the incoming audio
+  (enable + dB threshold, muted blocks glide in and out instead of clicking),
+  peak/RMS meters, latching clip indicators, underrun/overrun accounting.
 * **Stability engineering** - lock-free preallocated ring and jitter buffers;
   network failures never stop the audio device; automatic session reconnect with
   exponential backoff and provider-ceiling rotation; every degradation is counted
@@ -101,8 +102,8 @@ ctest --test-dir build -C Debug --output-on-failure
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-The suite covers the realtime audio pipeline (ring/jitter/gain/meters, an
-allocation-counting callback gate, a lexical realtime-safety audit with an
+The suite covers the realtime audio pipeline (ring/jitter/gain/hard-gate/meters,
+an allocation-counting callback gate, a lexical realtime-safety audit with an
 injection self-test), the OpenAI protocol surface against a scripted transport
 (handshake, events, malformed frames, expiry announcements, reconnect policy),
 the typed text pipeline and NDI dispatch, caption layout (pure wrapping/shrink/
@@ -118,8 +119,9 @@ wire) run only where the runtime is installed and say so loudly where it is not.
 ## Configuration
 
 Single Settings area: audio device and channels, sample rate, buffer, gains,
-language pair, model hint, jitter buffer, NDI (mode, resolution, fps and the
-whole subtitle appearance, with a live transparency preview), diagnostics,
+the input hard gate (off by default; threshold -80..-20 dBFS, incoming audio
+only), language pair, model hint, jitter buffer, NDI (mode, resolution, fps and
+the whole subtitle appearance, with a live transparency preview), diagnostics,
 developer mode.
 Settings persist atomically with schema versioning, field-by-field repair and
 corruption quarantine; a credential-shaped field in the config file is refused by

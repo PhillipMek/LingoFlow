@@ -114,11 +114,13 @@ architecture is explicitly non-realtime:
 | `LevelMeter::measure` | audio callback | one pass over the block, one `sqrt`, atomic publish; non-finite samples counted as out-of-range |
 | `GainStage::process` | audio callback | per sample: one finite check, one multiply, two magnitude compares; the coefficient is a plain float advanced toward an atomic target |
 | `GainStage::dbToLinear` | audio callback (once per block) | `exp2` against a documented constant, no libm path that can allocate |
+| `HardGate::process` | audio callback | one RMS pass over the chunk plus an in-place coefficient glide (or a memset when settled closed, nothing at all when settled open or bypassed); relaxed atomics only |
 | `Platform::JuceAsioBackend::Callback::audioDeviceIOCallbackWithContext` | audio callback | forwards driver pointers into `processAudio`, views preallocated in `aboutToStart`, `audioDeviceError` sets a flag only |
 | `AudioLoopback::run` | worker | consumer/producer of the lock-free buffers; may sleep between polls; never called by the audio thread |
 | `IAudioProcessor::onAudioConfigurationChanged` | non-realtime | after `open()`, before first block |
 | `AudioEngine::activate / configure / deactivate` | control thread | the only place pipeline memory is allocated or released |
 | `AudioEngine::setInputGainDb / setOutputGainDb / setInputMuted / setOutputMuted / setGainRampMs` | any thread, UI in particular | relaxed atomic publish; the callback picks the new target up at the start of its next block. No lock, no allocation, no wait |
+| `AudioEngine::setInputGateEnabled / setInputGateThresholdDb` | any thread, UI in particular | same publish rule as the gains: the gate decision changes from the next measured chunk, the device and both stream directions are never interrupted |
 | `ITranslationSink::on*` (audio, text, state, error) | network/worker | enqueue only, never play directly; delivered audio goes to the engine's jitter buffer, wrong-rate blocks are rejected and counted, never resampled in silence |
 | `INdiOutput::publish` | worker | drop on pressure, never block the producer |
 | `DiagnosticsManager::count*` | any, incl. audio | relaxed atomics |
@@ -133,7 +135,10 @@ still to be filled in:
 ```text
 ASIO input -> AudioEngine::processAudio
                   -> GainStage (input)       -6 dB .. +24 dB, mute, click-free glide
-                  -> LevelMeter (input)      reads the post-gain block
+                  -> LevelMeter (input)      reads the post-gain, PRE-gate block
+                  -> HardGate (input)        optional, OFF by default: RMS below the
+                                             threshold mutes the block completely before
+                                             the ring - incoming audio only
                   -> AudioRingBuffer        (producer = audio thread)
                         |
                   [loopback worker now (AudioLoopback); OpenAI streaming worker earlier]
@@ -227,24 +232,62 @@ guarantee that changing either makes no click.
   counted in `oversizedCallbacks()`. the project learned this the hard way, when a test's
   badly sized buffer wrote past an array.
 
+### Input hard gate
+
+`HardGate` is the optional noise gate of the task "Input Audio Hard Gate", and it sits on
+one stream only: `ASIO -> gain -> [gate] -> ring -> translator`. Nothing else in the
+architecture can be affected by it - the output side never calls it, the bypass route
+copies the driver's block, and the meters read the pre-gate signal so the operator can
+see the room while choosing the threshold.
+
+* **True hard behaviour, click-free switching.** Below the threshold the block is muted
+  completely - the settled closed state is exact zeros (`memset`), the settled open state
+  is bit-for-bit untouched (no multiply at all, the same rule `GainStage` uses for 0 dB).
+  The transition between the two is a short internal coefficient glide (5 ms to open,
+  40 ms to close): a hard gate that JUMPS is a click at whatever phase the cut lands on,
+  and the task asks for both - full attenuation and no glitches. The ramp lengths are
+  design constants, not operator knobs: the interface deliberately has no Attack/Release/
+  Hold.
+* **The level measurement is the gate.** One RMS pass over the chunk about to be acted
+  on, compared with the threshold (with a documented 1e-6 relative margin so "at or above
+  the threshold passes" is deterministic against float rounding). Decision inside the
+  same block it gates: the gate adds zero latency and one extra pass over at most 4096
+  floats per channel per callback.
+* **Settings, live.** `audio.gateEnabled` (default OFF - a v4 file grows the v5 defaults
+  silently and behaves exactly as before) and `audio.gateThresholdDb` (schema window
+  -80..-20 dBFS, default -40, above the meters' -60 dBFS "signal present" floor and
+  below speech at unity). Both apply live through `AudioEngine::setInputGateEnabled /
+  setInputGateThresholdDb` with the same relaxed-atomic rule as the gains; enable,
+  disable and threshold moves never interrupt the device, and out-of-window or
+  non-finite requests are clamped/refused with counters, never swallowed. Like the
+  gain stages, the gate objects survive `deactivate()`: a restart keeps the operator's
+  decision and re-applies it, with the coefficient landing open for the first block of
+  the new run.
+* **Counted, not silent.** Per-channel open/closed block decisions, muted channel samples
+  (`gate_closed_samples` in the diagnostics export, next to the meter row that shows the
+  un-gated room), threshold-request quality totals, and a latching non-finite sighting.
+  Together they answer "did the gate eat the question?" after the show.
+
 ### How the realtime rule is enforced
 
 Two independent gates, both in CTest (label `realtime`):
 
 1. `tests/RealtimeSafetyAudit.cmake` extracts the body of every function reachable from
-   the audio callback - today twelve: the engine, both buffers, the meter, `GainStage::process`
-   and `GainStage::dbToLinear`, and the JUCE bridge - and rejects a list of forbidden
+   the audio callback - today twenty-one: the engine, both buffers, the meter, `GainStage::process`
+   and `GainStage::dbToLinear`, the input `HardGate::process`, and the JUCE bridge - and rejects a list of forbidden
    constructs: allocation (`new`, `make_unique`, `malloc`, container growth), locks and
    waits, sleeping, filesystem/registry, transport (`json`, `websocket`, sockets), UI,
-   exceptions. `...SelfTest.cmake` runs twelve checks: the clean tree must be accepted, ten
-   injected violations (one per forbidden class, two of them inside the gain stage, because a
+   exceptions. `...SelfTest.cmake` runs fourteen checks: the clean tree must be accepted, twelve
+   injected violations (one per forbidden class, two of them inside the gain stage and one
+   inside the input gate, because a
    newly audited function is only really guarded once something proves the gate reads its
    body) must each be rejected, and a deleted realtime function must fail the gate instead of
    shrinking it silently.
 2. `tests/realtime/TestRealtimeAllocations.cpp` replaces global `operator new` in its
    own test binary and counts heap allocations during 5000 callbacks with the loopback
    worker running: the count must be 0. A third case there does the same while the gain and
-   mute are being changed every block, because the SPEC allows gain state to be set from
+   mute are being changed every block, and a fourth while the input gate is toggled and its
+   threshold moved every block, because the SPEC allows gain and gate state to be set from
    another thread only if doing so cannot allocate. It is a separate executable so the
    substitution cannot influence any other suite.
 
