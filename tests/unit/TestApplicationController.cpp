@@ -351,6 +351,55 @@ TEST_CASE("ApplicationController: the gains in settings are the gains in effect"
     controller.stop();
 }
 
+TEST_CASE("ApplicationController: the gate in settings is the gate in effect, and it stays live",
+          "[app][audio][gate]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+
+    auto cfg = controller.config().current();
+    cfg.audio.gateEnabled = true;
+    cfg.audio.gateThresholdDb = -55.0f;
+
+    std::string error;
+    REQUIRE(controller.config().update(cfg, error));
+    REQUIRE(controller.start());
+
+    // spec "Configuration": what the Settings area says is what the pipeline runs -
+    // for the gate that starts at the very first block of the show (startAudio applies
+    // it before the device opens, like the gains) and continues through every Apply
+    // while the room is live.
+    CHECK(controller.engine().inputGateEnabled());
+    CHECK(controller.engine().inputGateThresholdDb() == -55.0f);
+
+    std::string note;
+    cfg = controller.config().current();
+    cfg.audio.gateThresholdDb = -30.0f;
+    REQUIRE(controller.updateSettings(cfg, note));
+    CHECK(controller.engine().inputGateThresholdDb() == -30.0f);
+
+    // Turning the gate back off restores the unmodified input path - the engine
+    // says "not gating" and the ring receives the gained stream untouched.
+    cfg = controller.config().current();
+    cfg.audio.gateEnabled = false;
+    REQUIRE(controller.updateSettings(cfg, note));
+    CHECK_FALSE(controller.engine().inputGateEnabled());
+    CHECK_FALSE(controller.engine().inputGateOpen());
+
+    // A refused threshold never reaches the engine either (same rule as the gains,
+    // same funnel): -10 is outside the schema window.
+    cfg = controller.config().current();
+    cfg.audio.gateThresholdDb = -10.0f;
+    CHECK_FALSE(controller.updateSettings(cfg, note));
+    CHECK(controller.engine().inputGateThresholdDb() == -30.0f);   // refused atomically
+    CHECK(controller.config().current().audio.gateThresholdDb == -30.0f);
+
+    // The output side is not part of this control: nothing above moved it.
+    CHECK_FALSE(controller.engine().outputMuted());
+
+    controller.stop();
+}
+
 TEST_CASE("ApplicationController: text events reach NDI and diagnostics", "[app][ndi]")
 {
     QuietLog quiet;

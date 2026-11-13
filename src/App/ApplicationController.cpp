@@ -382,6 +382,13 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
     engine_.setJitterBufferMs(cfg.translation.jitterBufferMs);
 
+    // The input gate applies live like the gains: one relaxed atomic to the running
+    // callback, effective from the next measured chunk. Enabling, disabling or moving
+    // the threshold mid-show never interrupts the stream, and the output side is not
+    // part of this control at all.
+    engine_.setInputGateEnabled(cfg.audio.gateEnabled);
+    engine_.setInputGateThresholdDb(cfg.audio.gateThresholdDb);
+
     // Subtitle appearance, video geometry and the output mode reach a RUNNING
     // transport (the task's "apply without restarting the sender"): the video
     // output redraws on its next frame, the mode switches which media that
@@ -435,7 +442,8 @@ bool ApplicationController::updateSettings(const AppConfig& candidate, std::stri
 
     std::string saveError;
     if (saveSettings(saveError))
-        note = "settings saved. Gain, jitter, the log level, the NDI subtitle look (appearance, "
+        note = "settings saved. Gain, the input gate (enable and threshold), jitter, the log "
+               "level, the NDI subtitle look (appearance, "
                "geometry, mode) and the target language - including Off and its output behavior - "
                "are live; a language change reopens the session in the background. Device, sample "
                "rate, buffer, channels, instructions and the NDI on/off + stream name take effect "
@@ -619,6 +627,14 @@ bool ApplicationController::exportDiagnostics(const std::filesystem::path& direc
     audioRows.emplace_back("applied_output_gain_db", std::format("{:.1f}", engine.appliedOutputGainDb()));
     audioRows.emplace_back("input_muted", engine.inputMuted() ? "yes" : "no");
     audioRows.emplace_back("output_muted", engine.outputMuted() ? "yes" : "no");
+    // The input gate, on the INCOMING side only: what the translator was fed through,
+    // and how much of the capture the gate muted (channel samples; the meters above
+    // deliberately read pre-gate, so "input_level" and "gate_closed_samples" together
+    // tell the story of a gated run).
+    audioRows.emplace_back("gate_enabled", engine.inputGateEnabled() ? "yes" : "no");
+    audioRows.emplace_back("gate_threshold_db", std::format("{:.1f}", engine.inputGateThresholdDb()));
+    audioRows.emplace_back("gate_open", engine.inputGateOpen() ? "yes" : "no");
+    audioRows.emplace_back("gate_closed_samples", std::to_string(engine.inputGateClosedSamples()));
     audioRows.emplace_back("buffer_block_ms", std::to_string(latency.blockMs));
     audioRows.emplace_back("pipeline_buffer_delay_ms", std::to_string(latency.totalMs));
     audioRows.emplace_back("pipeline_buffer_delay_source", latency.source);
@@ -1149,6 +1165,12 @@ bool ApplicationController::startAudio(std::string& error)
     engine_.setInputGainDb(cfg.audio.inputGainDb);
     engine_.setOutputGainDb(cfg.audio.outputGainDb);
 
+    // The input hard gate is configuration (unlike mute): a show starts with the gate in
+    // the state the settings say, and the first block is already gated - or not - as the
+    // operator set it. Incoming audio only; the output path is not touched here.
+    engine_.setInputGateEnabled(cfg.audio.gateEnabled);
+    engine_.setInputGateThresholdDb(cfg.audio.gateThresholdDb);
+
     const bool devSource = devPlan_.useWavSource || devPlan_.useToneSource;
 
     // A planned simulated source must actually BE the injected backend: the
@@ -1218,6 +1240,16 @@ bool ApplicationController::startAudio(std::string& error)
               "audio gains in effect: input " + std::format("{:+.1f}", engine_.inputGainDb())
             + " dB, output " + std::format("{:+.1f}", engine_.outputGainDb())
             + " dB, glide " + std::to_string(engine_.gainRampMs()) + " ms");
+
+    // The gate is a deliberate operator decision, so a run that started with it says
+    // so in the log - and a run without it stays as quiet as it always was.
+    if (engine_.inputGateEnabled())
+    {
+        log::info(kComponent,
+                  "input gate in effect: threshold "
+                + std::format("{:.1f}", engine_.inputGateThresholdDb())
+                + " dBFS, incoming audio only (the output path does not gate)");
+    }
 
     // Developer loopback claims the input rings before any streaming
     // worker is even considered; startSession() -> startStreaming() checks for

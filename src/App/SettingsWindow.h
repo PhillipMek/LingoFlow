@@ -143,6 +143,15 @@ private:
     juce::Slider inputGainSlider_, outputGainSlider_;
     juce::Label audioRestartHintLabel_;
 
+    /// The optional input hard gate (schema v5): the enable checkbox and its
+    /// threshold. The threshold control follows the toggle - a gate that is off
+    /// has no level to set, and a greyed slider says that without a sentence
+    /// needing to. The coupling is widget-visible only; the value still reaches
+    /// the engine at Apply through the one funnel, like every other draft here.
+    juce::ToggleButton inputGateToggle_ { "Enable input gate" };
+    juce::Label gateThresholdCaption_, gateHintLabel_;
+    juce::Slider gateThresholdSlider_;
+
     // ------------------------------------------------------------ translation
     juce::Label sourceCaption_, targetCaption_, pairWarningLabel_;
     juce::Label sourceNoteLabel_;         ///< the expectation-vs-wire truth, in one sentence

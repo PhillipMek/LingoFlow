@@ -356,6 +356,23 @@ SettingsContent::SettingsContent(ApplicationController& controller)
          "language (and the Off behavior) applies while running.",
          audioBody);
 
+    // The optional input hard gate (schema v5). OFF by default: unticked, the input
+    // path is the pre-gate product unchanged. The threshold is only meaningful while
+    // the gate runs, so the slider mirrors the box - visually, nothing more: like
+    // every widget on this dialog, its value reaches the engine only at Apply.
+    toggle(inputGateToggle_, audioBody);
+    inputGateToggle_.onClick = [this]
+    {
+        gateThresholdSlider_.setEnabled(inputGateToggle_.getToggleState());
+    };
+    caption(gateThresholdCaption_, "Gate threshold (dB)", audioBody);
+    const auto [gateMin, gateMax] = config::gateThresholdRange();
+    slider(gateThresholdSlider_, gateMin, gateMax, 1.0, audioBody);
+    hint(gateHintLabel_,
+         "Hard gate on the incoming audio only: input below the threshold is muted before the "
+         "translator. Applies live; the output and playback are never gated.",
+         audioBody);
+
     // -------------------------------------------------------------- translation
     translationPage_ = new ui::ScrollablePage(
         [this](int width) { return layoutTranslationPage(width); });
@@ -689,6 +706,8 @@ void SettingsContent::applyPressed()
     }
     candidate.audio.inputGainDb = static_cast<float> (inputGainSlider_.getValue());
     candidate.audio.outputGainDb = static_cast<float> (outputGainSlider_.getValue());
+    candidate.audio.gateEnabled = inputGateToggle_.getToggleState();
+    candidate.audio.gateThresholdDb = static_cast<float> (gateThresholdSlider_.getValue());
 
     // Translation tab.
     if (const int index = sourceChoice_.getSelectedItemIndex();
@@ -866,6 +885,12 @@ void SettingsContent::refreshFromSettings()
     outputGainCaption_.setText("Output gain (dB) - currently "
                                    + juce::String(std::format("{:+.1f}", cfg.audio.outputGainDb)),
                                juce::NotificationType::dontSendNotification);
+
+    inputGateToggle_.setToggleState(cfg.audio.gateEnabled,
+                                    juce::NotificationType::dontSendNotification);
+    gateThresholdSlider_.setValue(cfg.audio.gateThresholdDb,
+                                  juce::NotificationType::dontSendNotification);
+    gateThresholdSlider_.setEnabled(cfg.audio.gateEnabled);
 
     instructionsEditor_.setText(juce::String(cfg.translation.instructions),
                                 juce::NotificationType::dontSendNotification);
@@ -1300,6 +1325,17 @@ int SettingsContent::layoutAudioPage(int width)
     channelNoteLabel_.setBounds(b.removeFromTop(16));
     b.removeFromTop(kRowGap);
     audioRestartHintLabel_.setBounds(b.removeFromTop(28));
+
+    // The input gate row: the checkbox, then its threshold (indented under the
+    // decision it belongs to), then the one-line explanation. Consumed from the
+    // same measured stack as everything above.
+    b.removeFromTop(kRowGap * 2);
+    inputGateToggle_.setBounds(b.removeFromTop(kControlH));
+    b.removeFromTop(kRowGap);
+    gateThresholdCaption_.setBounds(b.removeFromTop(kCaptionH));
+    gateThresholdSlider_.setBounds(b.removeFromTop(kControlH));
+    b.removeFromTop(kRowGap);
+    gateHintLabel_.setBounds(b.removeFromTop(28));
 
     // Everything the page needs sits above this line; the viewport hands the
     // rest to the scroll bar. kMeasureHeight is the measuring stick - the
