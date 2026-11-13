@@ -3,19 +3,28 @@
 // AudioEngine - the realtime stage between a device backend and the rest of the
 // product (spec "Audio Pipeline").
 //
-//   ASIO Input -> GainStage (input) -> AudioRingBuffer -> translation worker
+//   ASIO Input -> GainStage (input) -> HardGate (input, optional) -> AudioRingBuffer -> translation worker
 //   translated audio -> AudioJitterBuffer -> GainStage (output) -> ASIO Output
 //
-// The engine owns both buffers, both level meters, both gain stages and the
-// underrun/overrun counters. Everything is allocated in activate(), on a non-realtime
-// thread, before the device is started: the callback only ever touches preallocated
-// memory, does fixed work and publishes relaxed atomics. It never allocates, locks,
-// logs, sleeps or waits for the network.
+// The engine owns both buffers, both level meters, both gain stages, the input
+// gates and the underrun/overrun counters. Everything is allocated in activate(),
+// on a non-realtime thread, before the device is started: the callback only ever
+// touches preallocated memory, does fixed work and publishes relaxed atomics. It
+// never allocates, locks, logs, sleeps or waits for the network.
 //
 // Gain stages are the exception to "released with the pipeline": they carry the
 // operator's settings and the clipping history rather than device geometry, so they
 // survive deactivate() and are re-configured (not recreated) by the next activate().
-// A device restart must not silently reset the room's levels.
+// A device restart must not silently reset the room's levels. The input gates join
+// that exception for the same reason: an enabled gate and its threshold are an
+// operator decision, not device geometry.
+//
+// The input gate is the ONLY stage that sits between the input gain and the ring
+// (HardGate), and it sits on the input stream alone: the meters keep reading the
+// post-gain, PRE-gate block so the operator can see the room while choosing a
+// threshold, the bypass/silence output routings are untouched, and what the ring
+// forwards is what the gate let through - exactly the task's "incoming audio only"
+// boundary.
 //
 // Safety rule that the buffer design enforces: while the engine routes the
 // TRANSLATION to the audience (OutputRouting::translation, the normal show),
@@ -50,6 +59,7 @@
 #include "Audio/AudioJitterBuffer.h"
 #include "Audio/AudioRingBuffer.h"
 #include "Audio/GainStage.h"
+#include "Audio/HardGate.h"
 #include "Audio/IAudioBackend.h"
 #include "Audio/LevelMeter.h"
 
@@ -216,6 +226,35 @@ public:
     bool takeInputClipIndicator() noexcept;
     bool takeOutputClipIndicator() noexcept;
 
+    // ------------------------------------------------------------- input hard gate
+    /// The optional noise gate on the INCOMING stream (see the class comment for its
+    /// position). Like the gains, both setters are safe from any thread while the
+    /// device runs: a relaxed atomic publish, the callback applies it from its next
+    /// chunk. Enabling or disabling never interrupts the stream - the device, the
+    /// rings and the output side are untouched either way.
+    ///
+    /// Out-of-window thresholds are clamped to HardGate::kMinThresholdDb..kMaxThresholdDb
+    /// and counted (gateRequestsClamped()); non-finite values keep the previous
+    /// threshold and are counted (gateRequestsRejected()).
+    void setInputGateEnabled(bool enabled) noexcept;
+    void setInputGateThresholdDb(float thresholdDb) noexcept;
+
+    /// The level in effect for new requests - what the UI number box should show.
+    bool inputGateEnabled() const noexcept { return gateEnabled_.load(std::memory_order_relaxed); }
+    float inputGateThresholdDb() const noexcept { return gateThresholdDb_.load(std::memory_order_relaxed); }
+
+    /// The decision the callback made for the most recent input chunk on channel 0
+    /// (false before any, and always false while the gate is disabled - the honest
+    /// "not gating" reading). Readout for the diagnostics panel, not a control.
+    bool inputGateOpen() const noexcept;
+
+    /// Channel samples the gate muted (closed-decision blocks, ramp-out included).
+    std::uint64_t inputGateClosedSamples() const noexcept;
+
+    /// Threshold requests the engine had to clamp or refuse.
+    std::uint64_t gateRequestsClamped() const noexcept { return gateClamped_.load(std::memory_order_relaxed); }
+    std::uint64_t gateRequestsRejected() const noexcept { return gateRejected_.load(std::memory_order_relaxed); }
+
     /// Clear the SHOW's statistics: every block/frames/silence/drop/underrun/
     /// overrun/malformed total, the gain stages' signal counters and the jitter
     /// underrun baselines. The controller calls this once per run, at the
@@ -225,7 +264,8 @@ public:
     /// task 3; the DiagnosticsManager ledger resets at the same point).
     ///
     /// What survives is deliberately not session-shaped: gains, mutes and ramp
-    /// (the operator's settings), the device geometry, the routing (re-applied
+    /// (the operator's settings), the gate enable flag and threshold (likewise
+    /// the operator's settings), the device geometry, the routing (re-applied
     /// from settings seconds later anyway), and the knob-operation quality
     /// totals (clamped/rejected gain requests - facts about the console, not
     /// the show). Never call while the callback can be running.
@@ -315,13 +355,23 @@ private:
     /// enough. Non-realtime: may allocate, so it runs inside buildPipeline's try.
     void growGainStages(int inputChannels, int outputChannels);
 
+    /// One gate per input channel, grown in the same try as the stages. Non-realtime.
+    void growInputGates(int inputChannels);
+
     /// Pushes the operator's gain, mute and glide settings into every stage and configures
     /// the sample rate they convert ms into samples with. Non-realtime.
     void applyGainToStages(int sampleRate);
 
+    /// Pushes the operator's gate enable/threshold into every input gate and lands the
+    /// coefficient on open for the new run. Non-realtime.
+    void applyGateToStages(int sampleRate);
+
     /// Sum of a per-stage counter across one side. Non-realtime read path.
     std::uint64_t sumInputStages(std::uint64_t (audio::GainStage::*counter)() const noexcept) const noexcept;
     std::uint64_t sumOutputStages(std::uint64_t (audio::GainStage::*counter)() const noexcept) const noexcept;
+
+    /// Sum of a per-gate counter across the input gates. Non-realtime read path.
+    std::uint64_t sumInputGates(std::uint64_t (audio::HardGate::*counter)() const noexcept) const noexcept;
 
     audio::IAudioBackend* backend_ = nullptr;
     DiagnosticsManager* diagnostics_ = nullptr;
@@ -336,6 +386,12 @@ private:
     /// history outlive a restart of the audio path.
     std::vector<std::unique_ptr<audio::GainStage>> inputStages_;
     std::vector<std::unique_ptr<audio::GainStage>> outputStages_;
+
+    /// One hard gate per input channel, after the input trim and before the ring.
+    /// Kept across deactivate() by the same rule as the gain stages: the enable flag
+    /// and the threshold are the operator's decisions, and they ride on the engine
+    /// atomics below while the stages apply them in the callback.
+    std::vector<std::unique_ptr<audio::HardGate>> inputGates_;
 
     /// kGainChunkFrames floats per input channel. The callback copies the device block
     /// here because the device hands it over read-only and gain has to be applied before
@@ -387,6 +443,15 @@ private:
     std::atomic<int> gainRampMs_{ audio::GainStage::kDefaultRampMs };
     std::atomic<std::uint64_t> gainClamped_{ 0 };
     std::atomic<std::uint64_t> gainRejected_{ 0 };
+
+    /// The operator's gate state, kept here for the same reason as the gains: it can
+    /// be set before the device exists and it survives a restart of the pipeline.
+    /// Default DISABLED - with no gate in settings the input path is exactly the
+    /// pre-gate product.
+    std::atomic<bool> gateEnabled_{ false };
+    std::atomic<float> gateThresholdDb_{ audio::HardGate::kDefaultThresholdDb };
+    std::atomic<std::uint64_t> gateClamped_{ 0 };
+    std::atomic<std::uint64_t> gateRejected_{ 0 };
 };
 
 } // namespace liveai

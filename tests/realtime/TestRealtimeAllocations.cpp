@@ -219,3 +219,53 @@ TEST_CASE("Realtime path: a gain change costs no allocations and no locks", "[au
     CHECK(std::isfinite(engine.appliedInputGainDb()));
     CHECK(engine.blockCount() == 2050);          // warm-up plus the measured window
 }
+
+TEST_CASE("Realtime path: toggling and re-thresholding the input gate costs no allocations",
+          "[audio][realtime][gate]")
+{
+    NullAudioBackend backend;
+    AudioEngine engine;
+
+    std::string error;
+    REQUIRE(engine.activate(backend, makeRequest(), error));
+    engine.attachInputConsumer();
+
+    std::array<float, static_cast<std::size_t>(kFrames)> in{};
+    std::array<float, static_cast<std::size_t>(kFrames)> out{};
+    in.fill(0.25f);
+
+    const float* inPointers[] = { in.data() };
+    float* outPointers[] = { out.data() };
+
+    for (int block = 0; block < 50; ++block)
+        engine.processAudio(inPointers, outPointers, kFrames);
+
+    // The same proof as the gain case, for the gate's controls: an operator (or a
+    // settings Apply landing mid-show) toggling the gate and dragging its threshold
+    // while the callback runs - decisions, glides and countings, no heap, no locks.
+    beginCounting();
+
+    for (int block = 0; block < 2000; ++block)
+    {
+        engine.setInputGateEnabled(block % 2 == 0);
+        engine.setInputGateThresholdDb(static_cast<float>(-40 + block % 20));
+
+        // Alternate a level that passes the window above with one it gates.
+        in.fill(block % 3 == 0 ? 0.0005f : 0.25f);
+        engine.processAudio(inPointers, outPointers, kFrames);
+    }
+
+    engine.setInputGateThresholdDb(std::nanf("1"));     // refused requests allocate nothing either
+    engine.setInputGateThresholdDb(-1000.0f);           // clamped ones as little
+
+    const std::uint64_t allocations = endCounting();
+
+    engine.deactivate();
+
+    CHECK(allocations == 0);
+    CHECK(engine.gateRequestsRejected() == 1);
+    CHECK(engine.gateRequestsClamped() == 1);
+    CHECK(engine.inputGateThresholdDb() == -120.0f);    // the last accepted value, clamped to the floor
+    CHECK(std::isfinite(engine.inputGateThresholdDb()));
+    CHECK(engine.inputGateClosedSamples() > 0);        // the window really did gate, not just set
+}

@@ -38,6 +38,7 @@ add_executable(lingoflow_tests
     unit/TestAudioEngine.cpp
     unit/TestAudioPipeline.cpp
     unit/TestGainStage.cpp
+    unit/TestHardGate.cpp
     unit/TestAsioChannelForwarding.cpp
     unit/TestAsioDeviceInfo.cpp
     unit/TestNullBackends.cpp

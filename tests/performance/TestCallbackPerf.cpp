@@ -226,6 +226,30 @@ TEST_CASE("Perf: the audio callback consumes a bounded slice of every period, on
         // keep it honest about the total period cost.
         CHECK(played.p99() < 1500);   // 15% of the period, worker included
 
+        // Path (c): the input hard gate engaged on the same hot path, in both of
+        // its steady states. The claim the numbers make: one RMS pass over the
+        // block plus an in-place apply (or memset when closed) stays inside the
+        // same slice of the period as the ungated path above - the gate is a
+        // second scan, not a second pipeline.
+        engine.setInputGateEnabled(true);
+        engine.setInputGateThresholdDb(-30.0f);
+
+        const auto gatedOpen = measure(live, kIterations, kWarmup);
+        INFO("mono48k gate open: median_us=" << gatedOpen.median()
+             << " p99_us=" << gatedOpen.p99() << " max_us=" << gatedOpen.max());
+        CHECK(gatedOpen.p99() < 1500);
+        CHECK(engine.inputGateOpen());
+
+        std::fill(buffers.inData.begin(), buffers.inData.end(), 0.0f);   // the room goes quiet
+
+        const auto gatedClosed = measure(live, kIterations, kWarmup);
+        INFO("mono48k gate closed: median_us=" << gatedClosed.median()
+             << " p99_us=" << gatedClosed.p99() << " max_us=" << gatedClosed.max());
+        CHECK(gatedClosed.p99() < 1500);
+        CHECK_FALSE(engine.inputGateOpen());
+        CHECK(engine.inputGateClosedSamples() > 0);
+
+        engine.setInputGateEnabled(false);
         engine.deactivate();
     }
 

@@ -156,6 +156,12 @@ rt_expect("rt-selftest/gain-db-to-linear" FAIL "RT_AUDIT_FORBIDDEN"
     "Audio/GainStage.cpp" "float GainStage::dbToLinear" "    return std::exp2(gainDb * kLog2TenOverTwenty);"
     "std::this_thread::sleep_for(std::chrono::milliseconds(1));")
 
+# 10b. The input hard gate is on the callback path too: allocation inside its
+# process() must stop the gate, exactly like the gain stage beside it.
+rt_expect("rt-selftest/hard-gate" FAIL "RT_AUDIT_FORBIDDEN"
+    "Audio/HardGate.cpp" "void HardGate::process" "    const float target = decidedOpen ? 1.0f : 0.0f;"
+    "auto scratch = std::make_unique<float[]>(frames);")
+
 # 11. Design note: the table now covers the helpers that grew onto the callback path
 # later - including inline functions in HEADERS. A lock injected into the counter
 # processAudio calls every block must stop the gate.

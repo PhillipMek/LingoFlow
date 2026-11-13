@@ -153,6 +153,7 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
         // part of the pipeline that has to be allocated before the first callback and
         // never inside it.
         growGainStages(inputChannels, outputChannels);
+        growInputGates(inputChannels);
     }
     catch (...)
     {
@@ -181,8 +182,11 @@ bool AudioEngine::buildPipeline(int sampleRate, int blockFrames, int inputChanne
     jitterUnderrunSeen_.assign(outputJitters_.size(), 0);
 
     // Land the gain stages on the operator's current levels before the device runs: the
-    // first block must already play the level the UI shows, not glide into it.
+    // first block must already play the level the UI shows, not glide into it. The gate
+    // lands the same way: configured from the remembered enable/threshold, coefficient
+    // open until the first measured block decides otherwise.
     applyGainToStages(sampleRate);
+    applyGateToStages(sampleRate);
 
     inputChannels_.store(static_cast<int>(inputRings_.size()), std::memory_order_relaxed);
     outputChannels_.store(static_cast<int>(outputJitters_.size()), std::memory_order_relaxed);
@@ -316,6 +320,33 @@ float rememberGain(float requested,
     }
 
     const float windowed = std::clamp(requested, audio::GainStage::kMinGainDb, audio::GainStage::kMaxGainDb);
+
+    if (windowed != requested)
+        clamped.fetch_add(1, std::memory_order_relaxed);
+
+    stored.store(windowed, std::memory_order_relaxed);
+    return windowed;
+}
+
+/// The same windowing rule for the gate threshold as rememberGain has for levels:
+/// clamp and count, refuse non-finite and count, keep the previous value on refusal.
+/// The window is the stage's own (HardGate::kMinThresholdDb..kMaxThresholdDb), so the
+/// engine's "what the operator asked" and the stage's "what the callback executes"
+/// cannot disagree.
+float rememberGateThreshold(float requested,
+                            std::atomic<float>& stored,
+                            std::atomic<std::uint64_t>& clamped,
+                            std::atomic<std::uint64_t>& rejected) noexcept
+{
+    if (!std::isfinite(requested))
+    {
+        rejected.fetch_add(1, std::memory_order_relaxed);
+        return stored.load(std::memory_order_relaxed);
+    }
+
+    const float windowed = std::clamp(requested,
+                                      audio::HardGate::kMinThresholdDb,
+                                      audio::HardGate::kMaxThresholdDb);
 
     if (windowed != requested)
         clamped.fetch_add(1, std::memory_order_relaxed);
@@ -489,6 +520,60 @@ bool AudioEngine::takeOutputClipIndicator() noexcept
     return any;
 }
 
+// -------------------------------------------------------------- input hard gate
+
+void AudioEngine::setInputGateEnabled(bool enabled) noexcept
+{
+    gateEnabled_.store(enabled, std::memory_order_relaxed);
+
+    for (auto& gate : inputGates_)
+    {
+        if (gate != nullptr)
+            gate->setEnabled(enabled);
+    }
+}
+
+void AudioEngine::setInputGateThresholdDb(float thresholdDb) noexcept
+{
+    rememberGateThreshold(thresholdDb, gateThresholdDb_, gateClamped_, gateRejected_);
+
+    // The stages implement the same window and count what they had to alter, like
+    // the gain stages do: a request handed to a running callback is never silently
+    // accepted, and a threshold change takes effect from the next measured chunk
+    // without touching the stream.
+    for (auto& gate : inputGates_)
+    {
+        if (gate != nullptr)
+            gate->setThresholdDb(thresholdDb);
+    }
+}
+
+bool AudioEngine::inputGateOpen() const noexcept
+{
+    const auto& front = inputGates_.empty() ? nullptr : inputGates_.front().get();
+
+    // No stage, or the gate bypassed: "not gating" reads as not open.
+    return front != nullptr && front->enabled() && front->open();
+}
+
+std::uint64_t AudioEngine::inputGateClosedSamples() const noexcept
+{
+    return sumInputGates(&audio::HardGate::closedSamples);
+}
+
+std::uint64_t AudioEngine::sumInputGates(std::uint64_t (audio::HardGate::*counter)() const noexcept) const noexcept
+{
+    std::uint64_t total = 0;
+
+    for (const auto& gate : inputGates_)
+    {
+        if (gate != nullptr)
+            total += (gate.get()->*counter)();
+    }
+
+    return total;
+}
+
 void AudioEngine::resetRunCounters() noexcept
 {
     // One session's statistical ledger, cleared (venue task 3 §2; the matching
@@ -525,6 +610,14 @@ void AudioEngine::resetRunCounters() noexcept
             stage->resetSignalCounters();
     }
 
+    // Same rule for the input gates: the mute/decision facts are the show's,
+    // the enable flag and the threshold are the operator's.
+    for (auto& gate : inputGates_)
+    {
+        if (gate != nullptr)
+            gate->resetSignalCounters();
+    }
+
     // The per-channel jitter underrun snapshot baselines. The buffers
     // themselves are rebuilt fresh by the next activate() (their own event
     // counts start at zero), so zeroing the baselines here keeps the
@@ -552,6 +645,14 @@ void AudioEngine::growGainStages(int inputChannels, int outputChannels)
         gainScratch_.resize(needed, 0.0f);
 }
 
+void AudioEngine::growInputGates(int inputChannels)
+{
+    // Like the gain stages: existing gates are kept (their settings and history are
+    // the operator's), the vector only grows to cover the channel count.
+    while (static_cast<int>(inputGates_.size()) < inputChannels)
+        inputGates_.push_back(std::make_unique<audio::HardGate>());
+}
+
 void AudioEngine::applyGainToStages(int sampleRate)
 {
     const int rampMs = gainRampMs_.load(std::memory_order_relaxed);
@@ -574,6 +675,22 @@ void AudioEngine::applyGainToStages(int sampleRate)
         stage->setGainDb(outputGainDb_.load(std::memory_order_relaxed));
         stage->setMuted(outputMuted_.load(std::memory_order_relaxed));
         stage->configure(sampleRate, rampMs);
+    }
+}
+
+void AudioEngine::applyGateToStages(int sampleRate)
+{
+    const bool enabled = gateEnabled_.load(std::memory_order_relaxed);
+    const float thresholdDb = gateThresholdDb_.load(std::memory_order_relaxed);
+
+    for (auto& gate : inputGates_)
+    {
+        if (gate == nullptr)
+            continue;
+
+        gate->setThresholdDb(thresholdDb);
+        gate->setEnabled(enabled);
+        gate->configure(sampleRate);   // lands the coefficient on open for the new run
     }
 }
 
@@ -656,6 +773,10 @@ void AudioEngine::processAudio(const float* const* input,
             if (stage == nullptr)
                 continue;   // growGainStages() sizes this with the channel count
 
+            // growInputGates() sizes this with the same channel count; a null would
+            // mean the gate simply does not gate this channel (pass-through).
+            audio::HardGate* gate = inputGates_[static_cast<std::size_t>(channel)].get();
+
             if (frames > kGainChunkFrames)
                 oversized_.fetch_add(1, std::memory_order_relaxed);
 
@@ -669,10 +790,21 @@ void AudioEngine::processAudio(const float* const* input,
 
                 stage->process(source + offset, scratch, take);
 
-                // The meter reads the post-gain block, so the gain knob visibly moves the
-                // meter. Whether the signal was already at full scale on the way in is the
-                // stage's own count, which attenuation cannot hide.
+                // The meter reads the post-gain, PRE-gate block: the operator sees the
+                // room as the trim set it, including while the gate is muting it - which
+                // is the information a threshold is chosen from. What arrived at full
+                // scale on the way in is the stage's own count, which attenuation cannot
+                // hide.
                 inputMeters_[static_cast<std::size_t>(channel)]->measure(scratch, take);
+
+                // The optional hard gate sits between the input trim and the ring:
+                // everything downstream (loopback worker, streaming worker, the
+                // OpenAI input stream) is fed what the gate passed, never the raw
+                // capture. Disabled, it leaves the scratch exactly as the gain
+                // stage wrote it; enabled and closed, the block becomes exact
+                // zeros. The output side is not involved in either case.
+                if (gate != nullptr)
+                    gate->process(scratch, take);
 
                 inputSamplesCaptured_.fetch_add(static_cast<std::uint64_t>(take), std::memory_order_relaxed);
 

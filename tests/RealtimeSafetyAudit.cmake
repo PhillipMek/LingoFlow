@@ -53,6 +53,7 @@ set(rt_audit_rows
     "Audio/GainStage.cpp|float GainStage::targetLinear"
     "Audio/GainStage.cpp|void GainStage::process\\(float\\* data"
     "Audio/GainStage.cpp|void GainStage::process\\(const float\\* input"
+    "Audio/HardGate.cpp|void HardGate::process"
     "Audio/AudioEngine.cpp|AudioEngine::processAudio"
     "Audio/AudioEngine.cpp|void silenceOutputs"
     "Audio/Asio/AsioChannelForwarding.h|ChannelArrayShape forwardActiveChannels"

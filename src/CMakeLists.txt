@@ -53,6 +53,8 @@ add_library(lingoflow_core STATIC
     Audio/AudioRingBuffer.h
     Audio/GainStage.cpp
     Audio/GainStage.h
+    Audio/HardGate.cpp
+    Audio/HardGate.h
     Audio/LevelMeter.cpp
     Audio/LevelMeter.h
     Audio/Asio/AsioDeviceInfo.cpp
