@@ -39,6 +39,9 @@ compile_commands.json
 .env.*
 *.log
 logs/
+# Local/CI run logs (never repo state)
+/ci-logs/
+/release-logs/
 config.local.json
 secrets/
 credentials/
