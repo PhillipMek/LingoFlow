@@ -61,6 +61,7 @@ set(rt_audit_rows
     "Diagnostics/DiagnosticsManager.h|void countUnderrun"
     "Diagnostics/DiagnosticsManager.h|void countOverrun"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceIOCallbackWithContext"
+    "Platform/Asio/JuceAsioBackend.cpp|void updateArrayEvidence"
     "Platform/Asio/JuceAsioBackend.cpp|void audioDeviceError")
 
 # Allocation, blocking, sleeping, I/O, transport, UI, throwing.
