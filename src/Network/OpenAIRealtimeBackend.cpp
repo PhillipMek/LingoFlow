@@ -99,6 +99,16 @@ std::string refusalErrorCode(const std::string& body)
     return codeIt->get<std::string>();
 }
 
+/// Best-effort wipe of buffers this file owns. std::string may keep allocator
+/// capacity beyond size() and the transport makes its own copy of the header,
+/// so this is memory hygiene rather than cryptographic erasure - but the
+/// buffers created here must not outlive their use with the key in them.
+void scrubSecret(std::string& value) noexcept
+{
+    std::fill(value.begin(), value.end(), '\0');
+    value.clear();
+}
+
 bool containsAudioWord(const std::string& text)
 {
     std::string lower = text;
@@ -258,7 +268,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     // Credentials come from the store only (contract + the project rules). The value
     // is used to build the one auth header and never written anywhere else.
-    const auto apiKey = secrets_.load(security::kOpenAiApiKey);
+    auto apiKey = secrets_.load(security::kOpenAiApiKey);
     if (!apiKey.has_value() || apiKey->empty())
     {
         error = "openai: no API key available in the credential store";
@@ -335,7 +345,12 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     // value drops the OPTIONAL header and its warning travels to the log -
     // an identifier the provider does not require never decides whether the
     // show has a translation.
-    std::vector<std::string> headers { "Authorization: Bearer " + *apiKey };
+    // Build the credential header in place: a `"Authorization: Bearer " + key`
+    // temporary would leave an extra unwiped copy of the key behind.
+    std::vector<std::string> headers;
+    headers.reserve(2);
+    headers.emplace_back("Authorization: Bearer ");
+    headers.back() += *apiKey;
     if (!options_.safetyIdentifier.empty())
     {
         if (isSendableSafetyIdentifier(options_.safetyIdentifier))
@@ -345,6 +360,13 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
                          "configured safety identifier is not a sendable header value; header omitted");
     }
     const ConnectResult cr = transport_->connect(options_.host, kWirePort, path, headers);
+
+    // The handshake is over: nothing here needs the key or the header buffer
+    // any more. Wipe the copies this function owns, success or refusal alike.
+    scrubSecret(*apiKey);
+    for (std::string& header : headers)
+        scrubSecret(header);
+
     if (!cr.upgraded)
     {
         auto category = categoryForHttpStatus(cr.httpStatus);
