@@ -60,5 +60,6 @@ the ASIO SDK moves to its proprietary option as well.
 
 An API key is never part of the distributed source or of `config.json`. With the
 repository public-by-licence consequence of AGPLv3, this rule gets extra weight:
-the source tree must contain no credential, ever (`.env` is git-ignored; only
-`.env.example` with a placeholder is tracked).
+the source tree must contain no credential, ever (`.env` and every `.env.*`
+file are git-ignored; credentials are supplied through the secure store or an
+environment variable for development only).
