@@ -1119,11 +1119,40 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
                         "openai: transcript delta without a payload", false);
             return EventResult::keepGoing;
         }
+        std::string forcedFinal;
+        std::string oversizedFinal;
         {
             const std::lock_guard<std::mutex> lock(transcriptMutex_);
-            transcriptLine_ += stringField(parsed, "delta");
+            const std::string delta = stringField(parsed, "delta");
             lastTranscriptMs_ = steadyNowMs();
+
+            if (delta.size() >= kMaxTranscriptLineBytes)
+            {
+                // A single pathological fragment is its own line: it never
+                // enters the accumulation, and whatever was open before it is
+                // closed first so no text is lost and no final exceeds the cap.
+                forcedFinal.swap(transcriptLine_);
+                oversizedFinal = delta;
+            }
+            else if (!transcriptLine_.empty()
+                     && transcriptLine_.size() + delta.size() > kMaxTranscriptLineBytes)
+            {
+                forcedFinal.swap(transcriptLine_);
+                transcriptLine_ = delta;
+            }
+            else
+                transcriptLine_ += delta;
         }
+        // Sink callbacks stay outside transcriptMutex_ (the settle path uses the
+        // same rule): a sink must never chain this lock into the pipeline's.
+        if (!forcedFinal.empty() || !oversizedFinal.empty())
+            log::warning(kLogComponent,
+                         "subtitle line budget reached: forced final after "
+                             + std::to_string(kMaxTranscriptLineBytes) + " bytes");
+        if (!forcedFinal.empty() && sink_ != nullptr)
+            sink_->onFinalText(forcedFinal);
+        if (!oversizedFinal.empty() && sink_ != nullptr)
+            sink_->onFinalText(oversizedFinal);
         if (sink_ != nullptr)
             sink_->onPartialText(transcriptSnapshot());
         return EventResult::keepGoing;
