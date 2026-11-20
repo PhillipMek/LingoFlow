@@ -289,7 +289,6 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     closeRequested_ = false;
     senderStop_ = false;
-    receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
     eventCounter_ = 0;
@@ -641,7 +640,6 @@ void OpenAIRealtimeBackend::finishClose(bool abandoned)
     eventCounter_ = 0;
     closeRequested_ = false;
     senderStop_ = false;
-    receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
     if (abandoned && lateAudioDropped_.load(std::memory_order_relaxed) > 0)

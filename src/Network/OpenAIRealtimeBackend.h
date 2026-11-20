@@ -231,7 +231,6 @@ private:
     int queueCapacityFrames_ = 0;
     std::atomic<bool> closeRequested_ { false };
     std::atomic<bool> senderStop_ { false };  ///< fatal/teardown: loops leave
-    std::atomic<bool> receiverStop_ { false }; ///< force-cancel the pending receive
     std::atomic<bool> closeSent_ { false };   ///< sender delivered session.close
     std::atomic<bool> drainForced_ { false }; ///< last socket close was our cancel
     std::atomic<std::uint64_t> eventCounter_ { 0 };
