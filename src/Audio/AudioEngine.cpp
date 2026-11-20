@@ -235,15 +235,20 @@ bool AudioEngine::activate(audio::IAudioBackend& backend, const audio::DeviceReq
 
     backend_ = &backend;
 
+    // Publish the geometry the pipeline was just built for BEFORE the device
+    // starts. GUI readers (bufferBlockMs and the jitter control) must not see
+    // a zero window between start() and the publication; the callback never
+    // reads these fields, so this stays off the realtime path.
+    onAudioConfigurationChanged(capabilities.sampleRate, capabilities.preferredBufferFrames);
+
     if (!backend.start(error))
     {
+        onAudioConfigurationChanged(0, 0); // a device that never started owns no geometry
         backend.close();
         backend_ = nullptr;
         releasePipeline();
         return false;
     }
-
-    onAudioConfigurationChanged(capabilities.sampleRate, capabilities.preferredBufferFrames);
 
     if (diagnostics_ != nullptr)
         diagnostics_->noteAudioBackend(backend.name());

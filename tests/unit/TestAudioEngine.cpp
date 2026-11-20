@@ -70,6 +70,50 @@ TEST_CASE("AudioEngine: activate opens and starts the backend", "[audio][engine]
     CHECK(diagnostics.snapshot().audioBackend.empty());
 }
 
+TEST_CASE("AudioEngine: geometry is visible inside backend.start", "[audio][engine]")
+{
+    struct ObservingBackend final : IAudioBackend
+    {
+        std::string_view name() const noexcept override { return "Observing"; }
+        BackendState state() const noexcept override { return state_; }
+        bool open(IAudioProcessor&, const DeviceRequest&, std::string&) override
+        {
+            state_ = BackendState::opened;
+            return true;
+        }
+        bool start(std::string&) override
+        {
+            if (observed != nullptr)
+            {
+                rateAtStart = observed->sampleRate();
+                framesAtStart = observed->bufferFrames();
+            }
+            state_ = BackendState::running;
+            return true;
+        }
+        bool stop(std::string&) override { state_ = BackendState::closed; return true; }
+        void close() noexcept override { state_ = BackendState::closed; }
+        DeviceCapabilities capabilities() const noexcept override { return mono48k(); }
+
+        BackendState state_ = BackendState::closed;
+        const AudioEngine* observed = nullptr;
+        int rateAtStart = -1;
+        int framesAtStart = -1;
+    };
+
+    AudioEngine engine;
+    ObservingBackend backend;
+    backend.observed = &engine;
+
+    std::string error;
+    REQUIRE(engine.activate(backend, request(), error));
+    CHECK(backend.rateAtStart == kRate);
+    CHECK(backend.framesAtStart == kFrames);
+    CHECK(engine.sampleRate() == kRate);
+    CHECK(engine.bufferFrames() == kFrames);
+    engine.deactivate();
+}
+
 TEST_CASE("AudioEngine: a second activate without deactivating is refused", "[audio][engine]")
 {
     AudioEngine engine;
@@ -369,6 +413,11 @@ TEST_CASE("AudioEngine: a backend that cannot start is closed again", "[audio][e
         }
         bool start(std::string& error) override
         {
+            if (observed != nullptr)
+            {
+                rateAtStart = observed->sampleRate();
+                framesAtStart = observed->bufferFrames();
+            }
             error = "device busy";
             state_ = BackendState::faulted;
             return false;
@@ -378,15 +427,25 @@ TEST_CASE("AudioEngine: a backend that cannot start is closed again", "[audio][e
         DeviceCapabilities capabilities() const noexcept override { return mono48k(); }
 
         BackendState state_ = BackendState::closed;
+        const AudioEngine* observed = nullptr;
+        int rateAtStart = -1;
+        int framesAtStart = -1;
     };
 
     AudioEngine engine;
     UnstartableBackend backend;
+    backend.observed = &engine;
     std::string error;
 
     CHECK_FALSE(engine.activate(backend, request(), error));
     CHECK(error == "device busy");
     CHECK(engine.backend() == nullptr);
+    // The geometry is known before start() and visible inside it, but a device
+    // that never started must not keep advertising it afterwards.
+    CHECK(backend.rateAtStart == kRate);
+    CHECK(backend.framesAtStart == kFrames);
+    CHECK(engine.sampleRate() == 0);
+    CHECK(engine.bufferFrames() == 0);
     // The failed start must not leave the device open.
     CHECK(backend.state() == BackendState::closed);
 }
