@@ -7,7 +7,7 @@ repository or are referenced with their official location.
 
 | Component | Version | Licence | How it is used | Where its licence lives |
 |---|---|---|---|---|
-| JUCE | 9.0.3 | AGPLv3 (optionally commercial) | Application framework (`GUI`, `audio devices`, build integration). Vendored. | `third_party/JUCE/LICENSE.md` (also `LICENSES/JUCE-LICENSE.md`); full AGPLv3 text: `LICENSE` |
+| JUCE | 9.0.3 | AGPLv3 (optionally commercial) | Application framework (`GUI`, `audio devices`, `data structures`, `animation`, build integration). Vendored. | `third_party/JUCE/LICENSE.md` (also `LICENSES/JUCE-LICENSE.md`); full AGPLv3 text: `LICENSE` |
 | Steinberg ASIO SDK | 2.3.4 | Steinberg ASIO License **or** GPLv3 (dual); used under GPLv3, consistent with the project's AGPL combination | ASIO host headers/source used by the platform adapter. Vendored. | `third_party/asiosdk/LICENSE.txt` (also `LICENSES/ASIO-SDK-LICENSE.txt`); full GPLv3 text: `LICENSES/GPL-3.0.txt` |
 | nlohmann/json | 3.12.0 | MIT | JSON parsing inside the Config and Network modules. Fetched by CMake at configure time (not vendored). | `LICENSES/nlohmann-json-MIT.txt` (verbatim from the upstream `LICENSE.MIT`) |
 | Catch2 | v3.16.0 | BSL-1.0 | Test framework only; never linked into the shipped application. Fetched by CMake at configure time. | `LICENSES/Catch2-BOOST-SOFTWARE-LICENSE-1.0.txt` (verbatim from the upstream `LICENSE.txt`) |

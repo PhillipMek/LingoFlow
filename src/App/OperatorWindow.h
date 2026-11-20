@@ -100,7 +100,7 @@ private:
     class CardsSurface final : public ui::ScrollablePage::Body
     {
     public:
-        explicit CardsSurface(OperatorContent& owner) : owner_(owner) {}
+        explicit CardsSurface(OperatorContent& owner) : owner_(owner), entrance_(*this) {}
 
         int layout(int width);
         void paintContent(juce::Graphics& g, const juce::Rectangle<int>& area) override;
@@ -110,6 +110,13 @@ private:
 
         // Card rectangles, computed by layout() and consumed by paintContent().
         juce::Rectangle<int> statusCard_, audioCard_, translationCard_, healthCard_;
+        // Section-caption rectangles: the icons are painted with the cards so
+        // they share the cards' entrance fade and never need their own widget.
+        juce::Rectangle<int> statusHeaderRect_, audioHeaderRect_,
+                             translationHeaderRect_, healthHeaderRect_;
+
+        ui::EntranceFade entrance_;   ///< one quiet 180 ms reveal on first layout
+        bool laidOut_ = false;
     };
     // ------------------------------------------------------------ refresh
     void timerCallback() override;
@@ -160,6 +167,13 @@ private:
     juce::Label statusHeader_;
     juce::Label appCaption_, audioCaption_, sessionCaption_, ndiCaption_;
     juce::Label appValue_, audioValue_, sessionValue_, ndiValue_;
+    /// State words cross-fade instead of snapping between green/amber/red.
+    /// Constructed in OperatorContent's initializer list: the apply callback
+    /// writes each interpolated frame into the label's own colour map.
+    ui::ColourFade appValueFade_;
+    ui::ColourFade audioValueFade_;
+    ui::ColourFade sessionValueFade_;
+    ui::ColourFade ndiValueFade_;
     juce::Label detailLabel_;          ///< the actionable warning line (amber/red), empty when healthy
     juce::Label credentialLabel_;
     juce::Label devDetailLabel_;       ///< the plan's full truth, small, only when developer mode is on
@@ -229,6 +243,10 @@ private:
 
     /// The UI redesign's diagnostics surface, same lifetime rule.
     std::unique_ptr<DiagnosticsWindow> diagnosticsWindow_;
+
+    /// Exactly one tooltip window for the application (SharedResourcePointer
+    /// guarantees a single instance even if a dialog declares one too).
+    juce::SharedResourcePointer<juce::TooltipWindow> tooltipWindow_;
 
     bool updatingWidgets_ = false;
     bool gainDragging_ = false;

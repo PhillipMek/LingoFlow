@@ -10,23 +10,10 @@
 namespace liveai {
 namespace {
 
-// The card palette mirrors the operator window: the surfaces match,
-// the density is allowed to be higher here.
-namespace dink {
+namespace colour = ui::colour;
 
-const juce::Colour background  { 0xff1a1d20u };
-const juce::Colour card        { 0xff22262bu };
-const juce::Colour cardBorder  { 0xff2d333au };
-const juce::Colour header      { 0xff8b949eu };
-const juce::Colour caption     { 0xff9aa4afu };
-const juce::Colour value       { 0xffe6edf3u };
-const juce::Colour muted       { ui::kMutedTextColour };
-const juce::Colour green       { 0xff3fb950u };
-const juce::Colour amber       { 0xffd29922u };
-const juce::Colour red         { 0xfff85149u };
-const juce::Colour control     { 0xff30363du };
-
-} // namespace dink
+// The card palette is shared with the operator window through App/Theme.h:
+// the surfaces match, the density is allowed to be higher here.
 
 constexpr int kMargin = 16;
 constexpr int kCardPad = 14;
@@ -71,7 +58,7 @@ juce::Colour valueColour(const std::string& label, const std::string& value)
                               || label == "dropped (buffer full)"
                               || label == "clip samples in / out";
         if (!counting)
-            return dink::value;
+            return colour::textPrimary;
 
         // A dispatch row reads "delivered / dropped": only the second number
         // is an alarm, so that one row's colour checks the tail after the
@@ -84,17 +71,17 @@ juce::Colour valueColour(const std::string& label, const std::string& value)
             if (tail != std::string::npos)
                 watched = value.substr(tail + 1);
         }
-        return watched.find_first_not_of(" 0()") == std::string::npos ? dink::value : dink::amber;
+        return watched.find_first_not_of(" 0()") == std::string::npos ? colour::textPrimary : colour::amber;
     }
 
     if (value == "running" || value == "connected" || value == "publishing")
-        return dink::green;
+        return colour::green;
     if (value == "faulted")
-        return dink::red;
+        return colour::red;
     if (value == "reconnecting" || value == "connecting" || value == "starting"
         || value == "stopping" || value == "opened" || value == "ready")
-        return dink::amber;
-    return dink::muted;   // stopped / closed / disabled / off
+        return colour::amber;
+    return colour::textMuted;   // stopped / closed / disabled / off
 }
 
 int cardHeightFor(const std::vector<std::pair<std::string, std::string>>& rows)
@@ -104,9 +91,9 @@ int cardHeightFor(const std::vector<std::pair<std::string, std::string>>& rows)
 
 void styleQuiet(juce::TextButton& button)
 {
-    button.setColour(juce::TextButton::buttonColourId, dink::control);
-    button.setColour(juce::TextButton::textColourOffId, dink::value);
-    button.setColour(juce::TextButton::textColourOnId, dink::value);
+    button.setColour(juce::TextButton::buttonColourId, colour::control);
+    button.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
+    button.setColour(juce::TextButton::textColourOnId, colour::textPrimary);
 }
 
 } // namespace
@@ -182,15 +169,20 @@ int DiagnosticsContent::preferredHeight(int width) const
 void DiagnosticsContent::drawCard(juce::Graphics& g, const juce::Rectangle<int>& card,
                                   const juce::String& title) const
 {
-    g.setColour(dink::card);
-    g.fillRoundedRectangle(card.toFloat(), 6.0f);
-    g.setColour(dink::cardBorder);
-    g.drawRoundedRectangle(card.toFloat().reduced(0.5f), 6.0f, 1.0f);
+    ui::drawCard(g, card);
+
+    const auto icon = title.startsWith("AUDIO") ? ui::Icon::audio
+                    : title.startsWith("TRANSLATION") ? ui::Icon::translation
+                    : title.startsWith("SUBTITLES") ? ui::Icon::health
+                    : title.startsWith("LATENCY") ? ui::Icon::diagnostics
+                                                  : ui::Icon::status;
+    auto titleArea = card.reduced(kCardPad, 6).withHeight(16);
+    ui::drawIcon(g, icon, titleArea.toFloat().withWidth(16), colour::textMuted);
+    titleArea.removeFromLeft(22);
 
     g.setFont(ui::uiFont(ui::kHintFontSize));
-    g.setColour(dink::header);
-    g.drawText(title, card.reduced(kCardPad, 6).withHeight(16),
-               juce::Justification::left);
+    g.setColour(colour::header);
+    g.drawText(title, titleArea, juce::Justification::left);
 }
 
 void DiagnosticsContent::drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
@@ -208,7 +200,7 @@ void DiagnosticsContent::drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
     for (const auto& [label, value] : rows)
     {
         auto row = area.removeFromTop(kRowH);
-        g.setColour(dink::caption);
+        g.setColour(colour::textSecondary);
         g.drawText(juce::String(label), row.withWidth(row.getWidth() - valueWidth),
                    juce::Justification::left);
         g.setColour(valueColour(label, value));
@@ -221,7 +213,7 @@ void DiagnosticsContent::paintContent(juce::Graphics& g, const juce::Rectangle<i
 {
     // The rectangles were recomputed by the last resized() - paint reads
     // them, never re-derives (the same discipline as before the scroll pass).
-    g.fillAll(dink::background);
+    g.fillAll(colour::background);
 
     drawCard(g, audioCard_, "AUDIO HEALTH");
     drawCard(g, translationCard_, "TRANSLATION HEALTH");
@@ -255,13 +247,13 @@ void DiagnosticsContent::paintContent(juce::Graphics& g, const juce::Rectangle<i
         for (const auto& row : panel_.latency)
         {
             auto r = inner.removeFromTop(kLatencyRowH);   // long values may wrap over two lines
-            g.setColour(dink::caption);
+            g.setColour(colour::textSecondary);
             g.drawFittedText(juce::String(row.component), r.withWidth(210), r.getHeight(),
                        juce::Justification::topLeft, 2);
-            g.setColour(dink::value);
+            g.setColour(colour::textPrimary);
             g.drawFittedText(juce::String(row.value), r.withX(r.getX() + 218).withWidth(r.getWidth() - 218 - 270),
                              r.getHeight(), juce::Justification::topLeft, 2);
-            g.setColour(dink::muted);
+            g.setColour(colour::textMuted);
             g.drawFittedText("[" + juce::String(row.kind) + "]", r.withX(r.getRight() - 262).withWidth(262), r.getHeight(),
                        juce::Justification::topRight, 2);
         }
@@ -273,7 +265,7 @@ void DiagnosticsContent::paintContent(juce::Graphics& g, const juce::Rectangle<i
 
         auto inner = rawCard_.reduced(kCardPad, kHeaderH + 2);
         g.setFont(ui::monoFont(12.0f));
-        g.setColour(dink::value);
+        g.setColour(colour::textPrimary);
 
         // Newest last - and EVERY line is printed. Before the scrolling pass
         // this card drew only the tail that fit and the events above the fold
@@ -357,8 +349,13 @@ DiagnosticsFrame::DiagnosticsFrame(ApplicationController& controller)
     styleQuiet(rawButton_);
     addAndMakeVisible(rawButton_);
 
+    exportButton_.setTooltip("Write a diagnostics report to disk");
+    rawButton_.setTooltip("Show every raw detail line, not only the summary");
+    exportButton_.setExplicitFocusOrder(1);
+    rawButton_.setExplicitFocusOrder(2);
+
     noteLabel_.setFont(ui::uiFont(12.0f));
-    noteLabel_.setColour(juce::Label::textColourId, dink::amber);
+    noteLabel_.setColour(juce::Label::textColourId, colour::amber);
     addAndMakeVisible(noteLabel_);
 }
 
@@ -411,7 +408,7 @@ void DiagnosticsFrame::resized()
 
 DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller, juce::Component& ownerWindow)
     : juce::DocumentWindow("LingoFlow Diagnostics",
-                           dink::background,
+                           colour::background,
                            juce::DocumentWindow::closeButton),
       ownerWindow_(ownerWindow)
 {

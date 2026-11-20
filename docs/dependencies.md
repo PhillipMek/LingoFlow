@@ -17,6 +17,12 @@ No download, no submodule: `add_subdirectory` / include paths point inside the
 tree. `-DLIVEAI_JUCE_PATH=<dir>` can point at another JUCE checkout for
 experiments. Provenance and the exact file subsets: `third_party/README.md`.
 
+The operator application links three JUCE modules: `juce_gui_basics` (widgets),
+`juce_data_structures` (ValueTree state) and `juce_animation` (the short
+decorative fades of the UI design system, `docs/ui-design-system.md`). All
+three ship inside the same vendored JUCE tree under the same AGPLv3 choice, so
+no new dependency or licence text is introduced.
+
 ## 2. Fetched by CMake at configure time (FetchContent, pinned tags)
 
 | Component | Declared in | Version pin | Needed for | Licence |

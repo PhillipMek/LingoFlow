@@ -28,26 +28,13 @@
 namespace liveai {
 namespace {
 
-// ---------------------------------------------------------------- the palette
-// Colour communicates state and nothing else (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§12): surfaces stay
-// neutral, the four state colours appear only on dots, words and the buttons
-// that mean them.
+// The token namespace lives inside liveai::ui; this alias keeps the window's
+// call sites short without a second copy of any colour.
+namespace colour = ui::colour;
 
-namespace ink {
-
-const juce::Colour background    { 0xff1a1d20u };
-const juce::Colour card          { 0xff22262bu };
-const juce::Colour cardBorder    { 0xff2d333au };
-const juce::Colour textPrimary   { 0xffe6edf3u };
-const juce::Colour textSecondary { 0xff9aa4afu };
-const juce::Colour textMuted     { ui::kMutedTextColour };
-const juce::Colour green         { 0xff3fb950u };
-const juce::Colour amber         { 0xffd29922u };
-const juce::Colour red           { 0xfff85149u };
-const juce::Colour blue          { 0xff2f81f7u };
-const juce::Colour control       { 0xff30363du };
-
-} // namespace ink
+// The palette lives in App/Theme.h now (colour:: tokens). Colour still means
+// state and nothing else: surfaces stay neutral, the four state colours appear
+// only on dots, words and the buttons that mean them.
 
 // ------------------------------------------------------------- the spacing grid
 // 4 / 8 / 12 / 16 / 24 / 32 (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§11). Component heights are constants, not
@@ -84,18 +71,10 @@ constexpr int kDeviceCapW  = 210;   ///< "Device (one ASIO in/out)"
 /// Task 4 §1: the three captions joined their controls' rows - 184 became 144.
 constexpr int kColumnH = kControlH + 4 + 18 + kMeterH + 4 + 28 + kRowGap + 30;
 
-juce::Font uiFont(float height = 15.0f, bool bold = false)
-{
-    juce::Font font { juce::FontOptions().withHeight(height) };
-    if (bold)
-        font.setBold(true);
-    return font;
-}
-
 juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent,
-                     juce::Colour colour = ink::textSecondary, float height = 12.0f)
+                     juce::Colour colour = colour::textSecondary, float height = 12.0f)
 {
-    label.setFont(uiFont(height));
+    label.setFont(ui::uiFont(height));
     label.setColour(juce::Label::textColourId, colour);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
@@ -114,12 +93,12 @@ juce::Slider& fader(juce::Slider& slider, double min, double max, double interva
     // column - the live audio value never moves by accident. Drag, click,
     // the fader's own text box and keyboard editing are untouched.
     ui::wheelSafeSlider(slider);
-    slider.setColour(juce::Slider::backgroundColourId, ink::card);
-    slider.setColour(juce::Slider::trackColourId, ink::blue.withAlpha(0.55f));
-    slider.setColour(juce::Slider::thumbColourId, ink::textPrimary);
-    slider.setColour(juce::Slider::textBoxTextColourId, ink::textPrimary);
-    slider.setColour(juce::Slider::textBoxBackgroundColourId, ink::control);
-    slider.setColour(juce::Slider::textBoxOutlineColourId, ink::cardBorder);
+    slider.setColour(juce::Slider::backgroundColourId, colour::card);
+    slider.setColour(juce::Slider::trackColourId, colour::blue.withAlpha(0.55f));
+    slider.setColour(juce::Slider::thumbColourId, colour::textPrimary);
+    slider.setColour(juce::Slider::textBoxTextColourId, colour::textPrimary);
+    slider.setColour(juce::Slider::textBoxBackgroundColourId, colour::control);
+    slider.setColour(juce::Slider::textBoxOutlineColourId, colour::cardBorder);
     parent.addAndMakeVisible(slider);
     return slider;
 }
@@ -128,18 +107,18 @@ juce::Slider& fader(juce::Slider& slider, double min, double max, double interva
 /// colours - a channel selector must never resemble the gain fader below it.
 void styleBox(juce::ComboBox& box)
 {
-    box.setColour(juce::ComboBox::backgroundColourId, ink::control);
-    box.setColour(juce::ComboBox::outlineColourId, ink::cardBorder);
-    box.setColour(juce::ComboBox::textColourId, ink::textPrimary);
-    box.setColour(juce::ComboBox::arrowColourId, ink::textSecondary);
-    box.setColour(juce::ComboBox::focusedOutlineColourId, ink::blue);
+    box.setColour(juce::ComboBox::backgroundColourId, colour::control);
+    box.setColour(juce::ComboBox::outlineColourId, colour::cardBorder);
+    box.setColour(juce::ComboBox::textColourId, colour::textPrimary);
+    box.setColour(juce::ComboBox::arrowColourId, colour::textSecondary);
+    box.setColour(juce::ComboBox::focusedOutlineColourId, colour::blue);
 }
 
 void styleQuietButton(juce::TextButton& button)
 {
-    button.setColour(juce::TextButton::buttonColourId, ink::control);
-    button.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
-    button.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
+    button.setColour(juce::TextButton::buttonColourId, colour::control);
+    button.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
+    button.setColour(juce::TextButton::textColourOnId, colour::textPrimary);
 }
 
 /// How many history lines this screen shows: a tail, not a transcript - the
@@ -177,22 +156,22 @@ void MeterBar::paint(juce::Graphics& g)
 {
     const auto bounds = getLocalBounds().toFloat().reduced(0.5f);
 
-    g.setColour(ink::background);
+    g.setColour(colour::background);
     g.fillRoundedRectangle(bounds, 3.0f);
 
     const float peakX = bounds.getX() + positionForDb(view_.peakDb) * bounds.getWidth();
     const float rmsX = bounds.getX() + positionForDb(view_.rmsDb) * bounds.getWidth();
 
-    g.setColour(ink::blue.withAlpha(0.85f));                          // RMS body
+    g.setColour(colour::blue.withAlpha(0.85f));                          // RMS body
     g.fillRoundedRectangle({ bounds.getX() + 1.0f, bounds.getY() + 1.0f,
                              jmax(0.0f, rmsX - bounds.getX() - 1.0f),
                              bounds.getHeight() - 2.0f }, 2.0f);
 
-    g.setColour(view_.clipping ? ink::red : ink::textPrimary);        // peak line
+    g.setColour(view_.clipping ? colour::red : colour::textPrimary);        // peak line
     g.fillRect(juce::Rectangle<float> (peakX - 1.0f, bounds.getY() + 1.0f, 2.5f,
                                        bounds.getHeight() - 2.0f));
 
-    g.setColour(ink::textMuted);                                      // scale ticks
+    g.setColour(colour::textMuted);                                      // scale ticks
     for (int db = -60; db <= 0; db += 12)
     {
         const float x = bounds.getX() + positionForDb(static_cast<float> (db)) * bounds.getWidth();
@@ -201,13 +180,13 @@ void MeterBar::paint(juce::Graphics& g)
 
     if (view_.clipping)
     {
-        g.setColour(ink::red);                                        // the latched clip lamp
+        g.setColour(colour::red);                                        // the latched clip lamp
         g.fillEllipse(bounds.getRight() - 13.0f, bounds.getCentreY() - 4.0f, 8.0f, 8.0f);
     }
     else if (!view_.signalPresent)
     {
-        g.setFont(uiFont(ui::kHintFontSize));
-        g.setColour(ink::textMuted);
+        g.setFont(ui::uiFont(ui::kHintFontSize));
+        g.setColour(colour::textMuted);
         g.drawFittedText("no signal", getLocalBounds(), juce::Justification::centredRight, 1,
                          static_cast<float> (getWidth()) - 20.0f);
     }
@@ -216,7 +195,15 @@ void MeterBar::paint(juce::Graphics& g)
 // ============================================================================ OperatorContent
 
 OperatorContent::OperatorContent(ApplicationController& controller)
-    : controller_(controller)
+    : controller_(controller),
+      appValueFade_(appValue_, colour::textSecondary,
+                    [this](juce::Colour c) { appValue_.setColour(juce::Label::textColourId, c); }),
+      audioValueFade_(audioValue_, colour::textSecondary,
+                      [this](juce::Colour c) { audioValue_.setColour(juce::Label::textColourId, c); }),
+      sessionValueFade_(sessionValue_, colour::textSecondary,
+                        [this](juce::Colour c) { sessionValue_.setColour(juce::Label::textColourId, c); }),
+      ndiValueFade_(ndiValue_, colour::textSecondary,
+                    [this](juce::Colour c) { ndiValue_.setColour(juce::Label::textColourId, c); })
 {
     // The scrollable card column first (venue task 4 §1): everything that
     // INFORMS lives inside it; the header above and the command bar below are
@@ -230,8 +217,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(*cardsPage_);
 
     // ---------------------------------------------------------------- header
-    titleLabel_.setFont(uiFont(20.0f, true));
-    titleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
+    titleLabel_.setFont(ui::uiFont(20.0f, true));
+    titleLabel_.setColour(juce::Label::textColourId, colour::textPrimary);
     titleLabel_.setText(juce::String(std::format("{} {}",
                                                  JUCE_APPLICATION_NAME_STRING,
                                                  JUCE_APPLICATION_VERSION_STRING)),
@@ -241,10 +228,10 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     // the UI redesign Р В РІР‚в„ўР вЂ™Р’В§4: developer mode is a compact, unmistakable chip - not the red
     // banner that used to make a rehearsal look like an incident. The plan's
     // full sentence stays readable below the status rows (devDetailLabel_).
-    devBadge_.setFont(uiFont(11.0f, true));
-    devBadge_.setColour(juce::Label::textColourId, ink::red);
-    devBadge_.setColour(juce::Label::backgroundColourId, ink::red.withAlpha(0.12f));
-    devBadge_.setColour(juce::Label::outlineColourId, ink::red.withAlpha(0.6f));
+    devBadge_.setFont(ui::uiFont(11.0f, true));
+    devBadge_.setColour(juce::Label::textColourId, colour::red);
+    devBadge_.setColour(juce::Label::backgroundColourId, colour::red.withAlpha(0.12f));
+    devBadge_.setColour(juce::Label::outlineColourId, colour::red.withAlpha(0.6f));
     devBadge_.setJustificationType(juce::Justification::centred);
     devBadge_.setText("DEVELOPER MODE", juce::NotificationType::dontSendNotification);
     devBadge_.setVisible(false);   // empty in production - the chip appears only when real
@@ -255,35 +242,42 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(settingsButton_);
 
     // ---------------------------------------------------------- system status
-    caption(statusHeader_, "SYSTEM STATUS", *cards_, ink::textMuted, ui::kHintFontSize);
+    caption(statusHeader_, "SYSTEM STATUS", *cards_, colour::textMuted, ui::kHintFontSize);
+    caption(audioHeader_, "AUDIO", *cards_, colour::textMuted, ui::kHintFontSize);
+    caption(translationHeader_, "TRANSLATION", *cards_, colour::textMuted, ui::kHintFontSize);
+    caption(healthHeader_, "LIVE HEALTH", *cards_, colour::textMuted, ui::kHintFontSize);
 
-    caption(appCaption_, "App", *cards_, ink::textSecondary, 14.0f);
-    caption(audioCaption_, "Audio", *cards_, ink::textSecondary, 14.0f);
-    caption(sessionCaption_, "Translation", *cards_, ink::textSecondary, 14.0f);
-    caption(ndiCaption_, "NDI", *cards_, ink::textSecondary, 14.0f);
+    // Each section caption reserves a 22 px left gutter; the matching vector
+    // icon is painted in that gutter by CardsSurface (same fade as the card).
+    for (auto* header : { &statusHeader_, &audioHeader_,
+                          &translationHeader_, &healthHeader_ })
+        header->setBorderSize(juce::BorderSize<int>(0, 22, 0, 0));
+
+    caption(appCaption_, "App", *cards_, colour::textSecondary, 14.0f);
+    caption(audioCaption_, "Audio", *cards_, colour::textSecondary, 14.0f);
+    caption(sessionCaption_, "Translation", *cards_, colour::textSecondary, 14.0f);
+    caption(ndiCaption_, "NDI", *cards_, colour::textSecondary, 14.0f);
 
     for (auto* chip : { &appValue_, &audioValue_, &sessionValue_, &ndiValue_ })
     {
-        chip->setFont(uiFont(14.0f));
+        chip->setFont(ui::uiFont(14.0f));
         cards_->addAndMakeVisible(*chip);
     }
 
-    detailLabel_.setFont(uiFont(13.0f));
-    detailLabel_.setColour(juce::Label::textColourId, ink::amber);
+    detailLabel_.setFont(ui::uiFont(13.0f));
+    detailLabel_.setColour(juce::Label::textColourId, colour::amber);
     cards_->addAndMakeVisible(detailLabel_);
 
-    credentialLabel_.setFont(uiFont(12.0f));
-    credentialLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    credentialLabel_.setFont(ui::uiFont(12.0f));
+    credentialLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     cards_->addAndMakeVisible(credentialLabel_);
 
-    devDetailLabel_.setFont(uiFont(ui::kHintFontSize));
-    devDetailLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    devDetailLabel_.setFont(ui::uiFont(ui::kHintFontSize));
+    devDetailLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     devDetailLabel_.setVisible(false);
     cards_->addAndMakeVisible(devDetailLabel_);
 
     // ------------------------------------------------------------------ audio
-    caption(audioHeader_, "AUDIO", *cards_, ink::textMuted, ui::kHintFontSize);
-
     caption(deviceCaption_, "Device (one ASIO in/out)", *cards_);
     deviceChoice_.onChange = [this] { deviceSelected(); };
     styleBox(deviceChoice_);
@@ -293,8 +287,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     styleQuietButton(refreshDevicesButton_);
     cards_->addAndMakeVisible(refreshDevicesButton_);
 
-    deviceNoteLabel_.setFont(uiFont(ui::kHintFontSize));
-    deviceNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    deviceNoteLabel_.setFont(ui::uiFont(ui::kHintFontSize));
+    deviceNoteLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     cards_->addAndMakeVisible(deviceNoteLabel_);
 
     caption(inputChannelCaption_, "Input channel", *cards_);
@@ -307,8 +301,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     styleBox(outputChannelChoice_);
     cards_->addAndMakeVisible(outputChannelChoice_);
 
-    channelNoteLabel_.setFont(uiFont(ui::kHintFontSize));
-    channelNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    channelNoteLabel_.setFont(ui::uiFont(ui::kHintFontSize));
+    channelNoteLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     cards_->addAndMakeVisible(channelNoteLabel_);
 
     caption(inputMeterCaption_, "Input level", *cards_);
@@ -316,8 +310,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     // The numeric readout rides the caption's row now (task 4 §1): one line
     // "Input level      -24.3 dB   peak -12.0 dB" above the bar. Right-aligned
     // so the digits form a column against the bar's right edge.
-    inputLevelLabel_.setFont(uiFont(12.0f));
-    inputLevelLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    inputLevelLabel_.setFont(ui::uiFont(12.0f));
+    inputLevelLabel_.setColour(juce::Label::textColourId, colour::textSecondary);
     inputLevelLabel_.setJustificationType(juce::Justification::centredRight);
     cards_->addAndMakeVisible(inputLevelLabel_);
 
@@ -339,8 +333,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
 
     caption(outputMeterCaption_, "Output level", *cards_);
     cards_->addAndMakeVisible(outputMeter_);
-    outputLevelLabel_.setFont(uiFont(12.0f));
-    outputLevelLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    outputLevelLabel_.setFont(ui::uiFont(12.0f));
+    outputLevelLabel_.setColour(juce::Label::textColourId, colour::textSecondary);
     outputLevelLabel_.setJustificationType(juce::Justification::centredRight);
     cards_->addAndMakeVisible(outputLevelLabel_);
 
@@ -360,8 +354,6 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     cards_->addAndMakeVisible(outputMuteButton_);
 
     // ------------------------------------------------------------ translation
-    caption(translationHeader_, "TRANSLATION", *cards_, ink::textMuted, ui::kHintFontSize);
-
     // The pair as the wire knows it (docs section 5, R8): the target is the
     // operator's choice, the source is what the provider decides by itself.
     // The old "From [combo] -> To [combo]" implied a declaration that never
@@ -374,40 +366,38 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     cards_->addAndMakeVisible(targetChoice_);
 
     caption(sourceCaption_, "Source", *cards_);
-    sourceValueLabel_.setFont(uiFont(14.0f));
-    sourceValueLabel_.setColour(juce::Label::textColourId, ink::textSecondary);
+    sourceValueLabel_.setFont(ui::uiFont(14.0f));
+    sourceValueLabel_.setColour(juce::Label::textColourId, colour::textSecondary);
     sourceValueLabel_.setJustificationType(juce::Justification::centredLeft);
     cards_->addAndMakeVisible(sourceValueLabel_);
 
-    sessionLineLabel_.setFont(uiFont(13.0f));
+    sessionLineLabel_.setFont(ui::uiFont(13.0f));
     cards_->addAndMakeVisible(sessionLineLabel_);
 
-    pairWarningLabel_.setFont(uiFont(12.0f));
-    pairWarningLabel_.setColour(juce::Label::textColourId, ink::red);
+    pairWarningLabel_.setFont(ui::uiFont(12.0f));
+    pairWarningLabel_.setColour(juce::Label::textColourId, colour::red);
     cards_->addAndMakeVisible(pairWarningLabel_);
 
-    currentSubtitleLabel_.setFont(uiFont(18.0f));
-    currentSubtitleLabel_.setColour(juce::Label::textColourId, ink::textPrimary);
+    currentSubtitleLabel_.setFont(ui::uiFont(18.0f));
+    currentSubtitleLabel_.setColour(juce::Label::textColourId, colour::textPrimary);
     currentSubtitleLabel_.setJustificationType(juce::Justification::centredLeft);
     cards_->addAndMakeVisible(currentSubtitleLabel_);
 
-    historyLabel_.setFont(uiFont(12.0f));
-    historyLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    historyLabel_.setFont(ui::uiFont(12.0f));
+    historyLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     historyLabel_.setJustificationType(juce::Justification::topLeft);
     cards_->addAndMakeVisible(historyLabel_);
 
     // ------------------------------------------------------------ live health
-    caption(healthHeader_, "HEALTH", *cards_, ink::textMuted, ui::kHintFontSize);
-
-    caption(latencyCaption_, "Latency", *cards_, ink::textSecondary, 13.0f);
-    caption(jitterCaption_, "Jitter fill", *cards_, ink::textSecondary, 13.0f);
-    caption(underrunCaption_, "Underruns", *cards_, ink::textSecondary, 13.0f);
-    caption(reconnectCaption_, "Reconnects", *cards_, ink::textSecondary, 13.0f);
+    caption(latencyCaption_, "Latency", *cards_, colour::textSecondary, 13.0f);
+    caption(jitterCaption_, "Jitter fill", *cards_, colour::textSecondary, 13.0f);
+    caption(underrunCaption_, "Underruns", *cards_, colour::textSecondary, 13.0f);
+    caption(reconnectCaption_, "Reconnects", *cards_, colour::textSecondary, 13.0f);
 
     for (auto* value : { &latencyValue_, &jitterValue_, &underrunValue_, &reconnectValue_ })
     {
-        value->setFont(uiFont(13.0f));
-        value->setColour(juce::Label::textColourId, ink::textSecondary);
+        value->setFont(ui::uiFont(13.0f));
+        value->setColour(juce::Label::textColourId, colour::textSecondary);
         cards_->addAndMakeVisible(*value);
     }
 
@@ -415,8 +405,8 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     styleQuietButton(diagnosticsButton_);
     cards_->addAndMakeVisible(diagnosticsButton_);
 
-    noteLabel_.setFont(uiFont(12.0f));
-    noteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
+    noteLabel_.setFont(ui::uiFont(12.0f));
+    noteLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     addAndMakeVisible(noteLabel_);
 
     // ------------------------------------------------------------ command bar
@@ -425,12 +415,35 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     // action, not an error. Retry (faulted) borrows amber - it asks attention.
     startButton_.onClick = [this] { startPressed(); };
     stopButton_.onClick = [this] { stopPressed(); };
-    startButton_.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
-    startButton_.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
-    stopButton_.setColour(juce::TextButton::textColourOffId, ink::textPrimary);
-    stopButton_.setColour(juce::TextButton::textColourOnId, ink::textPrimary);
+    startButton_.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
+    startButton_.setColour(juce::TextButton::textColourOnId, colour::textPrimary);
+    stopButton_.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
+    stopButton_.setColour(juce::TextButton::textColourOnId, colour::textPrimary);
     addAndMakeVisible(startButton_);
     addAndMakeVisible(stopButton_);
+
+    // Accessibility / operator UX: a deterministic Tab order through the
+    // controls that run the show, plus plain-language tooltips for the short
+    // labels. The single tooltip window is owned by tooltipWindow_ above.
+    settingsButton_.setTooltip("Open settings (device, languages, subtitles, credentials)");
+    refreshDevicesButton_.setTooltip("Re-scan ASIO devices");
+    diagnosticsButton_.setTooltip("Open the engineering diagnostics view");
+    inputMuteButton_.setTooltip("Mute the input side of the audio path");
+    outputMuteButton_.setTooltip("Mute the output side of the audio path");
+    startButton_.setTooltip("Start the live translation session");
+    stopButton_.setTooltip("Stop the session and release the audio device");
+
+    settingsButton_.setExplicitFocusOrder(1);
+    deviceChoice_.setExplicitFocusOrder(2);
+    refreshDevicesButton_.setExplicitFocusOrder(3);
+    inputChannelChoice_.setExplicitFocusOrder(4);
+    outputChannelChoice_.setExplicitFocusOrder(5);
+    inputGainSlider_.setExplicitFocusOrder(6);
+    outputGainSlider_.setExplicitFocusOrder(7);
+    targetChoice_.setExplicitFocusOrder(8);
+    diagnosticsButton_.setExplicitFocusOrder(9);
+    startButton_.setExplicitFocusOrder(10);
+    stopButton_.setExplicitFocusOrder(11);
 
     controller_.refreshDevices();   // the first list the window can honestly show
     rebuild();
@@ -613,13 +626,13 @@ juce::Colour OperatorContent::stateColour(std::string_view state) noexcept
     // The words come from the modules' own nameOf(); mapping them to meaning is
     // cosmetic - the tested contract is the word (UiModel tests assert it).
     if (state == "running" || state == "connected" || state == "publishing")
-        return ink::green;        // the show is working
+        return colour::green;        // the show is working
     if (state == "starting" || state == "stopping" || state == "opened"
         || state == "connecting" || state == "reconnecting" || state == "ready")
-        return ink::amber;        // on its way, not there yet
+        return colour::amber;        // on its way, not there yet
     if (state == "faulted")
-        return ink::red;          // operator, look here
-    return ink::textMuted;        // stopped / off / disabled
+        return colour::red;          // operator, look here
+    return colour::textMuted;        // stopped / off / disabled
 }
 
 juce::String OperatorContent::stateGlyph(std::string_view state) noexcept
@@ -666,10 +679,13 @@ void OperatorContent::rebuild()
                           juce::NotificationType::dontSendNotification);
     ndiValue_.setText(stateGlyph(panel.ndiState) + juce::String(panel.ndiState),
                       juce::NotificationType::dontSendNotification);
-    appValue_.setColour(juce::Label::textColourId, stateColour(panel.applicationState));
-    audioValue_.setColour(juce::Label::textColourId, stateColour(panel.audioState));
-    sessionValue_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
-    ndiValue_.setColour(juce::Label::textColourId, stateColour(panel.ndiState));
+    // A state change eases into its new colour over 120 ms; the first frame of
+    // each fade is applied immediately by setTarget's start callback, so a
+    // label is never briefly wrong.
+    appValueFade_.setTarget(stateColour(panel.applicationState));
+    audioValueFade_.setTarget(stateColour(panel.audioState));
+    sessionValueFade_.setTarget(stateColour(panel.sessionState));
+    ndiValueFade_.setTarget(stateColour(panel.ndiState));
 
     // Warnings only when they ask something (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§9): "ok" paints nothing.
     const juce::String detailText = panel.detail == "ok"
@@ -677,7 +693,7 @@ void OperatorContent::rebuild()
                                         : juce::String(panel.detail);
     detailLabel_.setText(detailText, juce::NotificationType::dontSendNotification);
     detailLabel_.setColour(juce::Label::textColourId,
-                           panel.faulted ? ink::red : ink::amber);
+                           panel.faulted ? colour::red : colour::amber);
     // Task 4 §1: an empty line reserves no row - the card shrinks to what it
     // actually says (visibility is read by CardsSurface::layout, which runs at
     // the end of this function through resized()).
@@ -690,8 +706,8 @@ void OperatorContent::rebuild()
                              juce::NotificationType::dontSendNotification);
     credentialLabel_.setColour(juce::Label::textColourId,
                                panel.credentialLine.rfind("API key: stored", 0) == 0
-                                   ? ink::textMuted
-                                   : ink::amber);
+                                   ? colour::textMuted
+                                   : colour::amber);
 
     // Design note: the UI redesign Р В РІР‚в„ўР вЂ™Р’В§4: the chip is the compact, unmistakable flag; the
     // plan's full sentence rides below the rows, muted. Production: empty,
@@ -706,10 +722,10 @@ void OperatorContent::rebuild()
     startButton_.setEnabled(panel.canStart || panel.faulted);
     startButton_.setButtonText(panel.faulted ? "Retry" : "Start");
     startButton_.setColour(juce::TextButton::buttonColourId,
-                           (panel.faulted ? ink::amber : ink::green).withAlpha(0.28f));
+                           (panel.faulted ? colour::amber : colour::green).withAlpha(0.28f));
     stopButton_.setEnabled(panel.canStop);
     stopButton_.setColour(juce::TextButton::buttonColourId,
-                          panel.canStop ? ink::blue.withAlpha(0.25f) : ink::control);
+                          panel.canStop ? colour::blue.withAlpha(0.25f) : colour::control);
 
     // ------------------------------------------------------------------- audio
     syncOptions(deviceChoice_, deviceCache_, panel.devices, panel.selectedDevice);
@@ -755,9 +771,9 @@ void OperatorContent::rebuild()
     outputMuteButton_.setToggleState(panel.outputMuted,
                                      juce::NotificationType::dontSendNotification);
     inputMuteButton_.setColour(juce::TextButton::buttonColourId,
-                               panel.inputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
+                               panel.inputMuted ? colour::amber.withAlpha(0.30f) : colour::control);
     outputMuteButton_.setColour(juce::TextButton::buttonColourId,
-                                panel.outputMuted ? ink::amber.withAlpha(0.30f) : ink::control);
+                                panel.outputMuted ? colour::amber.withAlpha(0.30f) : colour::control);
 
     // ---- meter display (venue task 3 §3). The raw measurement is the engine's
     // fact; the smoothing is this view's own, here in the message thread - never
@@ -811,13 +827,13 @@ void OperatorContent::rebuild()
                                                       panel.inputMeter.peakDb)),
                              juce::NotificationType::dontSendNotification);
     inputLevelLabel_.setColour(juce::Label::textColourId,
-                               panel.inputMeter.clipping ? ink::red : ink::textSecondary);
+                               panel.inputMeter.clipping ? colour::red : colour::textSecondary);
     outputLevelLabel_.setText(juce::String(std::format("{:.1f} dB   peak {:.1f} dB",
                                                        panel.outputMeter.rmsDb,
                                                        panel.outputMeter.peakDb)),
                               juce::NotificationType::dontSendNotification);
     outputLevelLabel_.setColour(juce::Label::textColourId,
-                                panel.outputMeter.clipping ? ink::red : ink::textSecondary);
+                                panel.outputMeter.clipping ? colour::red : colour::textSecondary);
 
     // -------------------------------------------------------------- translation
     sessionLineLabel_.setText(stateGlyph(panel.sessionState) + juce::String(panel.sessionState),
@@ -834,7 +850,7 @@ void OperatorContent::rebuild()
                                   juce::NotificationType::dontSendNotification);
 
     currentSubtitleLabel_.setColour(juce::Label::textColourId,
-                                    noSubtitle ? ink::textMuted : ink::textPrimary);
+                                    noSubtitle ? colour::textMuted : colour::textPrimary);
 
     std::string history;
     const std::size_t total = panel.subtitleHistory.size();
@@ -860,17 +876,17 @@ void OperatorContent::rebuild()
         reconnectValue_.setText(juce::String(panel.health[3].second),
                                 juce::NotificationType::dontSendNotification);
         underrunValue_.setColour(juce::Label::textColourId,
-                                 panel.health[2].second == "0" ? ink::textSecondary : ink::amber);
+                                 panel.health[2].second == "0" ? colour::textSecondary : colour::amber);
         reconnectValue_.setColour(juce::Label::textColourId,
-                                  panel.health[3].second == "0" ? ink::textSecondary : ink::amber);
+                                  panel.health[3].second == "0" ? colour::textSecondary : colour::amber);
     }
 
     noteLabel_.setText(juce::String(panel.actionNote),
                        juce::NotificationType::dontSendNotification);
     noteLabel_.setColour(juce::Label::textColourId,
                          panel.actionNote.rfind("settings refused", 0) == 0
-                             ? ink::red
-                             : ink::textMuted);
+                             ? colour::red
+                             : colour::textMuted);
 
     updatingWidgets_ = false;
     resized();   // the developer row and the detail lines change the height mid-run
@@ -885,7 +901,7 @@ void OperatorContent::paint(juce::Graphics& g)
     // The pinned frame: header above, command bar below. The card column paints
     // itself inside its own surface (CardsSurface::paintContent) - the two
     // halves share the house background, so the split is invisible.
-    g.fillAll(ink::background);
+    g.fillAll(colour::background);
 }
 
 // ---------------------------------------------------------------------------- layout
@@ -943,6 +959,12 @@ int OperatorContent::CardsSurface::layout(int width)
     auto bounds = juce::Rectangle<int>(0, 0, width, kMeasureHeight).reduced(kMargin);
     const bool stacked = bounds.getWidth() < 760;   // narrow: the audio pair stacks
 
+    if (!laidOut_)
+    {
+        laidOut_ = true;
+        entrance_.play();   // one quiet reveal, not one per resize
+    }
+
     // 1. SYSTEM STATUS card: the four states as a 2x2 grid (task 4 §1 - four
     // stacked rows were 96 px of mostly-quiet labels). The lines that ask
     // attention reserve their rows only while they carry text.
@@ -956,6 +978,7 @@ int OperatorContent::CardsSurface::layout(int width)
 
         auto inner = statusCard_.reduced(kCardPad);
         owner_.statusHeader_.setBounds(inner.removeFromTop(16));
+        statusHeaderRect_ = owner_.statusHeader_.getBounds();
         inner.removeFromTop(6);
 
         auto row1 = inner.removeFromTop(kStatusRowH);
@@ -990,6 +1013,7 @@ int OperatorContent::CardsSurface::layout(int width)
 
         auto inner = audioCard_.reduced(kCardPad);
         owner_.audioHeader_.setBounds(inner.removeFromTop(16));
+        audioHeaderRect_ = owner_.audioHeader_.getBounds();
         inner.removeFromTop(kRowGap);
         {
             auto row = inner.removeFromTop(kControlH);
@@ -1054,6 +1078,7 @@ int OperatorContent::CardsSurface::layout(int width)
 
         auto inner = translationCard_.reduced(kCardPad);
         owner_.translationHeader_.setBounds(inner.removeFromTop(16));
+        translationHeaderRect_ = owner_.translationHeader_.getBounds();
         inner.removeFromTop(kRowGap);
 
         auto pairRow = inner.removeFromTop(kControlH);
@@ -1082,6 +1107,7 @@ int OperatorContent::CardsSurface::layout(int width)
             auto headerRow = inner.removeFromTop(kSmallBtnH);
             owner_.diagnosticsButton_.setBounds(headerRow.removeFromRight(140));
             owner_.healthHeader_.setBounds(headerRow.reduced(0, 8));
+            healthHeaderRect_ = owner_.healthHeader_.getBounds();
         }
         inner.removeFromTop(6);
 
@@ -1105,15 +1131,19 @@ int OperatorContent::CardsSurface::layout(int width)
 
 void OperatorContent::CardsSurface::paintContent(juce::Graphics& g, const juce::Rectangle<int>&)
 {
-    g.fillAll(ink::background);
+    g.fillAll(colour::background);
 
+    const float alpha = entrance_.value();
     for (const auto& card : { statusCard_, audioCard_, translationCard_, healthCard_ })
-    {
-        g.setColour(ink::card);
-        g.fillRoundedRectangle(card.toFloat(), 6.0f);
-        g.setColour(ink::cardBorder);
-        g.drawRoundedRectangle(card.toFloat().reduced(0.5f), 6.0f, 1.0f);
-    }
+        ui::drawCard(g, card, alpha);
+
+    // The four section glyphs live in the captions' 22 px gutters. Drawn with
+    // the cards, they share the same reveal and never become separate widgets.
+    const juce::Colour tint = colour::textMuted.withAlpha(jmax(0.25f, alpha));
+    ui::drawIcon(g, ui::Icon::status, statusHeaderRect_.toFloat().withWidth(16), tint);
+    ui::drawIcon(g, ui::Icon::audio, audioHeaderRect_.toFloat().withWidth(16), tint);
+    ui::drawIcon(g, ui::Icon::translation, translationHeaderRect_.toFloat().withWidth(16), tint);
+    ui::drawIcon(g, ui::Icon::health, healthHeaderRect_.toFloat().withWidth(16), tint);
 }
 
 void OperatorContent::resized()
@@ -1209,7 +1239,7 @@ bool frameInSpecialState(const juce::Component& window)
 
 OperatorWindow::OperatorWindow(ApplicationController& controller)
     : juce::DocumentWindow(JUCE_APPLICATION_NAME_STRING,
-                           ink::background,
+                           colour::background,
                            juce::DocumentWindow::closeButton)
 {
     setUsingNativeTitleBar(true);

@@ -12,21 +12,10 @@
 namespace liveai {
 namespace {
 
-// The dialog palette matches the operator window (the UI redesign Р’В§12): state carries
-// colour, everything else stays neutral.
-namespace sink {
+namespace colour = ui::colour;
 
-const juce::Colour textPrimary   { 0xffe6edf3u };
-const juce::Colour textSecondary { 0xff9aa4afu };
-const juce::Colour textMuted     { ui::kMutedTextColour };
-const juce::Colour green         { 0xff3fb950u };
-const juce::Colour amber         { 0xffd29922u };
-const juce::Colour red           { 0xfff85149u };
-const juce::Colour control       { 0xff30363du };
-const juce::Colour cardBorder    { 0xff2d333au };
-const juce::Colour blue          { 0xff2f81f7u };
-
-} // namespace sink
+// The palette is shared with the other windows through App/Theme.h. State
+// carries colour, everything else stays neutral - one vocabulary, one place.
 
 constexpr int kPad = 16;
 constexpr int kRowGap = 12;
@@ -50,7 +39,7 @@ constexpr int kPreviewH = 240;
 juce::Label& caption(juce::Label& label, const juce::String& text, juce::Component& parent)
 {
     label.setFont(ui::uiFont(12.0f));
-    label.setColour(juce::Label::textColourId, sink::textSecondary);
+    label.setColour(juce::Label::textColourId, colour::textSecondary);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
     return label;
@@ -59,7 +48,7 @@ juce::Label& caption(juce::Label& label, const juce::String& text, juce::Compone
 juce::Label& hint(juce::Label& label, const juce::String& text, juce::Component& parent)
 {
     label.setFont(ui::uiFont(ui::kHintFontSize));
-    label.setColour(juce::Label::textColourId, sink::textMuted);
+    label.setColour(juce::Label::textColourId, colour::textMuted);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
     return label;
@@ -71,8 +60,8 @@ juce::Slider& slider(juce::Slider& s, double min, double max, double interval,
     s.setRange(min, max, interval);
     s.setSliderStyle(juce::Slider::LinearHorizontal);
     s.setTextBoxStyle(juce::Slider::TextBoxLeft, false, 84, 24);
-    s.setColour(juce::Slider::trackColourId, sink::blue.withAlpha(0.55f));
-    s.setColour(juce::Slider::thumbColourId, sink::textPrimary);
+    s.setColour(juce::Slider::trackColourId, colour::blue.withAlpha(0.55f));
+    s.setColour(juce::Slider::thumbColourId, colour::textPrimary);
     // The application-wide rule (venue task 4 §2, ui::wheelSafeSlider): the
     // wheel scrolls the page, it never changes a value - here it would also
     // fight the tab's own scrolling viewport, which is exactly the accidental
@@ -85,27 +74,27 @@ juce::Slider& slider(juce::Slider& s, double min, double max, double interval,
 
 void styleBox(juce::ComboBox& box, juce::Component& parent)
 {
-    box.setColour(juce::ComboBox::backgroundColourId, sink::control);
-    box.setColour(juce::ComboBox::outlineColourId, sink::cardBorder);
-    box.setColour(juce::ComboBox::textColourId, sink::textPrimary);
-    box.setColour(juce::ComboBox::arrowColourId, sink::textSecondary);
-    box.setColour(juce::ComboBox::focusedOutlineColourId, sink::blue);
+    box.setColour(juce::ComboBox::backgroundColourId, colour::control);
+    box.setColour(juce::ComboBox::outlineColourId, colour::cardBorder);
+    box.setColour(juce::ComboBox::textColourId, colour::textPrimary);
+    box.setColour(juce::ComboBox::arrowColourId, colour::textSecondary);
+    box.setColour(juce::ComboBox::focusedOutlineColourId, colour::blue);
     parent.addAndMakeVisible(box);
 }
 
 void styleButton(juce::TextButton& button, juce::Component& parent)
 {
-    button.setColour(juce::TextButton::buttonColourId, sink::control);
-    button.setColour(juce::TextButton::textColourOffId, sink::textPrimary);
-    button.setColour(juce::TextButton::textColourOnId, sink::textPrimary);
+    button.setColour(juce::TextButton::buttonColourId, colour::control);
+    button.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
+    button.setColour(juce::TextButton::textColourOnId, colour::textPrimary);
     parent.addAndMakeVisible(button);
 }
 
 juce::ToggleButton& toggle(juce::ToggleButton& t, juce::Component& parent)
 {
     t.setClickingTogglesState(true);
-    t.setColour(juce::ToggleButton::textColourId, sink::textPrimary);
-    t.setColour(juce::ToggleButton::tickColourId, sink::green);
+    t.setColour(juce::ToggleButton::textColourId, colour::textPrimary);
+    t.setColour(juce::ToggleButton::tickColourId, colour::green);
     parent.addAndMakeVisible(t);
     return t;
 }
@@ -265,7 +254,7 @@ public:
 
         if (!note_.empty())
         {
-            g.setColour(sink::amber);
+            g.setColour(colour::amber);
             g.setFont(ui::uiFont(ui::kHintFontSize));
             g.drawText(juce::String(note_), bounds.reduced(6), juce::Justification::topLeft);
         }
@@ -307,12 +296,12 @@ SettingsContent::SettingsContent(ApplicationController& controller)
 {
     tabs_ = std::make_unique<juce::TabbedComponent>(juce::TabbedButtonBar::TabsAtTop);
     tabs_->setTabBarDepth(30);
-    tabs_->setColour(juce::TabbedButtonBar::tabTextColourId, sink::textSecondary);
-    tabs_->setColour(juce::TabbedButtonBar::frontTextColourId, sink::textPrimary);
-    tabs_->setColour(juce::TabbedButtonBar::tabOutlineColourId, sink::cardBorder);
+    tabs_->setColour(juce::TabbedButtonBar::tabTextColourId, colour::textSecondary);
+    tabs_->setColour(juce::TabbedButtonBar::frontTextColourId, colour::textPrimary);
+    tabs_->setColour(juce::TabbedButtonBar::tabOutlineColourId, colour::cardBorder);
     // The front tab gets the house accent outline; the inactive ones keep the
     // quiet border. Bold text alone was too subtle to see while switching.
-    tabs_->setColour(juce::TabbedButtonBar::frontOutlineColourId, sink::blue);
+    tabs_->setColour(juce::TabbedButtonBar::frontOutlineColourId, colour::blue);
     addAndMakeVisible(*tabs_);
 
     // ------------------------------------------------------------------ audio
@@ -403,7 +392,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
          "by LingoFlow for validation and diagnostics only.",
          translationBody);
     pairWarningLabel_.setFont(ui::uiFont(12.0f));
-    pairWarningLabel_.setColour(juce::Label::textColourId, sink::red);
+    pairWarningLabel_.setColour(juce::Label::textColourId, colour::red);
     translationBody.addAndMakeVisible(pairWarningLabel_);
     caption(modelHintCaption_, "Model hint (empty = backend default)", translationBody);
     translationBody.addAndMakeVisible(modelHintEditor_);
@@ -529,7 +518,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
         [this](int width) { return layoutCredentialsPage(width); });
     auto& credentialsBody = credentialsPage_->body();
     credStatusLabel_.setFont(ui::uiFont(14.0f));
-    credStatusLabel_.setColour(juce::Label::textColourId, sink::textPrimary);
+    credStatusLabel_.setColour(juce::Label::textColourId, colour::textPrimary);
     credentialsBody.addAndMakeVisible(credStatusLabel_);
     apiKeyEditor_.setPasswordCharacter(L'*');   // the field masks its echo (PASS criterion)
     credentialsBody.addAndMakeVisible(apiKeyEditor_);
@@ -549,9 +538,9 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     auto& diagnosticsBody = diagnosticsPage_->body();
     caption(logLevelCaption_, "Log level", diagnosticsBody);
     diagnosticsBody.addAndMakeVisible(logLevelChoice_);   // part of the draft: Apply commits it
-    logLevelChoice_.setColour(juce::ComboBox::backgroundColourId, sink::control);
-    logLevelChoice_.setColour(juce::ComboBox::outlineColourId, sink::cardBorder);
-    logLevelChoice_.setColour(juce::ComboBox::textColourId, sink::textPrimary);
+    logLevelChoice_.setColour(juce::ComboBox::backgroundColourId, colour::control);
+    logLevelChoice_.setColour(juce::ComboBox::outlineColourId, colour::cardBorder);
+    logLevelChoice_.setColour(juce::ComboBox::textColourId, colour::textPrimary);
     toggle(logFileToggle_, diagnosticsBody);
     hint(logHintLabel_,
          "The log file and recovery-policy edits take effect when the application "
@@ -579,9 +568,9 @@ SettingsContent::SettingsContent(ApplicationController& controller)
          advancedBody);
     toggle(developerToggle_, advancedBody);
     caption(devSourceCaption_, "Audio source (no SoundGrid needed for wav/tone)", advancedBody);
-    devSourceChoice_.setColour(juce::ComboBox::backgroundColourId, sink::control);
-    devSourceChoice_.setColour(juce::ComboBox::outlineColourId, sink::cardBorder);
-    devSourceChoice_.setColour(juce::ComboBox::textColourId, sink::textPrimary);
+    devSourceChoice_.setColour(juce::ComboBox::backgroundColourId, colour::control);
+    devSourceChoice_.setColour(juce::ComboBox::outlineColourId, colour::cardBorder);
+    devSourceChoice_.setColour(juce::ComboBox::textColourId, colour::textPrimary);
     advancedBody.addAndMakeVisible(devSourceChoice_);
     caption(devWavInCaption_, "WAV input file (its rate must equal the sample-rate setting)", advancedBody);
     advancedBody.addAndMakeVisible(devWavInEditor_);
@@ -607,19 +596,32 @@ SettingsContent::SettingsContent(ApplicationController& controller)
 
     // --------------------------------------------------------------- bottom bar
     applyButton_.onClick = [this] { applyPressed(); };
-    applyButton_.setColour(juce::TextButton::buttonColourId, sink::green.withAlpha(0.25f));
-    applyButton_.setColour(juce::TextButton::textColourOffId, sink::textPrimary);
+    applyButton_.setColour(juce::TextButton::buttonColourId, colour::green.withAlpha(0.25f));
+    applyButton_.setColour(juce::TextButton::textColourOffId, colour::textPrimary);
     addAndMakeVisible(applyButton_);
     noteLabel_.setFont(ui::uiFont(12.0f));
-    noteLabel_.setColour(juce::Label::textColourId, sink::amber);
+    noteLabel_.setColour(juce::Label::textColourId, colour::amber);
     addAndMakeVisible(noteLabel_);
 
-    tabs_->addTab("Audio", juce::Colour(0xff1a1d20u), audioPage_, true);
-    tabs_->addTab("Translation", juce::Colour(0xff1a1d20u), translationPage_, true);
-    tabs_->addTab("Subtitles / NDI", juce::Colour(0xff1a1d20u), subtitlesPage_, true);
-    tabs_->addTab("Credentials", juce::Colour(0xff1a1d20u), credentialsPage_, true);
-    tabs_->addTab("Diagnostics", juce::Colour(0xff1a1d20u), diagnosticsPage_, true);
-    tabs_->addTab("Advanced", juce::Colour(0xff1a1d20u), advancedPage_, true);
+    // Plain-language tips for the actions whose short labels hide a real
+    // consequence (a credential store write, an NDI broadcast, an NDI test).
+    saveKeyButton_.setTooltip("Store the API key in Windows Credential Manager; the field clears on success");
+    removeKeyButton_.setTooltip("Remove the stored API key from Windows Credential Manager");
+    ndiTestButton_.setTooltip("Broadcast one caption through the real NDI transport");
+    exportDiagnosticsButton_.setTooltip("Write a diagnostics report to disk");
+    applyButton_.setTooltip("Validate and apply every edited setting at once");
+    applyButton_.setExplicitFocusOrder(1);
+    saveKeyButton_.setExplicitFocusOrder(2);
+    removeKeyButton_.setExplicitFocusOrder(3);
+    exportDiagnosticsButton_.setExplicitFocusOrder(4);
+    ndiTestButton_.setExplicitFocusOrder(5);
+
+    tabs_->addTab("Audio", colour::background, audioPage_, true);
+    tabs_->addTab("Translation", colour::background, translationPage_, true);
+    tabs_->addTab("Subtitles / NDI", colour::background, subtitlesPage_, true);
+    tabs_->addTab("Credentials", colour::background, credentialsPage_, true);
+    tabs_->addTab("Diagnostics", colour::background, diagnosticsPage_, true);
+    tabs_->addTab("Advanced", colour::background, advancedPage_, true);
 
     refreshFromSettings();
     startTimer(500);   // presence + NDI state; the store can change outside this process
@@ -633,7 +635,7 @@ namespace {
 /// the absence are both amber - the colour must not outrun the sentence.
 juce::Colour credentialColour(security::ISecretStore::Location location)
 {
-    return location == security::ISecretStore::Location::primary ? sink::green : sink::amber;
+    return location == security::ISecretStore::Location::primary ? colour::green : colour::amber;
 }
 
 } // namespace
@@ -780,7 +782,7 @@ void SettingsContent::showNote()
                          || actionNote_.find("NOT saved") != std::string::npos;
     noteLabel_.setText(juce::String(actionNote_), juce::NotificationType::dontSendNotification);
     noteLabel_.setColour(juce::Label::textColourId,
-                         refused ? sink::red : sink::amber);
+                         refused ? colour::red : colour::amber);
 }
 
 void SettingsContent::ndiTestPressed()
@@ -834,7 +836,7 @@ void SettingsContent::loopbackVisuals()
             "LOOPBACK IS ON: the audience hears the capture and the translator is NOT "
             "fed. Never enable it with a live room.",
             juce::NotificationType::dontSendNotification);
-        developerHintLabel_.setColour(juce::Label::textColourId, sink::red);
+        developerHintLabel_.setColour(juce::Label::textColourId, colour::red);
     }
     else
     {
@@ -843,7 +845,7 @@ void SettingsContent::loopbackVisuals()
             "on restart. Loopback plays the capture to the audience and leaves the "
             "translator unfed - never enable it with a live room.",
             juce::NotificationType::dontSendNotification);
-        developerHintLabel_.setColour(juce::Label::textColourId, sink::textMuted);
+        developerHintLabel_.setColour(juce::Label::textColourId, colour::textMuted);
     }
 }
 
@@ -1015,9 +1017,9 @@ void SettingsContent::timerCallback()
         ndiStateLabel_.setText("NDI state: " + juce::String(state),
                                juce::NotificationType::dontSendNotification);
         ndiStateLabel_.setColour(juce::Label::textColourId,
-                                 state == "publishing" ? sink::green
-                                                       : state == "faulted" ? sink::red
-                                                                            : sink::textSecondary);
+                                 state == "publishing" ? colour::green
+                                                       : state == "faulted" ? colour::red
+                                                                            : colour::textSecondary);
     }
 
     // The test button rides the same poll: whether a test caption is latched
