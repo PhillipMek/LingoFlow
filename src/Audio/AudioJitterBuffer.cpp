@@ -11,12 +11,10 @@ AudioJitterBuffer::AudioJitterBuffer(std::size_t capacityFrames, std::size_t tar
 
 void AudioJitterBuffer::setTargetFrames(std::size_t frames) noexcept
 {
-    targetFrames_.store(frames, std::memory_order_relaxed);
-
-    // Raising the target above what is buffered means pre-rolling again; lowering it
-    // to what is already buffered makes the buffer ready at once. Both are decided
-    // from the data actually present, never from a timer.
-    primed_.store(ring_.readable() >= frames, std::memory_order_relaxed);
+    // Control thread publishes the requested pre-roll only. Deciding "primed" from
+    // ring_.readable() here raced the callback's own priming state when the jitter
+    // slider moved on a running device, so the decision moved into readOrSilence().
+    requestedTarget_.store(frames, std::memory_order_release);
 }
 
 std::size_t AudioJitterBuffer::write(const float* data, std::size_t frames) noexcept
@@ -35,6 +33,16 @@ std::size_t AudioJitterBuffer::readOrSilence(float* data, std::size_t frames) no
 {
     if (data == nullptr || frames == 0)
         return 0;
+
+    // Fixed-cost hand-off from the control thread: the callback owns both
+    // targetFrames_ and primed_, so a live retarget cannot tear its state.
+    const std::size_t requested = requestedTarget_.load(std::memory_order_acquire);
+    if (requested != kNoPendingTarget && requested != targetFrames_.load(std::memory_order_relaxed))
+    {
+        targetFrames_.store(requested, std::memory_order_relaxed);
+        primed_.store(ring_.readable() >= requested, std::memory_order_relaxed);
+        requestedTarget_.store(kNoPendingTarget, std::memory_order_release);
+    }
 
     const std::size_t target = targetFrames_.load(std::memory_order_relaxed);
 

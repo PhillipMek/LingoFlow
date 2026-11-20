@@ -46,12 +46,17 @@ public:
 
     std::size_t capacity() const noexcept { return ring_.capacity(); }
 
-    /// Frames of stored delay that must accumulate before playback starts.
-    std::size_t targetFrames() const noexcept { return targetFrames_.load(std::memory_order_relaxed); }
+    /// Frames of stored delay that must accumulate before playback starts. A live
+    /// retarget is visible here at once, even before the callback has applied it.
+    std::size_t targetFrames() const noexcept
+    {
+        const std::size_t requested = requestedTarget_.load(std::memory_order_acquire);
+        return requested == kNoPendingTarget ? targetFrames_.load(std::memory_order_relaxed) : requested;
+    }
 
-    /// Non-realtime: change the pre-roll (operator moved the jitter slider). Raising
-    /// it above the current fill re-primes, which is the correct, audible-latency
-    /// consequence of asking for more protection.
+    /// Non-realtime: publish a new pre-roll (operator moved the jitter slider).
+    /// The audio callback applies it at the next readOrSilence(): that is the
+    /// only place allowed to decide the priming state.
     void setTargetFrames(std::size_t frames) noexcept;
 
     /// Producer (network/loopback thread). Never blocks. Also publishes readiness: as
@@ -73,8 +78,16 @@ public:
     /// Current stored frames = the delay this buffer is adding right now.
     std::size_t available() const noexcept { return ring_.readable(); }
 
-    /// True while pre-rolling, i.e. waiting for targetFrames to accumulate.
-    bool priming() const noexcept { return !primed_.load(std::memory_order_relaxed); }
+    /// True while pre-rolling, i.e. waiting for targetFrames to accumulate. With
+    /// a pending retarget the answer is derived from the requested target so a
+    /// control-thread readout cannot disagree with what the callback will apply.
+    bool priming() const noexcept
+    {
+        const std::size_t requested = requestedTarget_.load(std::memory_order_acquire);
+        if (requested != kNoPendingTarget)
+            return ring_.readable() < requested;
+        return !primed_.load(std::memory_order_relaxed);
+    }
 
     /// Underrun events (a block that had to be re-prime or partly silence), not frames.
     std::uint64_t underrunEvents() const noexcept { return underrunEvents_.load(std::memory_order_relaxed); }
@@ -93,9 +106,12 @@ public:
     void reset() noexcept;
 
 private:
+    static constexpr std::size_t kNoPendingTarget = static_cast<std::size_t>(-1);
+
     AudioRingBuffer ring_;
-    std::atomic<std::size_t> targetFrames_{ 0 };
-    std::atomic<bool> primed_{ false };
+    std::atomic<std::size_t> requestedTarget_{ kNoPendingTarget }; ///< control thread only: published pre-roll
+    std::atomic<std::size_t> targetFrames_{ 0 };                   ///< audio callback only: applied pre-roll
+    std::atomic<bool> primed_{ false };                            ///< never written by the control thread
     std::atomic<std::uint64_t> underrunEvents_{ 0 };
     std::atomic<std::uint64_t> primingFrames_{ 0 };
     std::atomic<std::uint64_t> discarded_{ 0 };
