@@ -17,12 +17,21 @@
 # run time. A function that disappears from the source is an error, not a pass: the
 # audit compares the number of bodies it extracted against the table.
 #
+# Every call in an extracted body must also name either a function already in
+# rt_audit_rows or an allowed standard/builtin operation (std:: arithmetic, memcpy,
+# atomic load/store/...). A new helper on the realtime path that is not added to the
+# table in the same commit fails with RT_AUDIT_UNLISTED_CALLEE. This check is lexical
+# too: it cannot resolve overloads, follow a function pointer or tell a project name
+# from a standard algorithm that happens to share it. The runtime allocation test
+# remains the behavioural backstop.
+#
 # Every failure line starts with a stable RT_AUDIT_* code so the self-test can assert
 # on the reason.
 
 # Blank source lines are real elements of the extracted body (CMP0007 NEW), so the
 # reported line numbers stay aligned with the file.
 cmake_policy(SET CMP0007 NEW)
+cmake_policy(SET CMP0057 NEW) # IN_LIST in if(), used by the call-graph check
 
 if(NOT DEFINED RT_AUDIT_SRC_DIR)
     message(FATAL_ERROR "RT_AUDIT_SRC_DIR is not set")
@@ -45,9 +54,13 @@ set(rt_audit_rows
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::read\\("
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::readOrSilence"
     "Audio/AudioRingBuffer.cpp|AudioRingBuffer::readable"
+    "Audio/AudioRingBuffer.cpp|AudioRingBuffer::discardAll"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::write"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::readOrSilence"
+    "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::discard"
     "Audio/AudioJitterBuffer.cpp|AudioJitterBuffer::setTargetFrames"
+    "Audio/AudioJitterBuffer.h|std::uint64_t underrunEvents"
+    "Audio/AudioEngine.h|OutputRouting outputRouting"
     "Audio/LevelMeter.cpp|LevelMeter::measure"
     "Audio/GainStage.cpp|float GainStage::dbToLinear"
     "Audio/GainStage.cpp|float GainStage::targetLinear"
@@ -78,6 +91,50 @@ set(rt_audit_patterns
     "\\.at\\(|throw |catch *\\(")
 
 list(LENGTH rt_audit_rows rt_audit_expected)
+
+# Simple names of the audited functions, derived from the table so a renamed row
+# cannot silently drop out of the call-graph check. "void GainStage::process(float*"
+# yields "process"; "AudioRingBuffer::read\(" yields "read".
+set(rt_audit_listed_callees "")
+foreach(entry IN LISTS rt_audit_rows)
+    string(FIND "${entry}" "|" separator)
+    if(separator EQUAL -1)
+        continue()
+    endif()
+    math(EXPR after "${separator} + 1")
+    string(SUBSTRING "${entry}" "${after}" -1 marker_text)
+    string(REPLACE "\\(" "(" marker_text "${marker_text}")
+    string(FIND "${marker_text}" "(" paren)
+    if(paren EQUAL -1)
+        set(prefix "${marker_text}")
+    else()
+        string(SUBSTRING "${marker_text}" 0 "${paren}" prefix)
+    endif()
+    string(REGEX MATCH "[A-Za-z_][A-Za-z0-9_]*$" callee "${prefix}")
+    if(NOT callee STREQUAL "")
+        list(APPEND rt_audit_listed_callees "${callee}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES rt_audit_listed_callees)
+
+# Standard/builtin calls allowed in a callback body. Kept deliberately narrow: an
+# unknown name is a failure, not a pass. "get" is the usual smart-pointer/
+# optional accessor; "applyOne" is a local lambda whose body is already scanned
+# as part of GainStage::process (see the lambda rule below).
+set(rt_audit_allowed_callees
+    load store exchange fetch_add fetch_sub fetch_or fetch_and
+    compare_exchange_strong compare_exchange_weak
+    memcpy memmove memset memcmp strlen
+    isfinite isnan isinf exp2 exp log log10 pow sqrt fabs
+    abs min max clamp floor ceil round
+    data size get applyOne)
+
+# Control flow, casts and allocation keywords are not calls for this check; the
+# forbidden-token scan above still rejects them where they matter.
+set(rt_audit_call_keywords
+    if for while switch return sizeof catch throw new delete
+    static_cast dynamic_cast reinterpret_cast const_cast
+    noexcept decltype alignof typeid operator)
 
 # Count occurrences of a single character. Deliberately not REGEX MATCHALL: under
 # CMP0007 NEW an empty match result is still a one-element empty list, which would
@@ -216,6 +273,31 @@ foreach(entry IN LISTS rt_audit_rows)
                 list(APPEND rt_audit_failures
                     "RT_AUDIT_FORBIDDEN: ${rel_file}:${line_at} inside '${marker}': '${code}' matches forbidden realtime pattern [${pattern}]")
             endif()
+        endforeach()
+
+        # Call-graph step: every callee must be an audited realtime helper, an
+        # allowed builtin, or a control-flow/cast keyword. A helper added to the
+        # callback path without a table row fails here even if it contains no
+        # forbidden token itself.
+        # CMake's regex engine has no POSIX [:space:] class here; matching the
+        # immediate name+paren avoids eating a trailing identifier character.
+        string(REGEX MATCHALL "[A-Za-z_][A-Za-z0-9_]*\\(" call_tokens "${code}")
+        foreach(token IN LISTS call_tokens)
+            string(REGEX REPLACE "\\($" "" callee "${token}")
+            if(callee STREQUAL "")
+                continue()
+            endif()
+            if(callee IN_LIST rt_audit_call_keywords)
+                continue()
+            endif()
+            if(callee IN_LIST rt_audit_allowed_callees)
+                continue()
+            endif()
+            if(callee IN_LIST rt_audit_listed_callees)
+                continue()
+            endif()
+            list(APPEND rt_audit_failures
+                "RT_AUDIT_UNLISTED_CALLEE: ${rel_file}:${line_at} inside '${marker}': '${callee}()' is neither an audited realtime helper nor an allowed builtin")
         endforeach()
     endforeach()
 endforeach()

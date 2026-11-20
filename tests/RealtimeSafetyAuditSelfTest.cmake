@@ -191,5 +191,11 @@ endif()
 
 message(STATUS "rt-selftest/function-vanished: rejected with RT_AUDIT_FUNCTION_NOT_FOUND, as it must")
 
+# 13. The call graph grew without a table row. The injected helper is harmless in
+# itself - only the fact that the callback calls an unlisted name must fail.
+rt_expect("rt-selftest/unlisted-callee" FAIL "RT_AUDIT_UNLISTED_CALLEE"
+    "${engine}" "${engine_marker}" "${anchor}"
+    "newRtHelper();")
+
 file(REMOVE_RECURSE "${RT_AUDIT_WORK_DIR}")
 message(STATUS "realtime safety audit self-test: OK")
