@@ -87,10 +87,16 @@ std::string refusalErrorCode(const std::string& body)
     const auto parsed = nlohmann::json::parse(body, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object())
         return {};
-    const auto& error = parsed["error"];
-    if (!error.is_object() || !error.contains("code") || !error["code"].is_string())
+    // find(), never operator[] on a const object: a missing key through the
+    // const overload is undefined behaviour, not an exception, and is_object()
+    // above says nothing about the keys inside the object.
+    const auto errorIt = parsed.find("error");
+    if (errorIt == parsed.end() || !errorIt->is_object())
         return {};
-    return error["code"].get<std::string>();
+    const auto codeIt = errorIt->find("code");
+    if (codeIt == errorIt->end() || !codeIt->is_string())
+        return {};
+    return codeIt->get<std::string>();
 }
 
 bool containsAudioWord(const std::string& text)

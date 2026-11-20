@@ -511,6 +511,31 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
         s.sink.armAfterCloseExpectation();
         s.backend->closeSession();
     }
+
+    // A JSON object that simply has no usable "error". Used to be undefined
+    // behaviour: operator[] on a const nlohmann object with a missing key.
+    // Every one of these bodies is unclassifiable - the status table decides,
+    // and the Retry-After hint still travels.
+    for (const std::string body : {
+             std::string("{}"),
+             std::string(R"({"message":"x"})"),
+             std::string(R"({"error":"boom"})"),
+             std::string(R"({"error":{}})") })
+    {
+        Scenario s;
+        network::ConnectResult cr { false, 429, {} };
+        cr.refusalBody = body;
+        cr.retryAfterSec = 7;
+        s.nextConnect = cr;
+        s.open(s.Request());
+
+        const auto errors = s.sink.errors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].category == TranslationErrorCategory::rateLimited);
+        CHECK(errors[0].retryAfterMs == 7000);
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
 }
 
 TEST_CASE("OpenAI backend: the optional safety identifier rides the upgrade request",
