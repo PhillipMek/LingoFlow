@@ -40,7 +40,7 @@ const juce::Colour card          { 0xff22262bu };
 const juce::Colour cardBorder    { 0xff2d333au };
 const juce::Colour textPrimary   { 0xffe6edf3u };
 const juce::Colour textSecondary { 0xff9aa4afu };
-const juce::Colour textMuted     { 0xff6e7681u };
+const juce::Colour textMuted     { ui::kMutedTextColour };
 const juce::Colour green         { 0xff3fb950u };
 const juce::Colour amber         { 0xffd29922u };
 const juce::Colour red           { 0xfff85149u };
@@ -73,9 +73,9 @@ constexpr int kMeasureHeight = 20000;
 /// Inline caption widths (task 4 §1): a caption ABOVE its control cost a 14 px
 /// row each; the same words BESIDE it cost nothing and still say what the
 /// control is. Sized to the longest string each carries at its font.
-constexpr int kChannelCapW = 78;    ///< "Channel"
+constexpr int kChannelCapW = 104;   ///< "Output channel"
 constexpr int kLevelCapW   = 90;    ///< "Input level" / "Output level"
-constexpr int kGainCapW    = 110;   ///< "Gain  +2.0 dB"
+constexpr int kGainCapW    = 140;   ///< "Output gain  +2.0 dB"
 constexpr int kStatusCapW  = 110;   ///< "Translation" - the longest status caption
 constexpr int kDeviceCapW  = 210;   ///< "Device (one ASIO in/out)"
 
@@ -206,7 +206,7 @@ void MeterBar::paint(juce::Graphics& g)
     }
     else if (!view_.signalPresent)
     {
-        g.setFont(uiFont(10.0f));
+        g.setFont(uiFont(ui::kHintFontSize));
         g.setColour(ink::textMuted);
         g.drawFittedText("no signal", getLocalBounds(), juce::Justification::centredRight, 1,
                          static_cast<float> (getWidth()) - 20.0f);
@@ -255,7 +255,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     addAndMakeVisible(settingsButton_);
 
     // ---------------------------------------------------------- system status
-    caption(statusHeader_, "SYSTEM STATUS", *cards_, ink::textMuted, 11.0f);
+    caption(statusHeader_, "SYSTEM STATUS", *cards_, ink::textMuted, ui::kHintFontSize);
 
     caption(appCaption_, "App", *cards_, ink::textSecondary, 14.0f);
     caption(audioCaption_, "Audio", *cards_, ink::textSecondary, 14.0f);
@@ -276,13 +276,13 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     credentialLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     cards_->addAndMakeVisible(credentialLabel_);
 
-    devDetailLabel_.setFont(uiFont(11.0f));
+    devDetailLabel_.setFont(uiFont(ui::kHintFontSize));
     devDetailLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     devDetailLabel_.setVisible(false);
     cards_->addAndMakeVisible(devDetailLabel_);
 
     // ------------------------------------------------------------------ audio
-    caption(audioHeader_, "AUDIO", *cards_, ink::textMuted, 11.0f);
+    caption(audioHeader_, "AUDIO", *cards_, ink::textMuted, ui::kHintFontSize);
 
     caption(deviceCaption_, "Device (one ASIO in/out)", *cards_);
     deviceChoice_.onChange = [this] { deviceSelected(); };
@@ -293,21 +293,21 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     styleQuietButton(refreshDevicesButton_);
     cards_->addAndMakeVisible(refreshDevicesButton_);
 
-    deviceNoteLabel_.setFont(uiFont(11.0f));
+    deviceNoteLabel_.setFont(uiFont(ui::kHintFontSize));
     deviceNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     cards_->addAndMakeVisible(deviceNoteLabel_);
 
-    caption(inputChannelCaption_, "Channel", *cards_);
+    caption(inputChannelCaption_, "Input channel", *cards_);
     inputChannelChoice_.onChange = [this] { channelChanged(); };
     styleBox(inputChannelChoice_);
     cards_->addAndMakeVisible(inputChannelChoice_);
 
-    caption(outputChannelCaption_, "Channel", *cards_);
+    caption(outputChannelCaption_, "Output channel", *cards_);
     outputChannelChoice_.onChange = [this] { channelChanged(); };
     styleBox(outputChannelChoice_);
     cards_->addAndMakeVisible(outputChannelChoice_);
 
-    channelNoteLabel_.setFont(uiFont(11.0f));
+    channelNoteLabel_.setFont(uiFont(ui::kHintFontSize));
     channelNoteLabel_.setColour(juce::Label::textColourId, ink::textMuted);
     cards_->addAndMakeVisible(channelNoteLabel_);
 
@@ -360,7 +360,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     cards_->addAndMakeVisible(outputMuteButton_);
 
     // ------------------------------------------------------------ translation
-    caption(translationHeader_, "TRANSLATION", *cards_, ink::textMuted, 11.0f);
+    caption(translationHeader_, "TRANSLATION", *cards_, ink::textMuted, ui::kHintFontSize);
 
     // The pair as the wire knows it (docs section 5, R8): the target is the
     // operator's choice, the source is what the provider decides by itself.
@@ -397,7 +397,7 @@ OperatorContent::OperatorContent(ApplicationController& controller)
     cards_->addAndMakeVisible(historyLabel_);
 
     // ------------------------------------------------------------ live health
-    caption(healthHeader_, "HEALTH", *cards_, ink::textMuted, 11.0f);
+    caption(healthHeader_, "HEALTH", *cards_, ink::textMuted, ui::kHintFontSize);
 
     caption(latencyCaption_, "Latency", *cards_, ink::textSecondary, 13.0f);
     caption(jitterCaption_, "Jitter fill", *cards_, ink::textSecondary, 13.0f);
@@ -745,9 +745,9 @@ void OperatorContent::rebuild()
 
     // The caption carries the requested number (the slider's own value); the
     // technical "applying ... (gliding)" line moved to Diagnostics (the UI redesign Р В РІР‚в„ўР вЂ™Р’В§6).
-    inputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.inputGainDb)),
+    inputGainCaption_.setText(juce::String(std::format("Input gain  {:+.1f} dB", panel.inputGainDb)),
                               juce::NotificationType::dontSendNotification);
-    outputGainCaption_.setText(juce::String(std::format("Gain  {:+.1f} dB", panel.outputGainDb)),
+    outputGainCaption_.setText(juce::String(std::format("Output gain  {:+.1f} dB", panel.outputGainDb)),
                                juce::NotificationType::dontSendNotification);
 
     inputMuteButton_.setToggleState(panel.inputMuted,
@@ -824,10 +824,17 @@ void OperatorContent::rebuild()
                               juce::NotificationType::dontSendNotification);
     sessionLineLabel_.setColour(juce::Label::textColourId, stateColour(panel.sessionState));
 
-    currentSubtitleLabel_.setText(panel.currentSubtitle.empty()
-                                      ? juce::String::fromUTF8("\u2014")
+    // A bare dash looked like a rendering fault. Say what the blank means, in
+    // the same muted ink as the other idle lines; real captions keep the quotes
+    // and the primary colour.
+    const bool noSubtitle = panel.currentSubtitle.empty();
+    currentSubtitleLabel_.setText(noSubtitle
+                                      ? juce::String("Waiting for translated speech")
                                       : juce::String("\u201c" + panel.currentSubtitle + "\u201d"),
                                   juce::NotificationType::dontSendNotification);
+
+    currentSubtitleLabel_.setColour(juce::Label::textColourId,
+                                    noSubtitle ? ink::textMuted : ink::textPrimary);
 
     std::string history;
     const std::size_t total = panel.subtitleHistory.size();
@@ -1116,6 +1123,11 @@ void OperatorContent::resized()
     // ui::ScrollablePage, which measures and lays out the cards for the width
     // it is given - the cards never see a window resize directly.
     auto bounds = getLocalBounds().reduced(kMargin);
+
+    // JUCE 9 sends SC_MAXIMIZE to setFullScreen(true): on a 720p rig the
+    // native frame covers the taskbar and a pinned bottom bar would sit behind
+    // it. Reserve the covered strip so START/STOP stay clickable when maximised.
+    bounds.removeFromBottom(ui::bottomOcclusionPx(*this));
 
     // 1. Header: identity left, the compact developer chip, Settings right.
     auto header = bounds.removeFromTop(36);

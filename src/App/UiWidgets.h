@@ -23,6 +23,54 @@
 namespace liveai {
 namespace ui {
 
+/// The one typography of de-emphasised text, shared by all three windows.
+/// Each window used to carry its own private 11 px / 0xff6e7681 copy, so the
+/// same hint read differently in the operator screen, Settings and Diagnostics.
+/// Both values are the house ones already used by fieldCaption().
+inline constexpr float kHintFontSize = 12.0f;
+inline const juce::Colour kMutedTextColour { 0xff8b949eu };
+
+/// The usable (taskbar-free) area of the display this component sits on.
+/// Headless/early-layout calls have no meaningful screen bounds yet: they get
+/// the main display, which is the same answer for a single-monitor venue rig.
+inline juce::Rectangle<int> usableAreaFor(juce::Component& component)
+{
+    const auto& displays = juce::Desktop::getInstance().getDisplays();
+    if (const auto* display = displays.getDisplayForRect(component.getScreenBounds()))
+        return display->userBounds.toNearestInt();
+    if (const auto* primary = displays.getPrimaryDisplay())
+        return primary->userBounds.toNearestInt();
+    return {};   // headless: no physical area to constrain to
+}
+
+/// Fit a preferred dialog size into that usable area. A native frame adds
+/// ~16 px across and ~40 px down, so a 900x700 dialog opened on a 1280x720
+/// screen would otherwise show its title bar above the desktop and its Apply
+/// button behind the taskbar. Large monitors keep the preferred size unchanged.
+inline juce::Rectangle<int> fitDialogSize(int preferredW, int preferredH,
+                                          const juce::Rectangle<int>& area)
+{
+    constexpr int kFrameW = 24;   // frame plus a small margin
+    constexpr int kFrameH = 56;
+    if (area.isEmpty())
+        return { 0, 0, preferredW, preferredH };
+    return { 0, 0,
+             jmin(preferredW, jmax(320, area.getWidth() - kFrameW)),
+             jmin(preferredH, jmax(240, area.getHeight() - kFrameH)) };
+}
+
+/// How many pixels of a component's bottom the taskbar covers. JUCE 9 maps the
+/// native maximise command to setFullScreen(true), so a "maximised" frame
+/// covers the taskbar; a pinned bottom bar must move up by this strip or its
+/// buttons end up behind it on a 720p screen. Zero for a normal window.
+inline int bottomOcclusionPx(juce::Component& component)
+{
+    const auto screen = component.getScreenBounds();
+    if (screen.isEmpty())
+        return 0;
+    return jmax(0, screen.getBottom() - usableAreaFor(component).getBottom());
+}
+
 inline juce::Font uiFont(float height = 15.0f)
 {
     return juce::Font(juce::FontOptions().withHeight(height));
@@ -41,10 +89,10 @@ inline juce::Font monoFont(float height = 13.0f)
 /// name, no candidates MSVC can pick. If you are here wanting a caption, the
 /// local file helper is the house style; this is the shared fallback.
 inline juce::Label& fieldCaption(juce::Label& label, const juce::String& text,
-                                 juce::Component& parent, float height = 12.0f)
+                                 juce::Component& parent, float height = kHintFontSize)
 {
     label.setFont(uiFont(height));
-    label.setColour(juce::Label::textColourId, juce::Colour(0xff8b949eu));
+    label.setColour(juce::Label::textColourId, kMutedTextColour);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
     return label;

@@ -18,7 +18,7 @@ namespace sink {
 
 const juce::Colour textPrimary   { 0xffe6edf3u };
 const juce::Colour textSecondary { 0xff9aa4afu };
-const juce::Colour textMuted     { 0xff6e7681u };
+const juce::Colour textMuted     { ui::kMutedTextColour };
 const juce::Colour green         { 0xff3fb950u };
 const juce::Colour amber         { 0xffd29922u };
 const juce::Colour red           { 0xfff85149u };
@@ -58,7 +58,7 @@ juce::Label& caption(juce::Label& label, const juce::String& text, juce::Compone
 
 juce::Label& hint(juce::Label& label, const juce::String& text, juce::Component& parent)
 {
-    label.setFont(ui::uiFont(11.0f));
+    label.setFont(ui::uiFont(ui::kHintFontSize));
     label.setColour(juce::Label::textColourId, sink::textMuted);
     label.setText(text, juce::NotificationType::dontSendNotification);
     parent.addAndMakeVisible(label);
@@ -266,7 +266,7 @@ public:
         if (!note_.empty())
         {
             g.setColour(sink::amber);
-            g.setFont(ui::uiFont(11.0f));
+            g.setFont(ui::uiFont(ui::kHintFontSize));
             g.drawText(juce::String(note_), bounds.reduced(6), juce::Justification::topLeft);
         }
     }
@@ -310,7 +310,9 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     tabs_->setColour(juce::TabbedButtonBar::tabTextColourId, sink::textSecondary);
     tabs_->setColour(juce::TabbedButtonBar::frontTextColourId, sink::textPrimary);
     tabs_->setColour(juce::TabbedButtonBar::tabOutlineColourId, sink::cardBorder);
-    tabs_->setColour(juce::TabbedButtonBar::frontOutlineColourId, sink::cardBorder);
+    // The front tab gets the house accent outline; the inactive ones keep the
+    // quiet border. Bold text alone was too subtle to see while switching.
+    tabs_->setColour(juce::TabbedButtonBar::frontOutlineColourId, sink::blue);
     addAndMakeVisible(*tabs_);
 
     // ------------------------------------------------------------------ audio
@@ -1413,7 +1415,7 @@ int SettingsContent::layoutSubtitlesPage(int width)
     ndiTestEditor_.setBounds(b.removeFromTop(kControlH));
     ndiTestButton_.setBounds(b.removeFromTop(kButtonH).withWidth(240));
     b.removeFromTop(4);
-    ndiTestHintLabel_.setBounds(b.removeFromTop(56));
+    ndiTestHintLabel_.setBounds(b.removeFromTop(72));
     b.removeFromTop(kRowGap);
 
     ndiModeCaption_.setBounds(b.removeFromTop(kCaptionH));
@@ -1428,7 +1430,7 @@ int SettingsContent::layoutSubtitlesPage(int width)
     ndiFpsChoice_.setBounds(b.removeFromTop(kControlH));
     b.removeFromTop(kRowGap);
 
-    ndiHintLabel_.setBounds(b.removeFromTop(80));
+    ndiHintLabel_.setBounds(b.removeFromTop(104));
 
     // ------------------------------------------------------------- right: the look
     auto rb = right;
@@ -1604,11 +1606,13 @@ SettingsWindow::SettingsWindow(ApplicationController& controller, juce::Componen
     setResizable(true, true);
     // the UI redesign made the tabs; venue task 4 §3 made the pages
     // scrollable: the window no longer has to grow to the tallest page, it
-    // shows one honest viewport and Apply outside the scroll. 820x620 keeps
+    // shows one honest viewport and Apply outside the scroll. 900x700 keeps
     // every short page unscrolled on a venue laptop; taller ones scroll
-    // instead of cutting their bottom rows off.
+    // instead of cutting their bottom rows off. The larger default also gives
+    // the 12 px hint text enough width to wrap without clipping its last line.
     setResizeLimits(640, 480, 4000, 4000);
-    setSize(820, 620);
+    const auto fit = ui::fitDialogSize(900, 700, ui::usableAreaFor(*this));
+    setSize(fit.getWidth(), fit.getHeight());
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
     becomeModal();
