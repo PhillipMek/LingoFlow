@@ -8,10 +8,14 @@
 #include <stdexcept>
 #include <string>
 
+#include "Utils/Log.h"
+
 namespace liveai {
 namespace network {
 
 namespace {
+
+const char* kComponent = "network.winhttp";
 
 std::string lastWinHttpError(DWORD code)
 {
@@ -124,13 +128,19 @@ ConnectResult WinHttpTransport::connect(const std::string& host,
 
     WinHttpSetTimeouts(session, 5000 /*resolve*/, 10000 /*connect*/, 10000 /*send*/, 5000 /*receive*/);
 
-    // TLS 1.2 minimum (1.3 included when the OS provides it) - the project rules
-    // requires modern transport for the credential-bearing connection.
+    // Mandatory, not best effort: this connection carries the API key, so a
+    // refusal to set the TLS 1.2 floor (1.3 where the OS provides it) fails the
+    // connect instead of silently downgrading the transport.
     DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
 #ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
     protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
 #endif
-    WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols));
+    if (!WinHttpSetOption(session, WINHTTP_OPTION_SECURE_PROTOCOLS, &protocols, sizeof(protocols)))
+    {
+        result.transportError = lastWinHttpError(GetLastError());
+        releaseHandles();
+        return result;
+    }
 
     const std::wstring wideHost = toWide(host);
     const std::wstring widePath = toWide(pathAndQuery);
@@ -223,14 +233,20 @@ ConnectResult WinHttpTransport::connect(const std::string& host,
     // connections with "keepalive ping timeout". WinHTTP's WebSocket keepalive
     // emits periodic client-side pings at the transport level - exactly the
     // requirement - and WinHTTP answers server pings automatically. The
-    // documented minimum interval is 15 s.
+    // documented minimum interval is 15 s. These two options are best effort:
+    // a refusal degrades keepalive/close timing and is warned about, but the
+    // upgraded connection stays usable (unlike the TLS floor above).
     DWORD keepalive = WINHTTP_WEB_SOCKET_MIN_KEEPALIVE_VALUE;
-    WinHttpSetOption(webSocket, WINHTTP_OPTION_WEB_SOCKET_KEEPALIVE_INTERVAL, &keepalive,
-                     sizeof(keepalive));
+    if (!WinHttpSetOption(webSocket, WINHTTP_OPTION_WEB_SOCKET_KEEPALIVE_INTERVAL, &keepalive,
+                          sizeof(keepalive)))
+        log::warning(kComponent, "WebSocket keepalive interval not applied: "
+                                     + lastWinHttpError(GetLastError()));
 
     DWORD closeTimeout = 2000;
-    WinHttpSetOption(webSocket, WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT, &closeTimeout,
-                     sizeof(closeTimeout));
+    if (!WinHttpSetOption(webSocket, WINHTTP_OPTION_WEB_SOCKET_CLOSE_TIMEOUT, &closeTimeout,
+                          sizeof(closeTimeout)))
+        log::warning(kComponent, "WebSocket close timeout not applied: "
+                                     + lastWinHttpError(GetLastError()));
 
     result.upgraded = true;
     result.httpStatus = 101;
