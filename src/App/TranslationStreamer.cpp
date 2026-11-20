@@ -104,13 +104,14 @@ void TranslationStreamer::stop() noexcept
 
 void TranslationStreamer::run() noexcept
 {
-    // Worker thread, not realtime: it allocates nothing here (the scratch came from
-    // start()), but it may sleep, log and call into the backend's non-blocking
-    // submitAudio(). What it must never do is hold up the audio callback, and it
-    // cannot: the ring reads are the consumer end of a lock-free buffer that never
-    // blocks. A backend that throws at this level is a defect, not an operating
-    // state: log it at critical and let the worker leave - the engine's own
-    // overflow accounting then tells the operator the capture is going nowhere.
+    // Worker thread, not realtime: the ring scratch and the streaming state are
+    // preallocated in start(), but this loop may still allocate (refusal strings,
+    // log formatting) and it does log and sleep. That is safe here; what it must
+    // never do is hold up the audio callback, and it cannot: the ring reads are
+    // the consumer end of a lock-free buffer that never blocks. A backend that
+    // throws at this level is a defect, not an operating state: log it at critical
+    // and let the worker leave - the engine's own overflow accounting then tells
+    // the operator the capture is going nowhere.
     try
     {
         std::string lastRefusal;
