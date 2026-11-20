@@ -62,6 +62,7 @@
 #include "App/ApplicationController.h"
 #include "App/DeveloperMode.h"
 #include "App/OperatorWindow.h"
+#include "App/Theme.h"
 #include "Audio/Dev/SimulatedDeviceBackend.h"
 #include "Config/ConfigStore.h"
 #include "Platform/Asio/AsioDiscovery.h"
@@ -215,6 +216,13 @@ public:
     {
         const bool smoke = commandLineParameters.containsIgnoreCase("--smoke");
         const bool dev = commandLineParameters.containsIgnoreCase("--dev");
+
+        // One skin for the whole application. It must outlive every window and
+        // be cleared before it is destroyed (JUCE keeps a raw default pointer).
+        // Installing it here, before any Component exists, also styles the
+        // native window decorations and popup menus JUCE draws for us.
+        lookAndFeel_ = std::make_unique<liveai::ui::LingoFlowLookAndFeel>();
+        juce::LookAndFeel::setDefaultLookAndFeel(lookAndFeel_.get());
 
         // A windowed GUI process has no usable console, so the file sink is the
         // source of truth for automated startup checks. Start from the operator
@@ -415,6 +423,13 @@ public:
 
         window_.reset();
         controller_.stop();
+
+        // Clear the raw default pointer while the skin is still alive, then
+        // release it. The shared animation clock is a static message-thread
+        // object and needs no explicit shutdown here.
+        juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+        lookAndFeel_.reset();
+
         liveai::log::info(kLogComponent, "application shut down");
     }
 
@@ -550,6 +565,7 @@ private:
 #endif
 
     liveai::ApplicationController controller_;
+    std::unique_ptr<liveai::ui::LingoFlowLookAndFeel> lookAndFeel_;
     std::unique_ptr<liveai::OperatorWindow> window_;
 };
 

@@ -14,6 +14,8 @@
 
 #include <JuceHeader.h>
 
+#include "App/Theme.h"
+
 #include <functional>
 #include <memory>
 #include <string>
@@ -23,12 +25,11 @@
 namespace liveai {
 namespace ui {
 
-/// The one typography of de-emphasised text, shared by all three windows.
-/// Each window used to carry its own private 11 px / 0xff6e7681 copy, so the
-/// same hint read differently in the operator screen, Settings and Diagnostics.
-/// Both values are the house ones already used by fieldCaption().
-inline constexpr float kHintFontSize = 12.0f;
-inline const juce::Colour kMutedTextColour { 0xff8b949eu };
+/// Typography and the palette now live in App/Theme.h - the one place every
+/// window reads them from. This alias keeps the older call sites compiling
+/// while they migrate to the colour:: tokens; it is the same object, not a
+/// second copy of the value.
+inline const juce::Colour& kMutedTextColour = colour::textMuted;
 
 /// The usable (taskbar-free) area of the display this component sits on.
 /// Headless/early-layout calls have no meaningful screen bounds yet: they get
@@ -69,17 +70,6 @@ inline int bottomOcclusionPx(juce::Component& component)
     if (screen.isEmpty())
         return 0;
     return jmax(0, screen.getBottom() - usableAreaFor(component).getBottom());
-}
-
-inline juce::Font uiFont(float height = 15.0f)
-{
-    return juce::Font(juce::FontOptions().withHeight(height));
-}
-
-inline juce::Font monoFont(float height = 13.0f)
-{
-    return juce::Font(juce::FontOptions(juce::Font::getDefaultMonospacedFontName(),
-                                       height, juce::Font::plain));
 }
 
 /// A section or field caption in the house grey. Registers with the parent.

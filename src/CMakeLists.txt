@@ -295,6 +295,8 @@ target_sources(LingoFlow
         App/SettingsWindow.h
         App/DiagnosticsWindow.cpp
         App/DiagnosticsWindow.h
+        App/Theme.cpp
+        App/Theme.h
         App/UiWidgets.h)
 
 # Windows application icon: assets/LingoFlow.rc embeds the committed
@@ -319,6 +321,7 @@ target_link_libraries(LingoFlow
         lingoflow_platform_asio
         juce::juce_gui_basics
         juce::juce_data_structures
+        juce::juce_animation
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)

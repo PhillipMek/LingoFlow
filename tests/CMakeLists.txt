@@ -134,7 +134,9 @@ set_target_properties(lingoflow_ui_tests PROPERTIES WIN32_EXECUTABLE OFF)
 
 target_sources(lingoflow_ui_tests
     PRIVATE
-        unit/TestUiWidgets.cpp)
+        unit/TestTheme.cpp
+        unit/TestUiWidgets.cpp
+        ${CMAKE_SOURCE_DIR}/src/App/Theme.cpp)
 
 target_compile_definitions(lingoflow_ui_tests
     PRIVATE
@@ -156,6 +158,7 @@ target_link_libraries(lingoflow_ui_tests
         Catch2::Catch2WithMain
         lingoflow::core
         juce::juce_gui_basics
+        juce::juce_animation
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 
