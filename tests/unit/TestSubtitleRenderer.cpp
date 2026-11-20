@@ -837,6 +837,281 @@ TEST_CASE("SubtitleRenderer: an ended caption clears the word timeline", "[subti
     CHECK(renderer.animationPending());
 }
 
+// --------------------------------------------------- streaming fragment reality
+// The acceptance probes for the flicker fix, scripted on the injected clock.
+// A provider delivers a caption as fragments that split words and carry
+// their own spacing ("Hel" -> "Hello" -> "Hello wor" -> "Hello world"), and
+// the transport repaints the same caption on every frame tick while a ramp
+// is in flight. Neither may touch a word's fade: identity continues when
+// the word's text merely GREW, stamps carry across repaints, and only a
+// genuinely new word - or a word on a caption line the transport says has
+// started (render's lineStart) - begins its own exactly-once fade.
+
+namespace {
+
+/// A fade-enabled renderer with the fade-probe style (no outline: the alpha
+/// histograms below read the ramp directly).
+SubtitleRenderer makeFadeRenderer()
+{
+    SubtitleRenderer renderer;
+    auto settings = settings1080();
+    settings.style.outlineWidthPx = 0;
+    renderer.applySettings(settings);
+    renderer.setWordFadeEnabled(true);
+    return renderer;
+}
+
+/// Every pixel with any ink (alpha > 0). Adding a word or advancing the
+/// clock may never REMOVE ink somewhere else, so this count must not drop
+/// across a fade's lifetime - the flicker probe in one number.
+std::size_t inkTotal(const RenderedSubtitleFrame& f)
+{
+    const PixelView p = view(f);
+    std::size_t ink = 0;
+    for (int y = 0; y < f.height; ++y)
+        for (int x = 0; x < f.width; ++x)
+            if (p.alpha(x, y) > 0)
+                ++ink;
+    return ink;
+}
+
+/// The rightmost column carrying ink, -1 for a blank frame.
+int inkRightEdge(const RenderedSubtitleFrame& f)
+{
+    const PixelView p = view(f);
+    for (int x = f.width - 1; x >= 0; --x)
+    {
+        for (int y = 0; y < f.height; ++y)
+            if (p.alpha(x, y) > 0)
+                return x;
+    }
+    return -1;
+}
+
+/// Ink strictly to the right of `fromCol`: where only the newest word can
+/// paint while the older ones have already reached their columns.
+std::size_t inkRightOf(const RenderedSubtitleFrame& f, int fromCol)
+{
+    const PixelView p = view(f);
+    const int start = fromCol > 0 ? fromCol : 0;
+    std::size_t ink = 0;
+    for (int y = 0; y < f.height; ++y)
+        for (int x = start; x < f.width; ++x)
+            if (p.alpha(x, y) > 0)
+                ++ink;
+    return ink;
+}
+
+} // namespace
+
+TEST_CASE("SubtitleRenderer: streaming word fragments continue the same fade, never restart it",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+    SubtitleRenderer renderer = makeFadeRenderer();
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+
+    // "Hel" arrives: its own ramp starts here and ends at t0 + 240.
+    REQUIRE(renderer.render("Hel", frame, error, t0));
+    CHECK(scan(frame).transparent == static_cast<std::size_t>(frame.width) * frame.height);
+    CHECK(renderer.animationPending());
+
+    // The completing fragment arrives mid-ramp. The text grew ("Hel" ->
+    // "Hello"), so this is the SAME word: it continues from 120/240, not
+    // from zero - partial ink is already there, nothing opaque yet, no
+    // blink and no second fade.
+    REQUIRE(renderer.render("Hello", frame, error, t0 + at(120)));
+    const auto grown = scan(frame);
+    CHECK(grown.opaque == 0);
+    CHECK(grown.partial > 0);
+    CHECK(renderer.animationPending());
+
+    // "Hello" completes exactly on the schedule the FIRST fragment set, at
+    // t0 + 240. A new word "wor" joins the tail: invisible on its arrival
+    // frame, so "Hello"'s columns are the only ink right now.
+    REQUIRE(renderer.render("Hello wor", frame, error, t0 + at(240)));
+    CHECK(scan(frame).opaqueWhite > 100);
+    const int helloEdge = inkRightEdge(frame);
+    CHECK(helloEdge > 0);
+    CHECK(renderer.animationPending());
+
+    // "wor" grows into "world" 60 ms into its own ramp: the same word. It
+    // must already show partial ink to the right of "Hello" - a restarted
+    // fade would make it invisible here, which is the blink this test
+    // exists to catch.
+    REQUIRE(renderer.render("Hello world", frame, error, t0 + at(300)));
+    CHECK(inkRightOf(frame, helloEdge + 4) > 0);
+    CHECK(renderer.animationPending());
+
+    // The ramp "wor" started at t0 + 240 is over at t0 + 480 - NOT at
+    // t0 + 300 + 240: the growth fragment re-stamped nothing.
+    REQUIRE(renderer.render("Hello world", frame, error, t0 + at(480)));
+    CHECK_FALSE(renderer.animationPending());
+
+    // Each word faded in exactly once and everything ended fully visible,
+    // pixel-equal to the same caption painted with the fade off.
+    SubtitleRenderer plain;
+    auto plainSettings = settings1080();
+    plainSettings.style.outlineWidthPx = 0;
+    plain.applySettings(plainSettings);
+    RenderedSubtitleFrame reference;
+    REQUIRE(plain.render("Hello world", reference, error));
+    CHECK(scan(frame).opaqueWhite == scan(reference).opaqueWhite);
+    CHECK(inkTotal(frame) == inkTotal(reference));
+}
+
+TEST_CASE("SubtitleRenderer: a repaint storm never moves a stamp",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+    SubtitleRenderer renderer = makeFadeRenderer();
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    std::size_t prevInk = 0;
+
+    // The transport repaints the SAME caption every 20 ms while the ramp is
+    // in flight. Animation progress is a function of the clock, not of the
+    // number of paints: no repaint may restart, reset or hide anything, and
+    // the ramp completes on its original schedule.
+    for (int ms = 0; ms <= SubtitleRenderer::kWordFadeInMs; ms += 20)
+    {
+        REQUIRE(renderer.render("solo", frame, error, t0 + at(ms)));
+        CHECK(inkTotal(frame) >= prevInk);   // ink never recedes between paints
+        prevInk = inkTotal(frame);
+        if (ms < SubtitleRenderer::kWordFadeInMs)
+            CHECK(renderer.animationPending());
+    }
+
+    // The paint at t0 + 240 is the completion: pending is false ON SCHEDULE.
+    // Had any repaint re-stamped the word, it would still owe a ramp here.
+    CHECK_FALSE(renderer.animationPending());
+    CHECK(scan(frame).opaqueWhite > 100);
+
+    // Repainting a settled caption keeps it settled, unchanged, forever.
+    REQUIRE(renderer.render("solo", frame, error, t0 + at(10'000)));
+    CHECK_FALSE(renderer.animationPending());
+    CHECK(scan(frame).opaqueWhite > 100);
+}
+
+TEST_CASE("SubtitleRenderer: a new caption line fades its words even when the text repeats",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+    SubtitleRenderer renderer = makeFadeRenderer();
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    RenderedSubtitleFrame frame;
+    std::string error;
+    REQUIRE(renderer.render("alpha", frame, error, t0));
+    REQUIRE(renderer.render("alpha", frame, error, t0 + at(300)));
+    CHECK_FALSE(renderer.animationPending());   // settled on the old line
+
+    // The transport says THIS snapshot opens the next caption line
+    // (lineStart, driven by the final flag of the subtitle frame) - but the
+    // text is identical to what the audience already sees. Nothing is
+    // re-stamped: the pixels on screen did not change, and restarting the
+    // fade under a settled row would itself be the flicker this feature
+    // exists to prevent.
+    REQUIRE(renderer.render("alpha", frame, error, t0 + at(400), /*lineStart=*/true));
+    CHECK(scan(frame).opaqueWhite > 100);
+    CHECK_FALSE(renderer.animationPending());
+
+    // A new line whose first snapshot merely REUSES the head of the closed
+    // caption is new content: word matching alone would inherit the old
+    // stamp for "one" and let it skip its exactly-once fade. With lineStart
+    // the whole snapshot arrives as new words - invisible on the arrival
+    // frame, fading from zero.
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(500), /*lineStart=*/true));
+    CHECK(scan(frame).opaque == 0);
+    CHECK(renderer.animationPending());
+    REQUIRE(renderer.render("one two", frame, error, t0 + at(740)));
+    CHECK_FALSE(renderer.animationPending());   // its own 240 ms, no more
+
+    REQUIRE(renderer.render("one", frame, error, t0 + at(800), /*lineStart=*/true));
+    CHECK(scan(frame).transparent == static_cast<std::size_t>(frame.width) * frame.height);
+    CHECK(renderer.animationPending());         // "one": a new word of a new
+    REQUIRE(renderer.render("one", frame, error, t0 + at(1040)));  // line, once
+    CHECK_FALSE(renderer.animationPending());
+    CHECK(scan(frame).opaqueWhite > 100);
+
+    // The coalesced corner: a line boundary that arrives between two paints
+    // of an identical snapshot must NOT restart the ramp on screen. The
+    // pixels did not change; re-fading them would BE the flicker.
+    REQUIRE(renderer.render("beta", frame, error, t0 + at(1100), /*lineStart=*/true));
+    REQUIRE(renderer.render("beta", frame, error, t0 + at(1160)));
+    REQUIRE(renderer.render("beta", frame, error, t0 + at(1200), /*lineStart=*/true));
+    REQUIRE(renderer.render("beta", frame, error, t0 + at(1340)));
+    // Same snapshot as the previous render: the stamps carried, so the ramp
+    // the 1100 arrival started finishes 240 ms later - not after the 1200
+    // one.
+    CHECK_FALSE(renderer.animationPending());
+    CHECK(scan(frame).opaqueWhite > 100);
+}
+
+TEST_CASE("SubtitleRenderer: eight words arriving faster than the fade each fade exactly once",
+          "[subtitles][render][fade]")
+{
+    REQUIRE(SubtitleRenderer::available());
+    SubtitleRenderer renderer = makeFadeRenderer();
+
+    const SteadyTime t0 = std::chrono::steady_clock::now();
+    auto at = [](int milliseconds) { return std::chrono::milliseconds(milliseconds); };
+
+    static const char* const kWords[] = {"one", "two", "three", "four", "five", "six", "seven",
+                                         "eight"};
+    std::string line;
+    RenderedSubtitleFrame frame;
+    std::string error;
+    std::size_t prevInk = 0;
+
+    // A new word every 60 ms while the fade window is 240 ms: several ramps
+    // are in flight at any instant, and each frame also carries a repaint
+    // tick. The total ink may never recede (no word disappears mid-update),
+    // and the newest word is always still animating.
+    for (int i = 0; i < 8; ++i)
+    {
+        if (!line.empty())
+            line += " ";
+        line += kWords[i];
+        const int arrival = i * 60;
+
+        REQUIRE(renderer.render(line, frame, error, t0 + at(arrival)));
+        CHECK(inkTotal(frame) >= prevInk);   // the arriving word is not yet on
+        prevInk = inkTotal(frame);            // screen, no other word left it
+        REQUIRE(renderer.render(line, frame, error, t0 + at(arrival + 30)));   // repaint tick
+        CHECK(inkTotal(frame) >= prevInk);   // and the tick only advanced
+        prevInk = inkTotal(frame);           // the clocks, never reversed them
+        CHECK(renderer.animationPending());  // the newest word is still ramping
+    }
+
+    // The last word arrived at t0 + 420; its ramp - and every older one -
+    // is over at t0 + 660. The settled line is then pixel-identical to the
+    // fade-less paint of the same caption: every word animated exactly
+    // once and every word ended fully visible.
+    REQUIRE(renderer.render(line, frame, error, t0 + at(660)));
+    CHECK_FALSE(renderer.animationPending());
+
+    SubtitleRenderer plain;
+    auto plainSettings = settings1080();
+    plainSettings.style.outlineWidthPx = 0;
+    plain.applySettings(plainSettings);
+    RenderedSubtitleFrame reference;
+    REQUIRE(plain.render(line, reference, error));
+    CHECK(scan(frame).opaqueWhite == scan(reference).opaqueWhite);
+    CHECK(inkTotal(frame) == inkTotal(reference));
+}
+
 #else // !_WIN32
 
 TEST_CASE("SubtitleRenderer: off Windows the renderer says what it is", "[subtitles][render]")

@@ -35,13 +35,21 @@
 //     bounds, so descenders arriving or leaving cannot pull the row up or
 //     down;
 //   * a new word fades in (opt-in, setWordFadeEnabled) instead of punching:
-//     words keep a first-seen timestamp keyed to the canonical caption row,
-//     and only words that were not on the previous row start their ramp.
-//     Older words keep theirs - no animation restarts while the line grows
-//     or the head is trimmed. The preview and every caller that renders one
-//     static frame keep the fade OFF: a paint that is never followed up
-//     would freeze mid-ramp, so animation is the transport's choice, not
-//     the renderer's default.
+//     every word keeps its own first-seen timestamp, and a word's identity
+//     survives the snapshots that stream it in: the provider delivers a line
+//     as fragments ("Hel" -> "Hello we" -> "Hello world"), so a word whose
+//     text only GREW at its tail is the same word - it continues the ramp it
+//     started, it never restarts and it never blinks. Only a word that is
+//     genuinely new (or a word whose text was replaced, not extended) starts
+//     its own ramp. Older words keep theirs - no animation restarts while
+//     the line grows or the head is trimmed. A caption whose line ENDED (the
+//     transport says so through render()'s lineStart, driven by the final
+//     flag of the subtitle frame) is a new caption: its words carry no
+//     history from the line before it, and every word of it fades exactly
+//     once. The preview and every caller that renders one static frame keep
+//     the fade OFF: a paint that is never followed up would freeze
+//     mid-ramp, so animation is the transport's choice, not the renderer's
+//     default.
 //
 // Non-Windows builds: everything compiles and fails honestly ("Windows-only"),
 // same as the rest of the platform-specific corners of this product.
@@ -88,12 +96,17 @@ public:
     /// produces a fully transparent frame (return true) - the old text must
     /// not stay burned on the receiver when the sentence has ended.
     /// `atTime` overrides the monotonic clock (tests script the fade; the
-    /// transport lets the default stand). Returns false only when nothing
-    /// was painted: the caller keeps its last
+    /// transport lets the default stand). `lineStart` says this snapshot
+    /// OPENS a new caption line (the transport derives it from the final
+    /// flag of the subtitle frame): the word timeline of the line before it
+    /// is forgotten and every word of this caption fades in exactly once;
+    /// a re-render of the same snapshot is never a line start, so repaint
+    /// ticks carry every ramp forward untouched. Returns false only when
+    /// nothing was painted: the caller keeps its last
     /// frame (or the transparent one), counts the error and keeps audio alive;
     /// the message is an operator-actionable sentence.
     bool render(std::string_view captionText, RenderedSubtitleFrame& out, std::string& error,
-                std::optional<SteadyTime> atTime = {});
+                std::optional<SteadyTime> atTime = {}, bool lineStart = false);
 
     /// Updates the settings for the NEXT render (no lock inside this object:
     /// the owner confining it to one thread owns the handover - the video
@@ -125,11 +138,13 @@ private:
 
     // ------------------------------------------------------------ fade state
     // Words of the canonical caption row as it read on the PREVIOUS render,
-    // with the moment each one first arrived. Keyed by position from the
-    // row's head, re-verified word by word against the current row: a shared
-    // prefix keeps its timestamps (no restart), anything past the first
-    // difference is new (fades). The head trim removes words the audience
-    // already read, never resets the rest.
+    // with the moment each one first arrived. A word continues the SAME
+    // animation when its text is identical or merely GREW at the tail (the
+    // streaming fragments of one arriving word: "wor" -> "world"); anything
+    // past the first word that did not continue is new (fades as it
+    // arrives). A render flagged lineStart closes the previous caption:
+    // nothing continues, the whole row is new. The head trim removes words
+    // the audience already read, never resets the rest.
     bool wordFadeEnabled_ = false;
     bool animationPending_ = false;
     std::string fadeLine_;

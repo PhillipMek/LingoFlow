@@ -216,7 +216,8 @@ void SubtitleRenderer::resetFade()
 }
 
 bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFrame& out,
-                              std::string& error, std::optional<SteadyTime> atTime)
+                              std::string& error, std::optional<SteadyTime> atTime,
+                              bool lineStart)
 {
     error.clear();
     const SteadyTime now = atTime.value_or(std::chrono::steady_clock::now());
@@ -384,10 +385,18 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
     // The fade animates WORDS of the canonical caption row (the same join the
     // single-line layout trims, shared through canonicalCaption, so the row on
     // screen is always a byte-suffix of the timeline's line). Word identity is
-    // the shared prefix of consecutive renders' word lists: growing captions
-    // stamp only their new tail (no restart for anything already on screen),
-    // a replaced caption is all-new (the whole row fades as it arrives), and a
-    // re-render of the same caption moves no stamp - only the clock.
+    // re-verified against the previous render word by word, and it is
+    // STREAM-TOLERANT on purpose: a provider delivers a caption as fragments
+    // that split words and carry their own spacing ("Hel" -> "Hello we" ->
+    // "Hello world"), so a word whose text merely grew at the tail is the
+    // SAME word continuing the ramp it started, not a new one. A word is
+    // new - and fades exactly once - when its text is entirely absent,
+    // replaced rather than extended, or when the transport says this
+    // snapshot opens a new line (lineStart: the caption before it was
+    // final). Growing captions stamp only their new tail, a replaced caption
+    // is all-new, and a re-render of the same caption moves no stamp - only
+    // the clock. The head trim removes nothing here: identities run from
+    // the row's head, the screen only shows its suffix.
     animationPending_ = false;
     if (wordFadeEnabled_)
     {
@@ -409,22 +418,44 @@ bool SubtitleRenderer::render(std::string_view captionText, RenderedSubtitleFram
         }
 
         std::size_t keep = 0;
-        while (keep < words.size() && keep < fadeWords_.size()
-               && std::string_view(canonical).substr(words[keep].first, words[keep].second)
-                      == std::string_view(fadeLine_).substr(fadeWords_[keep].first,
-                                                            fadeWords_[keep].second))
-            ++keep;
+        // lineStart closes the caption before it: nothing continues into the
+        // new line, every word of it fades exactly once. The exception is a
+        // re-render of the very same snapshot (the line boundary arrived
+        // between two paints and the text happens to be identical): on
+        // screen nothing changed, so restarting the ramp there would BE the
+        // blink this file exists to prevent.
+        if (!lineStart || canonical == fadeLine_)
+        {
+            while (keep < words.size() && keep < fadeWords_.size())
+            {
+                const std::string_view fresh{canonical.data() + words[keep].first,
+                                             words[keep].second};
+                const std::string_view previous{fadeLine_.data() + fadeWords_[keep].first,
+                                                fadeWords_[keep].second};
+                // Same text, or the same text grown at the tail: the word
+                // continues. Anything else is a different word at this
+                // position and the row is new from here on.
+                if (fresh == previous
+                    || (fresh.size() > previous.size()
+                        && fresh.substr(0, previous.size()) == previous))
+                    ++keep;
+                else
+                    break;
+            }
+        }
 
         std::vector<SteadyTime> seen(words.size(), now);   // new/changed words: arriving now
         for (std::size_t i = 0; i < keep; ++i)
-            seen[i] = fadeSeen_[i];                        // the shared prefix keeps its history
+            seen[i] = fadeSeen_[i];                        // continuing words keep their history
 
         fadeLine_ = std::move(canonical);
         fadeWords_ = std::move(words);
         fadeSeen_ = std::move(seen);
 
-        // Arrival times are non-decreasing by word index, so the newest word
-        // finishing its ramp is exactly the moment the animation is over.
+        // Arrival times are non-decreasing by word index (a continued word
+        // was stamped at an earlier render, a new one now), so the newest
+        // word finishing its ramp is exactly the moment the animation is
+        // over.
         animationPending_ = !fadeSeen_.empty() && fadeRamp(now - fadeSeen_.back()) < 1.0f;
     }
 

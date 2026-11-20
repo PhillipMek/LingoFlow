@@ -104,6 +104,8 @@ bool NdiSubtitleVideoOutput::start(std::string_view streamName, std::string& err
     {
         const std::lock_guard<std::mutex> lock(mutex_);
         caption_.clear();               // a fresh start shows fresh words
+        captionFinal_ = false;          // ...on a fresh line, with no
+        captionNewLine_ = false;        // animation history carried over
         ++captionVersion_;
         lastFailure_.clear();
         stopping_ = false;
@@ -175,8 +177,20 @@ bool NdiSubtitleVideoOutput::publish(const SubtitleFrame& frame, std::string& er
     subtitles::OutputMode mode;
     {
         const std::lock_guard<std::mutex> lock(mutex_);
+        // Caption-line bookkeeping for the fade animation: a frame that
+        // replaces a FINAL caption - or a partial that reopens the very
+        // same text after it was finalized (the settled line is history;
+        // new fragments now describe the NEXT line) - opens a new caption
+        // line, and the renderer must be told on the next draw: its word
+        // timeline must not carry arrival stamps across a sentence
+        // boundary. The flag is sticky until a render consumes it, so a
+        // line transition coalesced between two frame ticks still reaches
+        // the renderer together with the caption it belongs to.
+        if (captionFinal_ && (frame.text != caption_ || !frame.final))
+            captionNewLine_ = true;
         caption_ = frame.text;   // empty clears the screen (video): the
                                  // transparent frame says "this line has ended"
+        captionFinal_ = frame.final;
         ++captionVersion_;
         mode = settings_.mode;
     }
@@ -247,10 +261,13 @@ void NdiSubtitleVideoOutput::renderLoop()
     subtitles::SubtitleRenderer renderer;
     // The audience-facing animation: a word that joins the line fades in over
     // SubtitleRenderer::kWordFadeInMs instead of punching onto the screen.
-    // The renderer keeps each word's arrival time, so the ramp advances by
-    // RENDERING THE SAME CAPTION AGAIN at the next tick - that is what
-    // animationPending() below asks for. Words already on screen keep their
-    // full opacity: the timeline never restarts under them.
+    // The renderer keeps each word's arrival time - and continues a word's
+    // ramp when the streaming fragments merely grew its text - so the ramp
+    // advances by RENDERING THE SAME CAPTION AGAIN at the next tick (that is
+    // what animationPending() below asks for), and lineStart tells the
+    // renderer where one caption line ends and the next begins. Words
+    // already on screen keep their full opacity: the timeline never
+    // restarts under them.
     renderer.setWordFadeEnabled(true);
 
     std::vector<subtitles::RenderedSubtitleFrame> slots(2);   // double buffer:
@@ -273,6 +290,7 @@ void NdiSubtitleVideoOutput::renderLoop()
         subtitles::SubtitleSettings settings;
         std::uint64_t captionVersion = 0;
         std::uint64_t settingsVersion = 0;
+        bool lineStart = false;
 
         {
             std::unique_lock<std::mutex> lock(mutex_);
@@ -284,6 +302,9 @@ void NdiSubtitleVideoOutput::renderLoop()
             captionVersion = captionVersion_;
             settings = settings_;
             settingsVersion = settingsVersion_;
+            lineStart = captionNewLine_;   // consumed with the caption it
+            captionNewLine_ = false;       // describes (publish bumps the
+                                           // version whenever it sets it)
         }
 
         if (modeHasVideo(settings.mode))
@@ -305,7 +326,7 @@ void NdiSubtitleVideoOutput::renderLoop()
                 renderer.applySettings(settings);
                 subtitles::RenderedSubtitleFrame& target = slots[drawSlot];
                 std::string error;
-                if (renderer.render(caption, target, error))
+                if (renderer.render(caption, target, error, {}, lineStart))
                 {
                     drawnCaptionVersion = captionVersion;
                     drawnSettingsVersion = settingsVersion;

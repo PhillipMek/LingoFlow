@@ -129,6 +129,9 @@ private:
     std::uint64_t settingsVersion_ = 0;            ///< bumps on every accepted change
     std::string caption_;                          ///< the newest latched text
     std::uint64_t captionVersion_ = 0;             ///< bumps on every publish()
+    bool captionFinal_ = false;   ///< the latched text was published final: that line ended
+    bool captionNewLine_ = false; ///< the next render opens a new caption line
+                                  ///< (sticky until a render consumes it)
     std::string lastFailure_;                      ///< sentence for the most recent refusal
 
     std::mutex transportMutex_;                    ///< every SDK call of this instance, ordered
