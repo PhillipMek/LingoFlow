@@ -172,6 +172,13 @@ bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::Devic
 {
     error.clear();
 
+    // A failed open leaves the object faulted; it must be possible to retry on
+    // the same instance (tests and the device probe reuse backends). Only the
+    // faulted state is reset here: an opened or running device is never closed
+    // behind its owner's back just because someone called open() twice.
+    if (state_ == audio::BackendState::faulted)
+        close();
+
     if (state_ != audio::BackendState::closed)
     {
         error = "ASIO backend is already open";

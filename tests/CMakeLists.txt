@@ -186,6 +186,26 @@ endif()
 
 catch_discover_tests(lingoflow_realtime_tests)
 
+# --- ASIO backend state machine ----------------------------------------------
+# Separate executable: JuceAsioBackend lives in the JUCE-linked platform
+# library, which the portable core's test binary deliberately does not link.
+add_executable(lingoflow_asio_tests
+    unit/TestJuceAsioBackend.cpp)
+
+target_link_libraries(lingoflow_asio_tests
+    PRIVATE
+        lingoflow::core
+        lingoflow_platform_asio
+        Catch2::Catch2WithMain)
+
+if(MSVC)
+    target_compile_options(lingoflow_asio_tests PRIVATE /W4 /utf-8 /MP8)
+else()
+    target_compile_options(lingoflow_asio_tests PRIVATE -Wall -Wextra)
+endif()
+
+catch_discover_tests(lingoflow_asio_tests)
+
 # --- architecture boundary gates ---------------------------------------------
 # 1) audit the real source tree; 2) prove the audit can fail (self-test).
 # These run without Catch2 and without a device, so they are usable in CI.
