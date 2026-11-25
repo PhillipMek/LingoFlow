@@ -281,9 +281,18 @@ TEST_CASE("NdiDispatch: stop drops what is queued and closes the door behind it"
     CHECK(dispatch.publish(frame("queued-a", 2), error));
     CHECK(dispatch.publish(frame("queued-b", 3), error));
 
+    // stop() owns the transport now: it waits for an in-flight publish before
+    // it closes the sender (no SDK call may be destroyed underneath). Release
+    // the gate from another thread so the test proves that wait rather than
+    // deadlocking on it.
+    std::thread releaser(
+        [fake]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            fake->releasePublish();
+        });
     dispatch.stop();
-
-    fake->releasePublish();   // the accepted one is allowed to finish
+    releaser.join();   // the accepted one was allowed to finish
     REQUIRE(waitFor([fake] { return fake->delivered().size() == 1; }));
     CHECK(fake->delivered()[0].sequence == 1);          // in-flight completes - it was accepted
     CHECK(dispatch.droppedFrames() == 2);               // queued ones are counted, not swallowed

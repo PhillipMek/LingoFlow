@@ -137,6 +137,12 @@ private:
     std::deque<SubtitleFrame> queue_;
     bool exitRequested_ = false;
 
+    /// Serializes the worker's downstream publish() with control-thread
+    /// start()/stop(): a stop must not destroy a sender under a publish that
+    /// has already left the queue. The real output has its own SDK mutex, but
+    /// the adapter's promise is about the interface call, not one implementation.
+    std::mutex downstreamMutex_;
+
     std::atomic<bool> accepting_{ false };
     std::atomic<bool> firstTransportError_{ false };  ///< log the refused caption once per start
     std::atomic<OutputState> state_{ OutputState::disabled };

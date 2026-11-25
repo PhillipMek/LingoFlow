@@ -73,6 +73,9 @@ void NdiDispatch::stop() noexcept
 
     if (downstream_ != nullptr)
     {
+        // Wait for a publish that has already left the queue: stop() is the
+        // control thread's promise that no SDK call is in flight underneath it.
+        const std::lock_guard lock(downstreamMutex_);
         downstream_->stop();
         state_.store(downstream_->state(), std::memory_order_relaxed);
     }
@@ -134,7 +137,14 @@ void NdiDispatch::workerLoop()
         }
 
         std::string error;
-        if (downstream_->publish(frame, error))
+        bool delivered = false;
+        {
+            // Same lock stop() takes: a publisher already holding a frame is
+            // allowed to finish before the sender it uses is torn down.
+            const std::lock_guard lock(downstreamMutex_);
+            delivered = downstream_->publish(frame, error);
+        }
+        if (delivered)
         {
             delivered_.fetch_add(1, std::memory_order_relaxed);
         }
