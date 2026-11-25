@@ -13,6 +13,7 @@
 using liveai::network::InboundMessageBudget;
 using liveai::network::kMaxAudioDeltaBytes;
 using liveai::network::kMaxInboundMessageBytes;
+using liveai::network::kMaxTranscriptLineBytes;
 
 TEST_CASE("InboundMessageBudget: counts to the exact boundary and not past it",
           "[network][limits]")
@@ -51,4 +52,11 @@ TEST_CASE("audio delta budget: sized against the live measurement, still even",
     CHECK(kMaxAudioDeltaBytes % 2 == 0);                       // whole PCM16 samples
     CHECK(kMaxAudioDeltaBytes >= 13 * 19200u);                 // 13x the measured 400 ms chunk
     CHECK(kMaxAudioDeltaBytes < kMaxInboundMessageBytes);      // the block bound sits inside the message bound
+}
+
+TEST_CASE("subtitle line budget: bounded, but far above a real sentence",
+          "[network][limits]")
+{
+    CHECK(kMaxTranscriptLineBytes == 64u * 1024u);
+    CHECK(kMaxTranscriptLineBytes < kMaxInboundMessageBytes);
 }

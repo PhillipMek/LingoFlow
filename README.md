@@ -77,10 +77,20 @@ cmake -S . -B build
 cmake --build build --config Release --parallel
 ```
 
-Debug works identically with `--config Debug`. Two conventions to know: the build
-tree must be on an ASCII path (a `juceaide` limitation), and the Visual Studio
-generator is multi-config - `--config` selects per command. `docs/CI.md`
-reproduces the exact CI command sequence.
+Or use the one-path helper, which always configures into `build` and prints the
+resulting exe path (add `-Test` / `-Smoke` to run the suite / offline proof):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build.ps1 -Config Release
+```
+
+`build` is the ONE local build tree - Debug and Release are selected with
+`--config`, not with separate `build-debug` / `build-release` / `out\build`
+folders. The operator exe is therefore always at
+`build\src\LingoFlow_artefacts\<Config>\LingoFlow.exe`. Two conventions to know:
+the build tree must be on an ASCII path (a `juceaide` limitation), and the Visual
+Studio generator is multi-config - `--config` selects per command. `docs/CI.md`
+reproduces the exact CI command sequence (CI uses its own throwaway trees).
 
 ## Run
 

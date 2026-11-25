@@ -87,10 +87,26 @@ std::string refusalErrorCode(const std::string& body)
     const auto parsed = nlohmann::json::parse(body, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object())
         return {};
-    const auto& error = parsed["error"];
-    if (!error.is_object() || !error.contains("code") || !error["code"].is_string())
+    // find(), never operator[] on a const object: a missing key through the
+    // const overload is undefined behaviour, not an exception, and is_object()
+    // above says nothing about the keys inside the object.
+    const auto errorIt = parsed.find("error");
+    if (errorIt == parsed.end() || !errorIt->is_object())
         return {};
-    return error["code"].get<std::string>();
+    const auto codeIt = errorIt->find("code");
+    if (codeIt == errorIt->end() || !codeIt->is_string())
+        return {};
+    return codeIt->get<std::string>();
+}
+
+/// Best-effort wipe of buffers this file owns. std::string may keep allocator
+/// capacity beyond size() and the transport makes its own copy of the header,
+/// so this is memory hygiene rather than cryptographic erasure - but the
+/// buffers created here must not outlive their use with the key in them.
+void scrubSecret(std::string& value) noexcept
+{
+    std::fill(value.begin(), value.end(), '\0');
+    value.clear();
 }
 
 bool containsAudioWord(const std::string& text)
@@ -252,7 +268,7 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     // Credentials come from the store only (contract + the project rules). The value
     // is used to build the one auth header and never written anywhere else.
-    const auto apiKey = secrets_.load(security::kOpenAiApiKey);
+    auto apiKey = secrets_.load(security::kOpenAiApiKey);
     if (!apiKey.has_value() || apiKey->empty())
     {
         error = "openai: no API key available in the credential store";
@@ -289,7 +305,6 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
 
     closeRequested_ = false;
     senderStop_ = false;
-    receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
     eventCounter_ = 0;
@@ -330,7 +345,12 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
     // value drops the OPTIONAL header and its warning travels to the log -
     // an identifier the provider does not require never decides whether the
     // show has a translation.
-    std::vector<std::string> headers { "Authorization: Bearer " + *apiKey };
+    // Build the credential header in place: a `"Authorization: Bearer " + key`
+    // temporary would leave an extra unwiped copy of the key behind.
+    std::vector<std::string> headers;
+    headers.reserve(2);
+    headers.emplace_back("Authorization: Bearer ");
+    headers.back() += *apiKey;
     if (!options_.safetyIdentifier.empty())
     {
         if (isSendableSafetyIdentifier(options_.safetyIdentifier))
@@ -340,6 +360,13 @@ bool OpenAIRealtimeBackend::openSession(const translation::SessionRequest& reque
                          "configured safety identifier is not a sendable header value; header omitted");
     }
     const ConnectResult cr = transport_->connect(options_.host, kWirePort, path, headers);
+
+    // The handshake is over: nothing here needs the key or the header buffer
+    // any more. Wipe the copies this function owns, success or refusal alike.
+    scrubSecret(*apiKey);
+    for (std::string& header : headers)
+        scrubSecret(header);
+
     if (!cr.upgraded)
     {
         auto category = categoryForHttpStatus(cr.httpStatus);
@@ -641,7 +668,6 @@ void OpenAIRealtimeBackend::finishClose(bool abandoned)
     eventCounter_ = 0;
     closeRequested_ = false;
     senderStop_ = false;
-    receiverStop_ = false;
     closeSent_ = false;
     drainForced_ = false;
     if (abandoned && lateAudioDropped_.load(std::memory_order_relaxed) > 0)
@@ -1115,11 +1141,40 @@ OpenAIRealtimeBackend::EventResult OpenAIRealtimeBackend::handleEvent(const std:
                         "openai: transcript delta without a payload", false);
             return EventResult::keepGoing;
         }
+        std::string forcedFinal;
+        std::string oversizedFinal;
         {
             const std::lock_guard<std::mutex> lock(transcriptMutex_);
-            transcriptLine_ += stringField(parsed, "delta");
+            const std::string delta = stringField(parsed, "delta");
             lastTranscriptMs_ = steadyNowMs();
+
+            if (delta.size() >= kMaxTranscriptLineBytes)
+            {
+                // A single pathological fragment is its own line: it never
+                // enters the accumulation, and whatever was open before it is
+                // closed first so no text is lost and no final exceeds the cap.
+                forcedFinal.swap(transcriptLine_);
+                oversizedFinal = delta;
+            }
+            else if (!transcriptLine_.empty()
+                     && transcriptLine_.size() + delta.size() > kMaxTranscriptLineBytes)
+            {
+                forcedFinal.swap(transcriptLine_);
+                transcriptLine_ = delta;
+            }
+            else
+                transcriptLine_ += delta;
         }
+        // Sink callbacks stay outside transcriptMutex_ (the settle path uses the
+        // same rule): a sink must never chain this lock into the pipeline's.
+        if (!forcedFinal.empty() || !oversizedFinal.empty())
+            log::warning(kLogComponent,
+                         "subtitle line budget reached: forced final after "
+                             + std::to_string(kMaxTranscriptLineBytes) + " bytes");
+        if (!forcedFinal.empty() && sink_ != nullptr)
+            sink_->onFinalText(forcedFinal);
+        if (!oversizedFinal.empty() && sink_ != nullptr)
+            sink_->onFinalText(oversizedFinal);
         if (sink_ != nullptr)
             sink_->onPartialText(transcriptSnapshot());
         return EventResult::keepGoing;

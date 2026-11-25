@@ -37,9 +37,11 @@ compile_commands.json
 # Secrets and local state (the project rules: never commit a credential)
 .env
 .env.*
-!.env.example
 *.log
 logs/
+# Local/CI run logs (never repo state)
+/ci-logs/
+/release-logs/
 config.local.json
 secrets/
 credentials/

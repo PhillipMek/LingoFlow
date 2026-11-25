@@ -20,7 +20,7 @@ const juce::Colour cardBorder  { 0xff2d333au };
 const juce::Colour header      { 0xff8b949eu };
 const juce::Colour caption     { 0xff9aa4afu };
 const juce::Colour value       { 0xffe6edf3u };
-const juce::Colour muted       { 0xff6e7681u };
+const juce::Colour muted       { ui::kMutedTextColour };
 const juce::Colour green       { 0xff3fb950u };
 const juce::Colour amber       { 0xffd29922u };
 const juce::Colour red         { 0xfff85149u };
@@ -187,7 +187,7 @@ void DiagnosticsContent::drawCard(juce::Graphics& g, const juce::Rectangle<int>&
     g.setColour(dink::cardBorder);
     g.drawRoundedRectangle(card.toFloat().reduced(0.5f), 6.0f, 1.0f);
 
-    g.setFont(ui::uiFont(11.0f));
+    g.setFont(ui::uiFont(ui::kHintFontSize));
     g.setColour(dink::header);
     g.drawText(title, card.reduced(kCardPad, 6).withHeight(16),
                juce::Justification::left);
@@ -198,14 +198,21 @@ void DiagnosticsContent::drawRows(juce::Graphics& g, juce::Rectangle<int>& area,
 {
     g.setFont(ui::uiFont(13.0f));
 
+    // A fixed 230 px value column clipped whole sentences (the credential
+    // store name, the developer plan). Reserve a label column that still fits
+    // the longest caption and give the remaining width to the values: widening
+    // the dialog then widens the numbers, not the empty space between columns.
+    constexpr int kMinLabelWidth = 250;
+    const int valueWidth = jmax(230, area.getWidth() - kMinLabelWidth);
+
     for (const auto& [label, value] : rows)
     {
         auto row = area.removeFromTop(kRowH);
         g.setColour(dink::caption);
-        g.drawText(juce::String(label), row.withWidth(row.getWidth() - 230),
+        g.drawText(juce::String(label), row.withWidth(row.getWidth() - valueWidth),
                    juce::Justification::left);
         g.setColour(valueColour(label, value));
-        g.drawText(juce::String(value), row.withX(row.getRight() - 230).withWidth(230),
+        g.drawText(juce::String(value), row.withX(row.getRight() - valueWidth).withWidth(valueWidth),
                    juce::Justification::right);
     }
 }
@@ -419,10 +426,11 @@ DiagnosticsWindow::DiagnosticsWindow(ApplicationController& controller, juce::Co
     setResizable(true, true);
     // Task 4 §5 made this surface scrollable: the window used to demand
     // 1100x1120 (and still cut the raw list off); now it shows an honest
-    // viewport and the rest scrolls. 700 fits a 1366x768 work area with the
-    // title bar; the card grid wants ~900 across to keep the value column.
+    // viewport and the rest scrolls. 1200x760 keeps long value strings intact
+    // at the default size while still fitting a common 1366x768 work area.
     setResizeLimits(900, 560, 4000, 4000);
-    setSize(1100, 700);
+    const auto fit = ui::fitDialogSize(1200, 760, ui::usableAreaFor(*this));
+    setSize(fit.getWidth(), fit.getHeight());
     centreWithSize(getWidth(), getHeight());
     setVisible(true);
     becomeModal();

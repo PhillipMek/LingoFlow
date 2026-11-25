@@ -428,7 +428,7 @@ ConfigProblems validate(const AppConfig& candidate)
                                        std::pair{ audio.outputDeviceId, std::string{ "audio.outputDeviceId" } } })
     {
         if (value.size() > kMaxDeviceIdLength || hasControlCharacter(value))
-            problems.push_back(ConfigProblem{ path, "device identifier is empty-ish or too long" });
+            problems.push_back(ConfigProblem{ path, "device identifier must be at most 256 characters and free of control characters" });
     }
 
     const auto& translation = candidate.translation;

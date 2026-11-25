@@ -32,6 +32,14 @@ namespace network {
 constexpr std::size_t kMaxInboundMessageBytes = 16u * 1024u * 1024u;
 constexpr std::size_t kMaxAudioDeltaBytes = 256u * 1024u;
 
+/// Largest assembled subtitle line held in memory before the backend closes it
+/// as a final and starts a new one. A normal translated sentence is tens to a
+/// few hundred bytes; 64 KiB is hundreds of times that, so legitimate text
+/// never brushes the ceiling, while a runaway delta stream (or a session with
+/// the settle rule disabled) cannot grow the line for the lifetime of a show.
+/// Nothing is dropped on overflow: the accumulated text becomes a final first.
+constexpr std::size_t kMaxTranscriptLineBytes = 64u * 1024u;
+
 /// Reassembly budget a WebSocket transport spends before calling the
 /// connection dead. Pure and stateful by design: accept() either admits the
 /// chunk or declares the budget exhausted, and once exhausted it never

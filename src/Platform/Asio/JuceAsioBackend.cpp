@@ -63,9 +63,14 @@ public:
             // the operator's band and in the export rather than only as the
             // absence of evidence. Vendored JUCE hands out non-null arrays (it
             // jasserts), which makes this a defensive path, not an expected one.
-            asio::forwardActiveChannels(outputChannelData, numOutputChannels,
-                                        outputPhysical_, outputViews_);
+            // This is still a callback that happened, so it is counted and its
+            // output layout is recorded exactly like the normal branch.
+            const auto outShape = asio::forwardActiveChannels(outputChannelData, numOutputChannels,
+                                                              outputPhysical_, outputViews_);
+            // No input array exists here, so there is no input layout to observe.
+            updateArrayEvidence(asio::ChannelArrayShape::compacted, outShape);
             processor_.processAudio(nullptr, outputViews_.data(), numSamples);
+            blocks_.fetch_add(1, std::memory_order_relaxed);
             return;
         }
 
@@ -78,10 +83,7 @@ public:
         const auto outShape = asio::forwardActiveChannels(outputChannelData, numOutputChannels,
                                                           outputPhysical_, outputViews_);
 
-        if (inShape == asio::ChannelArrayShape::physicallyIndexed || outShape == asio::ChannelArrayShape::physicallyIndexed)
-            sawPhysicalArrays_.store(true, std::memory_order_relaxed);
-        if (inShape == asio::ChannelArrayShape::truncated || outShape == asio::ChannelArrayShape::truncated)
-            sawTruncatedArrays_.store(true, std::memory_order_relaxed);
+        updateArrayEvidence(inShape, outShape);
 
         processor_.processAudio(inputViews_.data(), outputViews_.data(), numSamples);
         blocks_.fetch_add(1, std::memory_order_relaxed);
@@ -133,6 +135,17 @@ public:
     }
 
 private:
+    /// Fixed cost, no allocation: folds the two observed layouts into the stop-log
+    /// evidence. Runs on the audio thread, so it is listed in the realtime audit.
+    void updateArrayEvidence(asio::ChannelArrayShape inShape,
+                             asio::ChannelArrayShape outShape) noexcept
+    {
+        if (inShape == asio::ChannelArrayShape::physicallyIndexed || outShape == asio::ChannelArrayShape::physicallyIndexed)
+            sawPhysicalArrays_.store(true, std::memory_order_relaxed);
+        if (inShape == asio::ChannelArrayShape::truncated || outShape == asio::ChannelArrayShape::truncated)
+            sawTruncatedArrays_.store(true, std::memory_order_relaxed);
+    }
+
     audio::IAudioProcessor& processor_;
     std::atomic<std::uint64_t>& blocks_;
     std::vector<int> inputPhysical_;   ///< logical input channel -> driver index
@@ -158,6 +171,13 @@ JuceAsioBackend::~JuceAsioBackend()
 bool JuceAsioBackend::open(audio::IAudioProcessor& processor, const audio::DeviceRequest& request, std::string& error)
 {
     error.clear();
+
+    // A failed open leaves the object faulted; it must be possible to retry on
+    // the same instance (tests and the device probe reuse backends). Only the
+    // faulted state is reset here: an opened or running device is never closed
+    // behind its owner's back just because someone called open() twice.
+    if (state_ == audio::BackendState::faulted)
+        close();
 
     if (state_ != audio::BackendState::closed)
     {

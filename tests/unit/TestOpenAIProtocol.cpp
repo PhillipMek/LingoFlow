@@ -33,6 +33,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "Network/Base64.h"
+#include "Network/NetworkLimits.h"
 #include "Network/OpenAIRealtimeBackend.h"
 #include "Security/ISecretStore.h"
 #include "Translation/ITranslationBackend.h"
@@ -508,6 +509,31 @@ TEST_CASE("OpenAI backend: refused upgrades carry the section 9 recovery hints",
         REQUIRE(errors.size() == 1);
         CHECK(errors[0].category == TranslationErrorCategory::rateLimited);
         CHECK(errors[0].retryAfterMs == 0); // no hint -> the policy's own backoff
+        s.sink.armAfterCloseExpectation();
+        s.backend->closeSession();
+    }
+
+    // A JSON object that simply has no usable "error". Used to be undefined
+    // behaviour: operator[] on a const nlohmann object with a missing key.
+    // Every one of these bodies is unclassifiable - the status table decides,
+    // and the Retry-After hint still travels.
+    for (const std::string body : {
+             std::string("{}"),
+             std::string(R"({"message":"x"})"),
+             std::string(R"({"error":"boom"})"),
+             std::string(R"({"error":{}})") })
+    {
+        Scenario s;
+        network::ConnectResult cr { false, 429, {} };
+        cr.refusalBody = body;
+        cr.retryAfterSec = 7;
+        s.nextConnect = cr;
+        s.open(s.Request());
+
+        const auto errors = s.sink.errors();
+        REQUIRE(errors.size() == 1);
+        CHECK(errors[0].category == TranslationErrorCategory::rateLimited);
+        CHECK(errors[0].retryAfterMs == 7000);
         s.sink.armAfterCloseExpectation();
         s.backend->closeSession();
     }
@@ -1170,6 +1196,47 @@ TEST_CASE("OpenAI backend: settle disabled means the line ends only at close",
     CHECK(s.sink.finals().size() == 1);
     CHECK(s.sink.lastFinal() == "Раз два");
     s.sink.armAfterCloseExpectation();
+}
+
+TEST_CASE("OpenAI backend: the subtitle line is bounded even with settle disabled",
+          "[openai][protocol][text]")
+{
+    Scenario s;
+    s.options.transcriptSettleMs = 0;   // the pause rule is off on purpose
+    s.backend = std::make_unique<network::OpenAIRealtimeBackend>(s.secrets, s.options,
+                                                                 s.fakeFactory);
+    s.backend->setSink(s.sink);
+    REQUIRE(s.openDefault());
+
+    const std::string delta(100, 'x');
+    const std::string event = R"({"type":"session.output_transcript.delta","delta":")"
+                              + delta + R"("})";
+    // With 100-byte fragments, 655 fit under the 64 KiB ceiling; the 656th
+    // trips the budget, so the forced final carries 655 fragments.
+    const int forcedAt = static_cast<int>(network::kMaxTranscriptLineBytes / delta.size());
+    const int count = forcedAt + 2;
+    for (int i = 0; i < count; ++i)
+        s.fake->queueMessage(event);
+
+    REQUIRE(Scenario::waitFor([&] { return s.sink.partialCount() >= count; }));
+    REQUIRE(Scenario::waitFor([&] { return s.sink.finalCount() >= 1; }));
+
+    // The overflow closes the accumulated line as a final instead of growing
+    // it for the whole session; no text is dropped on the way.
+    const auto finals = s.sink.finals();
+    REQUIRE(finals.size() == 1);
+    CHECK(finals[0].size() == static_cast<std::size_t>(forcedAt) * delta.size());
+    CHECK(finals[0].find_first_not_of('x') == std::string::npos);
+
+    const auto partials = s.sink.partials();
+    CHECK(partials.back().size() == static_cast<std::size_t>(count - forcedAt) * delta.size());
+    CHECK(partials.back().size() < network::kMaxTranscriptLineBytes);
+
+    s.backend->closeSession();          // the tail of the new line still flushes
+    CHECK(s.sink.finals().size() == 2);
+    CHECK(s.sink.lastFinal().size() == partials.back().size());
+    s.sink.armAfterCloseExpectation();
+    CHECK(s.sink.violations() == 0);
 }
 
 TEST_CASE("OpenAI backend: a reopened session starts its line from zero (rule 6)",
