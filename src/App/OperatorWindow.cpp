@@ -1020,7 +1020,9 @@ int OperatorContent::CardsSurface::layout(int width)
             owner_.deviceCaption_.setBounds(row.removeFromLeft(kDeviceCapW));
             row.removeFromLeft(8);
             owner_.refreshDevicesButton_.setBounds(row.removeFromRight(90));
-            owner_.deviceChoice_.setBounds(row.withTrimmedLeft(8));
+            // The combo must stop 8 px short of the button: trimming only the
+            // left side left their edges touching on every window width.
+            owner_.deviceChoice_.setBounds(row.withTrimmedLeft(8).withTrimmedRight(8));
         }
         owner_.deviceNoteLabel_.setBounds(inner.removeFromTop(14));
         inner.removeFromTop(kRowGap);

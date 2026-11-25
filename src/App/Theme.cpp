@@ -433,20 +433,28 @@ int LingoFlowLookAndFeel::getTabButtonBestWidth(juce::TabBarButton& button, int 
 void LingoFlowLookAndFeel::drawTabButton(juce::TabBarButton& button, juce::Graphics& g,
                                          bool isMouseOver, bool isMouseDown)
 {
-    const auto bounds = button.getLocalBounds().toFloat().reduced(1.0f);
-    const bool active = button.isFrontTab();
+    const auto bounds = button.getLocalBounds().toFloat();
+    if (bounds.isEmpty())
+        return;
 
-    g.setColour(active ? colour::cardRaised
-                       : isMouseDown ? colour::controlDown
-                                     : isMouseOver ? colour::controlHover
-                                                   : colour::control.withAlpha(0.55f));
-    g.fillRoundedRectangle(bounds, metric::radiusSm);
-
-    if (active)
+    if (button.isFrontTab())
     {
-        g.setColour(colour::blue.withAlpha(0.85f));
-        g.drawRoundedRectangle(bounds, metric::radiusSm, 1.2f);
+        // The active tab is the same surface as the page below it, with a
+        // squared-off bottom edge: it reads as one panel with the content,
+        // not as a separate pill floating above a rectangle.
+        g.setColour(colour::card);
+        g.fillRoundedRectangle(bounds, metric::radiusSm);
+        g.fillRect(bounds.withTop(bounds.getCentreY()));
+        g.setColour(colour::blue.withAlpha(0.9f));
+        g.fillRect(bounds.withTop(bounds.getBottom() - 2.0f));
     }
+    else if (isMouseDown || isMouseOver)
+    {
+        g.setColour(isMouseDown ? colour::controlDown : colour::controlHover.withAlpha(0.65f));
+        g.fillRoundedRectangle(bounds.reduced(1.0f), metric::radiusSm);
+    }
+    // An idle tab carries no chip at all: the strip stays quiet and the only
+    // "selected" signal is the active tab joined to the page.
 
     LookAndFeel_V4::drawTabButtonText(button, g, isMouseOver, isMouseDown);
 }

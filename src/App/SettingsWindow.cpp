@@ -163,6 +163,18 @@ juce::Colour colourFromRgb(std::uint32_t rgb)
     return juce::Colour(0xff000000u | ((rgb & 0xFFu) << 16) | (rgb & 0xFF00u) | ((rgb >> 16) & 0xFFu));
 }
 
+/// A colour swatch IS its button face, so its label needs the opposite end of
+/// the greyscale. Without this a white text colour produced a white button
+/// with white text - readable only by selection.
+void styleSwatch(juce::TextButton& button, juce::Colour swatch)
+{
+    button.setColour(juce::TextButton::buttonColourId, swatch);
+    const auto label = swatch.getPerceivedBrightness() > 0.55f ? colour::background
+                                                               : colour::textPrimary;
+    button.setColour(juce::TextButton::textColourOffId, label);
+    button.setColour(juce::TextButton::textColourOnId, label);
+}
+
 } // namespace
 
 // =========================================================================== SubtitlePreview
@@ -302,6 +314,13 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     // The front tab gets the house accent outline; the inactive ones keep the
     // quiet border. Bold text alone was too subtle to see while switching.
     tabs_->setColour(juce::TabbedButtonBar::frontOutlineColourId, colour::blue);
+    // The strip and the pages are ONE panel: the component (including the tab
+    // strip) and every page use the card surface, and a hairline outline marks
+    // the content area. Previously the page colour equalled the dialog colour,
+    // so the tabs read as pills above an unrelated rectangle.
+    tabs_->setColour(juce::TabbedComponent::backgroundColourId, colour::card);
+    tabs_->setColour(juce::TabbedComponent::outlineColourId, colour::cardBorder);
+    tabs_->setOutline(1);
     addAndMakeVisible(*tabs_);
 
     // ------------------------------------------------------------------ audio
@@ -616,12 +635,12 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     exportDiagnosticsButton_.setExplicitFocusOrder(4);
     ndiTestButton_.setExplicitFocusOrder(5);
 
-    tabs_->addTab("Audio", colour::background, audioPage_, true);
-    tabs_->addTab("Translation", colour::background, translationPage_, true);
-    tabs_->addTab("Subtitles / NDI", colour::background, subtitlesPage_, true);
-    tabs_->addTab("Credentials", colour::background, credentialsPage_, true);
-    tabs_->addTab("Diagnostics", colour::background, diagnosticsPage_, true);
-    tabs_->addTab("Advanced", colour::background, advancedPage_, true);
+    tabs_->addTab("Audio", colour::card, audioPage_, true);
+    tabs_->addTab("Translation", colour::card, translationPage_, true);
+    tabs_->addTab("Subtitles / NDI", colour::card, subtitlesPage_, true);
+    tabs_->addTab("Credentials", colour::card, credentialsPage_, true);
+    tabs_->addTab("Diagnostics", colour::card, diagnosticsPage_, true);
+    tabs_->addTab("Advanced", colour::card, advancedPage_, true);
 
     refreshFromSettings();
     startTimer(500);   // presence + NDI state; the store can change outside this process
@@ -1188,8 +1207,8 @@ void SettingsContent::fillSubtitleWidgets(const subtitles::SubtitleSettings& s)
     vAnchorChoice_.setSelectedId(static_cast<int> (s.style.verticalAnchor) + 1,
                                  juce::NotificationType::dontSendNotification);
 
-    textColorButton_.setColour(juce::TextButton::buttonColourId, colourFromRgb(s.style.textColorRgb));
-    outlineColorButton_.setColour(juce::TextButton::buttonColourId, colourFromRgb(s.style.outlineColorRgb));
+    styleSwatch(textColorButton_, colourFromRgb(s.style.textColorRgb));
+    styleSwatch(outlineColorButton_, colourFromRgb(s.style.outlineColorRgb));
 
     // The R/G/B editor shows the aimed colour (programmatic: no notification,
     // the operator has not picked anything yet).
@@ -1227,12 +1246,12 @@ void SettingsContent::applyColourEdit()
     if (editingTextColour_)
     {
         style.textColorRgb = rgb;
-        textColorButton_.setColour(juce::TextButton::buttonColourId, colourFromRgb(rgb));
+        styleSwatch(textColorButton_, colourFromRgb(rgb));
     }
     else
     {
         style.outlineColorRgb = rgb;
-        outlineColorButton_.setColour(juce::TextButton::buttonColourId, colourFromRgb(rgb));
+        styleSwatch(outlineColorButton_, colourFromRgb(rgb));
     }
 
     colourSwatch_.setColour(juce::Label::backgroundColourId, colourFromRgb(rgb));
@@ -1291,7 +1310,9 @@ int SettingsContent::layoutAudioPage(int width)
     {
         auto row = b.removeFromTop(kControlH);
         refreshDevicesButton_.setBounds(row.removeFromRight(100).withTrimmedLeft(kRowGap));
-        deviceChoice_.setBounds(row);
+        // Keep an explicit gutter between the selector and the action next to
+        // it; without this their borders touched at every dialog width.
+        deviceChoice_.setBounds(row.withTrimmedRight(kRowGap));
     }
     deviceNoteLabel_.setBounds(b.removeFromTop(28));
     b.removeFromTop(kRowGap);
@@ -1415,8 +1436,9 @@ int SettingsContent::layoutSubtitlesPage(int width)
 
     ndiTestCaption_.setBounds(b.removeFromTop(kCaptionH));
     ndiTestEditor_.setBounds(b.removeFromTop(kControlH));
+    b.removeFromTop(kRowGap);   // the test is an action, not part of the editor
     ndiTestButton_.setBounds(b.removeFromTop(kButtonH).withWidth(240));
-    b.removeFromTop(4);
+    b.removeFromTop(8);
     ndiTestHintLabel_.setBounds(b.removeFromTop(72));
     b.removeFromTop(kRowGap);
 
