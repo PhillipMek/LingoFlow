@@ -83,8 +83,8 @@ private:
     void loopbackVisuals();   ///< the red sentence while loopback is checked
 
     /// The Test NDI button's one handler: while no test runs it asks the
-    /// controller to latch the typed caption (an on-the-spot refusal shows
-    /// its note immediately, a queued start is confirmed by the timer);
+    /// controller to stream its built-in caption (an on-the-spot refusal
+    /// shows its note immediately, a queued start is confirmed by the timer);
     /// while a test runs the same button ends it.
     void ndiTestPressed();
 
@@ -169,15 +169,14 @@ private:
     juce::Label streamNameCaption_, ndiStateLabel_, ndiHintLabel_;
     juce::TextEditor streamNameEditor_;
 
-    /// The subtitle test broadcast row (ApplicationController::requestNdiTest):
-    /// the typed caption latches onto the wire through the real transport; the
-    /// same button ends the test. ndiTestAwaiting_ remembers the click that
-    /// queued a start; the timer reconciles the button with the controller's
-    /// truth and surfaces a worker-side refusal as the note. ndiTestShown_ is
-    /// the state the title currently shows, so the button is retitled only
-    /// when the truth actually moved.
+    /// The subtitle test broadcast row (ApplicationController::requestNdiTestStream):
+    /// one button starts the built-in word-by-word caption and the same button
+    /// ends it; there is no field to type into. ndiTestAwaiting_ remembers the
+    /// click that queued a start; the timer reconciles the button with the
+    /// controller's truth and surfaces a worker-side refusal as the note.
+    /// ndiTestShown_ is the state the title currently shows, so the button is
+    /// retitled only when the truth actually moved.
     juce::Label ndiTestCaption_, ndiTestHintLabel_;
-    juce::TextEditor ndiTestEditor_;
     juce::TextButton ndiTestButton_ { "Test NDI" };
     bool ndiTestAwaiting_ = false;
     bool ndiTestShown_ = false;

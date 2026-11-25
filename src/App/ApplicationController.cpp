@@ -1,9 +1,11 @@
 #include "App/ApplicationController.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <format>
 #include <sstream>
+#include <vector>
 
 #include "App/UiModel.h"
 #include "Audio/LevelMeter.h"
@@ -58,6 +60,54 @@ std::string fileStamp()
             c = '-';
     }
     return stamp;
+}
+
+// The one-button test needs a text no operator has to type. A conference
+// caption long enough to run past one screen, split once into the words the
+// publisher sends one frame at a time.
+constexpr std::string_view kNdiTestCaption =
+    "Welcome to the live translation test. This line is generated inside LingoFlow so you can check "
+    "the subtitle look and the NDI route without opening a show. Every word is sent as its own frame, "
+    "just like a real interpreter feed, so the caption grows one word at a time. Watch the timing, the "
+    "wrapping, the contrast against your video, and the way older words scroll when the line is longer "
+    "than the screen. When you have seen enough, press Stop test and the picture clears immediately. "
+    "Until then the sample repeats from the top, giving you a steady stream to tune the receiver window.";
+
+constexpr auto kNdiTestWordInterval = std::chrono::milliseconds(220);
+
+std::vector<std::string> splitTestWords(std::string_view text)
+{
+    std::vector<std::string> words;
+    std::size_t i = 0;
+    while (i < text.size())
+    {
+        while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i])))
+            ++i;
+        const std::size_t start = i;
+        while (i < text.size() && !std::isspace(static_cast<unsigned char>(text[i])))
+            ++i;
+        if (i > start)
+            words.emplace_back(text.substr(start, i - start));
+    }
+    return words;
+}
+
+const std::vector<std::string>& ndiTestWords()
+{
+    static const std::vector<std::string> words = splitTestWords(kNdiTestCaption);
+    return words;
+}
+
+std::string ndiTestPrefix(const std::vector<std::string>& words, std::size_t count)
+{
+    std::string line;
+    for (std::size_t i = 0; i < count && i < words.size(); ++i)
+    {
+        if (!line.empty())
+            line += ' ';
+        line += words[i];
+    }
+    return line;
 }
 
 } // namespace
@@ -119,6 +169,10 @@ ApplicationController::~ApplicationController()
     // object: drain and join it BEFORE anything else unwinds - a queued Stop
     // dropped at shutdown would leave a device open and a session live.
     shutdownLifecycleWorker();
+
+    // The word publisher touches ndiOutput_, so it must be gone before any
+    // member it uses starts to unwind (even if the show never took over).
+    stopNdiTestStream();
 
     // Whatever state the worker left us in, the object must die stopped: the
     // quit path that never pressed Stop lands here.
@@ -952,6 +1006,9 @@ bool ApplicationController::start()
     // the wire over. The test's own sender goes down here and the startNdi
     // below reopens it with the saved settings; the test caption leaves with
     // the sender it rode on.
+    // A running word publisher must not race the sender the show is about to
+    // tear down and reopen: join it before the transport changes hands.
+    stopNdiTestStream();
     ndiTestActive_.store(false, std::memory_order_relaxed);
     if (ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed))
         stopNdi();
@@ -1104,6 +1161,7 @@ void ApplicationController::stop()
     // construction: the listener's only work is an enqueue.
     textPipeline_.waitForDispatch();
 
+    stopNdiTestStream();   // no more words can go out on a transport on its way down
     stopNdi();
     // The transport is gone: a live test has nothing left to ride on. The
     // flags leave with the show, not with the dialog - the settings poll
@@ -1601,23 +1659,21 @@ bool ApplicationController::requestNdiTest(const std::string& text, std::string&
     const std::string caption = text;   // the exact bytes the operator typed
     scheduleLifecycle([this, caption]
     {
+        // Only one test owns the wire at a time - a stale word stream would
+        // otherwise keep overwriting this line from another worker.
+        endNdiTest();
+
         std::string error;
-        if (ndiOutput_->state() == ndi::OutputState::disabled)
+        if (!prepareNdiTest(error))
         {
-            // Nothing is on the wire: the test raises a sender with the SAVED
-            // settings - startNdi pushes the subtitle settings before the
-            // sender opens, so what the receiver shows is what Apply stored.
-            if (!startNdi(error))
-            {
-                refuseNdiTest(error);
-                return;
-            }
-            ndiTestSenderOwned_.store(true, std::memory_order_relaxed);
+            refuseNdiTest(error);
+            return;
         }
 
         ndi::SubtitleFrame frame;
         frame.text = caption;
         frame.final = true;   // a test line is a whole line: nothing may "improve" it
+        frame.sequence = ++ndiTestSequence_;
         if (!ndiOutput_->publish(frame, error))
         {
             // Hand back whatever the test had raised; the transport's own
@@ -1638,6 +1694,155 @@ bool ApplicationController::requestNdiTest(const std::string& text, std::string&
     return true;
 }
 
+bool ApplicationController::prepareNdiTest(std::string& error)
+{
+    if (ndiOutput_->state() == ndi::OutputState::disabled)
+    {
+        // Nothing is on the wire: the test raises a sender with the SAVED
+        // settings - startNdi pushes the subtitle settings before the sender
+        // opens, so what the receiver shows is what Apply stored.
+        if (!startNdi(error))
+            return false;
+        ndiTestSenderOwned_.store(true, std::memory_order_relaxed);
+    }
+    return true;
+}
+
+bool ApplicationController::requestNdiTestStream(std::string& note)
+{
+    {
+        const std::lock_guard lock(ndiTestMutex_);
+        ndiTestError_.clear();
+    }
+
+    // Same on-the-spot answers as the typed test: no sender is raised behind a
+    // switch the operator left off, and no absent output is assumed.
+    if (!config_.current().ndi.enabled)
+    {
+        note = "NDI is disabled in settings - tick the NDI switch, press Save, then test";
+        return false;
+    }
+    if (ndiOutput_ == nullptr)
+    {
+        note = "no NDI output is configured";
+        return false;
+    }
+
+    scheduleLifecycle([this]
+    {
+        endNdiTest();   // a previous test (typed or streaming) gives up the wire
+
+        std::string error;
+        if (!prepareNdiTest(error))
+        {
+            refuseNdiTest(error);
+            return;
+        }
+
+        const auto& words = ndiTestWords();
+        ndi::SubtitleFrame first;
+        first.text = words.front();
+        first.final = false;   // an in-progress line: more words are coming
+        first.sequence = ++ndiTestSequence_;
+        if (!ndiOutput_->publish(first, error))
+        {
+            if (ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed)
+                && state_ != ApplicationState::running && state_ != ApplicationState::starting)
+                stopNdi();
+            refuseNdiTest(error.empty() ? "the subtitle transport refused the test frame" : error);
+            return;
+        }
+
+        ndiTestActive_.store(true, std::memory_order_relaxed);
+        try
+        {
+            startNdiTestStream();
+        }
+        catch (const std::system_error&)
+        {
+            // The first word is out but there is no publisher to continue it:
+            // say so and take the test down instead of leaving a frozen line.
+            log::warning(kComponent, "subtitle test stream worker could not start");
+            refuseNdiTest("the subtitle test stream could not start");
+            endNdiTest();
+            return;
+        }
+        diagnostics_.noteEvent("ndi", "subtitle test stream started");
+        log::info(kComponent, "subtitle test stream started");
+    });
+
+    note.clear();
+    return true;
+}
+
+void ApplicationController::startNdiTestStream()
+{
+    stopNdiTestStream();   // join an earlier publisher before replacing it
+    ndiTestStreamStop_.store(false, std::memory_order_relaxed);
+    const std::lock_guard lock(ndiTestStreamThreadMutex_);
+    ndiTestStreamThread_ = std::thread([this] { runNdiTestStream(); });
+}
+
+void ApplicationController::stopNdiTestStream()
+{
+    ndiTestStreamStop_.store(true, std::memory_order_relaxed);
+    ndiTestStreamCv_.notify_all();
+
+    // Take the handle out under the mutex, then join outside it: the publisher
+    // must be able to take the pacing mutex to leave its wait. Two callers are
+    // safe - exactly one of them gets a joinable thread.
+    std::thread worker;
+    {
+        const std::lock_guard lock(ndiTestStreamThreadMutex_);
+        worker = std::move(ndiTestStreamThread_);
+    }
+    if (worker.joinable())
+        worker.join();
+}
+
+void ApplicationController::runNdiTestStream()
+{
+    const auto& words = ndiTestWords();
+    std::size_t shown = 2;   // the first word was published before this thread began
+
+    for (;;)
+    {
+        {
+            std::unique_lock<std::mutex> lock(ndiTestStreamMutex_);
+            ndiTestStreamCv_.wait_for(lock, kNdiTestWordInterval,
+                                      [this]
+                                      {
+                                          return ndiTestStreamStop_.load(std::memory_order_relaxed);
+                                      });
+        }
+        if (ndiTestStreamStop_.load(std::memory_order_relaxed))
+            return;
+        if (!ndiTestActive_.load(std::memory_order_relaxed))
+            return;   // a show or a stop took the wire over
+
+        ndi::SubtitleFrame frame;
+        frame.text = ndiTestPrefix(words, shown);
+        // The last word of a pass is authoritative; the next pass begins a new
+        // line, so the renderer can reset its word timeline at the seam.
+        frame.final = shown == words.size();
+        frame.sequence = ++ndiTestSequence_;
+
+        std::string error;
+        if (!ndiOutput_->publish(frame, error))
+        {
+            // NDI failure never waits here and never touches audio. Drop the
+            // active flag so the button flips back; the next press reuses or
+            // raises the sender. No self-join from this thread - the lifecycle
+            // worker owns the teardown.
+            ndiTestActive_.store(false, std::memory_order_relaxed);
+            refuseNdiTest(error.empty() ? "the subtitle transport refused the test stream" : error);
+            return;
+        }
+
+        shown = shown < words.size() ? shown + 1 : 1;
+    }
+}
+
 void ApplicationController::requestNdiTestStop()
 {
     scheduleLifecycle([this] { endNdiTest(); });
@@ -1645,6 +1850,7 @@ void ApplicationController::requestNdiTestStop()
 
 void ApplicationController::endNdiTest()
 {
+    stopNdiTestStream();   // no more words may land after the clearing frame
     const bool wasActive = ndiTestActive_.exchange(false, std::memory_order_relaxed);
     const bool owned = ndiTestSenderOwned_.exchange(false, std::memory_order_relaxed);
     if (!wasActive && !owned)

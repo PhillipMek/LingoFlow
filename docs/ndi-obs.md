@@ -54,14 +54,17 @@ single-line, whatever the field says.
 
 ## Test broadcast (before the show)
 
-The **Subtitles / NDI** page has a small test row: type a caption, press
-**Test NDI**, and the text goes out on the configured NDI source with the
-SAVED appearance - no show, no session, no audio needed. The point is to
-see your own subtitles in OBS while you tune them.
+The **Subtitles / NDI** page has a small test row: press **Test NDI** and
+the application broadcasts its own sample caption - one word per frame,
+growing into a line longer than one screen and repeating - on the configured
+NDI source with the SAVED appearance. No typing, no show, no session and no
+audio are needed. The point is to see your own subtitles in OBS while you
+tune them.
 
 * The broadcast renders exactly what **Apply settings** stored: change the
-  look, press Save, then test - what the preview draws is what the sender
-  sends.
+  look, press Apply, then test - what the preview draws is what the sender
+  sends. The built-in words arrive on a worker thread, never on the GUI or
+  audio thread; the pacing is about 220 ms per word.
 * If no transport is running, the test starts one (the configured stream
   name) and takes it down when it ends. While a show runs, the test only
   publishes into the live transport - and the next real caption replaces

@@ -438,16 +438,15 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     ndiStateLabel_.setFont(ui::uiFont(13.0f));
     subtitlesBody.addAndMakeVisible(ndiStateLabel_);
 
-    caption(ndiTestCaption_, "Test broadcast (uses the SAVED look, no show required)", subtitlesBody);
-    subtitlesBody.addAndMakeVisible(ndiTestEditor_);
+    caption(ndiTestCaption_, "Test broadcast (a built-in caption, uses the SAVED look)", subtitlesBody);
     ndiTestButton_.onClick = [this] { ndiTestPressed(); };
     styleButton(ndiTestButton_, subtitlesBody);
     hint(ndiTestHintLabel_,
-         "Type a caption and press Test NDI: the text goes out on the configured NDI "
-         "source with the saved appearance - change the look, press Save, then test. "
-         "Press Stop test (or close this window) to end it: the screen clears and the "
-         "test sender goes down. While a show runs, real captions replace the test "
-         "line as they arrive.",
+         "Press Test NDI: the application broadcasts its own sample caption one word "
+         "at a time, with the saved appearance - no typing and no show needed. Change "
+         "the look, press Apply, then test. The line scrolls past one screen and "
+         "repeats; press Stop test (or close this window) to clear the picture and "
+         "end the test sender.",
          subtitlesBody);
 
     caption(ndiModeCaption_, "Output (one source, chosen media)", subtitlesBody);
@@ -626,7 +625,7 @@ SettingsContent::SettingsContent(ApplicationController& controller)
     // consequence (a credential store write, an NDI broadcast, an NDI test).
     saveKeyButton_.setTooltip("Store the API key in Windows Credential Manager; the field clears on success");
     removeKeyButton_.setTooltip("Remove the stored API key from Windows Credential Manager");
-    ndiTestButton_.setTooltip("Broadcast one caption through the real NDI transport");
+    ndiTestButton_.setTooltip("Stream a built-in sample caption word by word through the real NDI transport");
     exportDiagnosticsButton_.setTooltip("Write a diagnostics report to disk");
     applyButton_.setTooltip("Validate and apply every edited setting at once");
     applyButton_.setExplicitFocusOrder(1);
@@ -816,7 +815,7 @@ void SettingsContent::ndiTestPressed()
     }
 
     std::string note;
-    if (controller_.requestNdiTest(ndiTestEditor_.getText().toStdString(), note))
+    if (controller_.requestNdiTestStream(note))
     {
         // Queued: the worker confirms within a poll tick. The title is set
         // optimistically so the click reads as a button, and the timer owns
@@ -1435,8 +1434,7 @@ int SettingsContent::layoutSubtitlesPage(int width)
     b.removeFromTop(kRowGap);
 
     ndiTestCaption_.setBounds(b.removeFromTop(kCaptionH));
-    ndiTestEditor_.setBounds(b.removeFromTop(kControlH));
-    b.removeFromTop(kRowGap);   // the test is an action, not part of the editor
+    b.removeFromTop(4);         // the test is one self-contained action now
     ndiTestButton_.setBounds(b.removeFromTop(kButtonH).withWidth(240));
     b.removeFromTop(8);
     ndiTestHintLabel_.setBounds(b.removeFromTop(72));

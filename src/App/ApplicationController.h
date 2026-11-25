@@ -234,10 +234,18 @@ public:
     /// in ndiTestError().
     bool requestNdiTest(const std::string& text, std::string& note);
 
-    /// End the test: publish the empty frame (the video transport's "this
-    /// line has ended" - a clear, transparent picture), then take the sender
-    /// down if the test raised it and no show inherited it. Always safe;
-    /// queued like the start.
+    /// The one-button variant: no operator text, no dialog field. The
+    /// controller streams a built-in caption (longer than one screen) one word
+    /// per frame, repeating until the button ends it or a show takes the wire
+    /// over. It arrives as an in-progress line that grows word by word, the
+    /// same shape a real interpreter feed produces. Transport rules are
+    /// identical to requestNdiTest(); `note` explains an on-the-spot refusal.
+    bool requestNdiTestStream(std::string& note);
+
+    /// End either test: publish the empty frame (the video transport's "this
+    /// line has ended" - a clear, transparent picture), stop the word
+    /// publisher, then take the sender down if the test raised it and no show
+    /// inherited it. Always safe; queued like the start.
     void requestNdiTestStop();
 
     /// True between an accepted test publish and its end (test stop, or the
@@ -405,10 +413,23 @@ private:
     bool startNdi(std::string& error);
     void stopNdi() noexcept;
     void publishToNdi(const translation::TranslationTextEvent& event);
+    /// Raises a sender when the test needs one (the same SAVED settings a show
+    /// would use) and remembers that it belongs to the test. Shared by the
+    /// typed one-frame test and the word-by-word stream.
+    bool prepareNdiTest(std::string& error);
     /// Ends a running subtitle test on the calling thread (the lifecycle
     /// worker via requestNdiTestStop, or start()/stop() when the show takes
     /// the wire over). See the header comment on requestNdiTestStop.
     void endNdiTest();
+    /// The built-in caption's publisher: waits between words on its own
+    /// thread and publishes each cumulative prefix through INdiOutput. Never
+    /// joins itself; only the stop flag is its to observe.
+    void runNdiTestStream();
+    /// Signals the publisher and joins it if present. Idempotent; safe from
+    /// the UI, lifecycle and destructor paths (never from the publisher).
+    void stopNdiTestStream();
+    /// Starts the publisher after any earlier one has been joined.
+    void startNdiTestStream();
     /// Records a worker-side test refusal: the reason hand for ndiTestError,
     /// the diagnostics line, the log warning. The flags are the worker's to
     /// clear - the UI only reads them.
@@ -442,6 +463,18 @@ private:
     std::atomic<bool> ndiTestSenderOwned_{false};
     mutable std::mutex ndiTestMutex_;
     std::string ndiTestError_;
+
+    /// The one-button test's word publisher. The pacing wait owns
+    /// ndiTestStreamMutex_/Cv_; the thread handle has a separate mutex so a
+    /// stop can join without holding the lock the publisher needs to wake up.
+    /// The stop flag is atomic because the publisher checks it outside the
+    /// wait as well. ndiTestSequence_ is the demo's own monotonic frame id.
+    std::atomic<bool> ndiTestStreamStop_{false};
+    std::mutex ndiTestStreamMutex_;
+    std::condition_variable ndiTestStreamCv_;
+    std::mutex ndiTestStreamThreadMutex_;
+    std::thread ndiTestStreamThread_;
+    std::atomic<long long> ndiTestSequence_{0};
 
     std::unique_ptr<translation::ITranslationBackend> translationBackend_;
 

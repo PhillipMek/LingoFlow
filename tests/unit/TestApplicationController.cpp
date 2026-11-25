@@ -1748,3 +1748,87 @@ TEST_CASE("ApplicationController: a transport-side test refusal is worded in ndi
     REQUIRE(controller.requestNdiTest("again", note));
     CHECK_FALSE(controller.ndiTestActive());
 }
+
+TEST_CASE("ApplicationController: the one-button NDI test refuses on the spot while NDI is off",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+
+    std::string note;
+    CHECK_FALSE(controller.requestNdiTestStream(note));
+    CHECK(note.find("disabled") != std::string::npos);
+    CHECK(recording->starts() == 0);
+    CHECK_FALSE(controller.ndiTestActive());
+}
+
+TEST_CASE("ApplicationController: the one-button NDI test streams a built-in line word by word",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+    ndiOnConfig(controller, "LingoFlow test");
+
+    std::string note;
+    REQUIRE(controller.requestNdiTestStream(note));   // no text argument: nothing to type
+    REQUIRE(waitUntil([&] { return controller.ndiTestActive(); }));
+    CHECK(recording->starts() == 1);
+    CHECK(recording->streamName() == "LingoFlow test");
+
+    REQUIRE(waitUntil([&] { return recording->published().size() >= 4; }));
+    const auto frames = recording->published();
+    REQUIRE(frames.size() >= 4);
+    CHECK_FALSE(frames.front().text.empty());
+    CHECK_FALSE(frames.front().final);   // an in-progress line, not a frozen sentence
+
+    // Every next frame is the whole line so far, exactly one more word long:
+    // the receiver sees a caption grow, the way a live interpreter feed does.
+    for (std::size_t i = 1; i < frames.size(); ++i)
+    {
+        CHECK(frames[i].text.starts_with(frames[i - 1].text));
+        CHECK(frames[i].text.size() > frames[i - 1].text.size());
+        CHECK(std::count(frames[i].text.begin(), frames[i].text.end(), ' ')
+              == std::count(frames[i - 1].text.begin(), frames[i - 1].text.end(), ' ') + 1);
+    }
+
+    // The built-in line is longer than a screen: a modest prefix is already
+    // several words, and the publisher keeps adding until the second press.
+    CHECK(std::count(frames.back().text.begin(), frames.back().text.end(), ' ') >= 2);
+
+    controller.requestNdiTestStop();
+    REQUIRE(waitUntil([&] { return !controller.ndiTestActive(); }));
+    REQUIRE(waitUntil([&] { return recording->stops() == 1; }));
+
+    const auto count = recording->published().size();
+    const auto after = recording->published();
+    CHECK(after.back().text.empty());   // the clearing frame is last
+    CHECK(after.back().final);
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    CHECK(recording->published().size() == count);   // no stray words after the stop
+}
+
+TEST_CASE("ApplicationController: starting a show retires a running word-by-word test",
+          "[app][ndi][test]")
+{
+    QuietLog quiet;
+    ApplicationController controller;
+    auto* const recording = new RecordingNdiOutput();
+    controller.setNdiOutput(std::unique_ptr<ndi::INdiOutput>(recording));
+    ndiOnConfig(controller, "LingoFlow test");
+
+    std::string note;
+    REQUIRE(controller.requestNdiTestStream(note));
+    REQUIRE(waitUntil([&] { return recording->published().size() >= 2; }));
+
+    REQUIRE(controller.start());
+    CHECK_FALSE(controller.ndiTestActive());
+    CHECK(recording->starts() == 2);   // the show reopens the sender for itself
+    CHECK(recording->stops() == 1);    // the test's sender went down first
+
+    controller.stop();
+    CHECK(recording->stops() == 2);
+}
